@@ -4,7 +4,14 @@ import { posix, win32 } from 'node:path';
 const PATH_KEY_PATTERN = /(?:^|_)(?:path|paths|file|files|filename|filenames|directory|directories|dir|dirs|folder|folders|cwd)(?:$|_)/;
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 const WINDOWS_ABSOLUTE_PATTERN = /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/i;
-const RELATIVE_PATH_PATTERN = /^(?:\.{1,2}[\\/]|~[\\/])/;
+
+function platformStyle(platform) {
+  return platform === 'win32' ? 'windows' : 'posix';
+}
+
+function pathApi(style) {
+  return style === 'windows' ? win32 : posix;
+}
 
 function normalizedKey(key) {
   return String(key)
@@ -31,49 +38,46 @@ function unwrapJsonString(value) {
   return trimmed;
 }
 
-function stripWindowsNamespace(value) {
+function stripWindowsNamespace(value, style) {
+  if (style !== 'windows') return value;
   if (/^\\\\\?\\UNC\\/i.test(value)) return `\\\\${value.slice(8)}`;
   if (/^\\\\[?.]\\/.test(value)) return value.slice(4);
   return value;
 }
 
-function decodeFileUrl(value) {
+function decodeFileUrl(value, style) {
   if (!/^file:\/\//i.test(value)) return value;
   const parsed = new URL(value);
   let pathname = decodeURIComponent(parsed.pathname);
   if (parsed.hostname) pathname = `//${parsed.hostname}${pathname}`;
-  if (/^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1);
+  if (style === 'windows' && /^\/[A-Za-z]:\//.test(pathname)) pathname = pathname.slice(1);
   return pathname;
 }
 
-function pathStyle(value, base) {
-  if (WINDOWS_ABSOLUTE_PATTERN.test(value) || WINDOWS_ABSOLUTE_PATTERN.test(base) || /\\/.test(value)) return 'windows';
-  return 'posix';
-}
-
-function normalizeLexical(value, base) {
+function normalizeLexical(value, base, platform = process.platform) {
+  const style = platformStyle(platform);
+  const api = pathApi(style);
   let candidate = unwrapJsonString(value);
   if (candidate.includes('\0')) throw new Error('Path arguments may not contain NUL bytes');
   if (/%[^%]+%|\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*/.test(candidate)) {
     throw new Error('Environment-variable paths are not supported; pass the resolved path explicitly');
   }
-  candidate = decodeFileUrl(candidate);
-  candidate = stripWindowsNamespace(candidate);
-  const style = pathStyle(candidate, base);
-  const api = style === 'windows' ? win32 : posix;
+  candidate = decodeFileUrl(candidate, style);
+  candidate = stripWindowsNamespace(candidate, style);
   const normalizedBase = api.normalize(base);
   const normalized = api.isAbsolute(candidate) ? api.normalize(candidate) : api.resolve(normalizedBase, candidate);
   return { style, path: normalized };
 }
 
 function comparable(style, value) {
-  const api = style === 'windows' ? win32 : posix;
-  const normalized = api.normalize(value).replace(/[\\/]+$/, '');
+  const api = pathApi(style);
+  const trailingSeparators = style === 'windows' ? /[\\/]+$/ : /\/+$/;
+  const normalized = api.normalize(value).replace(trailingSeparators, '');
   return style === 'windows' ? normalized.toLowerCase() : normalized;
 }
 
 function isWithin(style, directory, candidate) {
-  const api = style === 'windows' ? win32 : posix;
+  const api = pathApi(style);
   const base = comparable(style, directory);
   const target = comparable(style, candidate);
   return target === base || target.startsWith(`${base}${api.sep}`);
@@ -82,7 +86,7 @@ function isWithin(style, directory, candidate) {
 async function canonicalizeExistingPrefix(style, value) {
   const nativeStyle = process.platform === 'win32' ? 'windows' : 'posix';
   if (style !== nativeStyle) return value;
-  const api = style === 'windows' ? win32 : posix;
+  const api = pathApi(style);
   let cursor = value;
   const missing = [];
   while (true) {
@@ -101,25 +105,28 @@ async function canonicalizeExistingPrefix(style, value) {
   }
 }
 
-function looksLikePath(value) {
+function looksLikePath(value, platform = process.platform) {
   const candidate = unwrapJsonString(value);
   if (!candidate || URL_PATTERN.test(candidate) && !/^file:\/\//i.test(candidate)) return false;
-  return WINDOWS_ABSOLUTE_PATTERN.test(candidate)
-    || candidate.startsWith('/')
-    || RELATIVE_PATH_PATTERN.test(candidate)
-    || /^file:\/\//i.test(candidate);
+  if (/^file:\/\//i.test(candidate)) return true;
+  if (platformStyle(platform) === 'windows') {
+    return WINDOWS_ABSOLUTE_PATTERN.test(candidate)
+      || win32.isAbsolute(candidate)
+      || /^(?:\.{1,2}|~)[\\/]/.test(candidate);
+  }
+  return posix.isAbsolute(candidate) || /^(?:\.{1,2}|~)\//.test(candidate);
 }
 
-function collectPathArguments(value, keyPath = [], inheritedPathKey = false, output = []) {
+function collectPathArguments(value, keyPath = [], inheritedPathKey = false, output = [], platform = process.platform) {
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
-      collectPathArguments(value[index], [...keyPath, index], inheritedPathKey, output);
+      collectPathArguments(value[index], [...keyPath, index], inheritedPathKey, output, platform);
     }
     return output;
   }
   if (value && typeof value === 'object') {
     for (const [key, child] of Object.entries(value)) {
-      collectPathArguments(child, [...keyPath, key], isPathArgumentKey(key), output);
+      collectPathArguments(child, [...keyPath, key], isPathArgumentKey(key), output, platform);
     }
     return output;
   }
@@ -127,7 +134,7 @@ function collectPathArguments(value, keyPath = [], inheritedPathKey = false, out
   const candidate = unwrapJsonString(value);
   if (candidate.includes('\n') || candidate.includes('\r')) return output;
   if (URL_PATTERN.test(candidate) && !/^file:\/\//i.test(candidate)) return output;
-  if (inheritedPathKey || looksLikePath(candidate)) output.push({ keyPath, value });
+  if (inheritedPathKey || looksLikePath(candidate, platform)) output.push({ keyPath, value });
   return output;
 }
 
@@ -135,12 +142,12 @@ function displayKeyPath(parts) {
   return parts.reduce((text, part) => typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${part}` : part, '');
 }
 
-async function normalizeAllowedEntries(values, base, kind) {
+async function normalizeAllowedEntries(values, base, kind, platform) {
   const entries = [];
   for (const value of values) {
-    const normalized = normalizeLexical(value, base);
-    const api = normalized.style === 'windows' ? win32 : posix;
-    if (!api.isAbsolute(unwrapJsonString(decodeFileUrl(value)))) {
+    const normalized = normalizeLexical(value, base, platform);
+    const api = pathApi(normalized.style);
+    if (!api.isAbsolute(decodeFileUrl(unwrapJsonString(value), normalized.style))) {
       throw new Error(`${kind} entries must be absolute paths: ${value}`);
     }
     entries.push({
@@ -159,7 +166,8 @@ export class ToolPathPolicy {
     allowedDirectories = [],
     allowedFiles = [],
     disallowedDirectories = [],
-    disallowedFiles = []
+    disallowedFiles = [],
+    platform = process.platform
   }) {
     this.serverName = serverName;
     this.cwd = cwd;
@@ -167,15 +175,16 @@ export class ToolPathPolicy {
     this.allowedFilesInput = allowedFiles;
     this.disallowedDirectoriesInput = disallowedDirectories;
     this.disallowedFilesInput = disallowedFiles;
+    this.platform = platform;
     this.allowedPromise = null;
   }
 
   async allowed() {
     this.allowedPromise ??= Promise.all([
-      normalizeAllowedEntries(this.allowedDirectoriesInput, this.cwd, 'allowed_directories'),
-      normalizeAllowedEntries(this.allowedFilesInput, this.cwd, 'allowed_files'),
-      normalizeAllowedEntries(this.disallowedDirectoriesInput, this.cwd, 'disallowed_directories'),
-      normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files')
+      normalizeAllowedEntries(this.allowedDirectoriesInput, this.cwd, 'allowed_directories', this.platform),
+      normalizeAllowedEntries(this.allowedFilesInput, this.cwd, 'allowed_files', this.platform),
+      normalizeAllowedEntries(this.disallowedDirectoriesInput, this.cwd, 'disallowed_directories', this.platform),
+      normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files', this.platform)
     ]).then(([directories, files, disallowedDirectories, disallowedFiles]) => {
       for (const entry of disallowedDirectories) {
         const covered = directories.some((allowed) => allowed.style === entry.style
@@ -197,13 +206,13 @@ export class ToolPathPolicy {
   }
 
   async assertToolArguments(toolName, args) {
-    const candidates = collectPathArguments(args);
+    const candidates = collectPathArguments(args, [], false, [], this.platform);
     if (candidates.length === 0) return;
     const allowed = await this.allowed();
     for (const candidate of candidates) {
       let normalized;
       try {
-        normalized = normalizeLexical(candidate.value, this.cwd);
+        normalized = normalizeLexical(candidate.value, this.cwd, this.platform);
       } catch (error) {
         throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is invalid: ${error.message}`);
       }

@@ -8,6 +8,7 @@ import { ToolPathPolicy, pathPolicyInternals } from '../app/path-policy.mjs';
 test('path policy allows directory descendants and exact files with Windows separators', async () => {
   const policy = new ToolPathPolicy({
     serverName: 'chrome',
+    platform: 'win32',
     cwd: 'C:\\work\\project',
     allowedDirectories: ['C:\\work\\project'],
     allowedFiles: ['C:\\Users\\owner\\Downloads\\upload.png']
@@ -31,6 +32,7 @@ test('path policy allows directory descendants and exact files with Windows sepa
 test('path policy detects nested path arrays but ignores ordinary web URLs', async () => {
   const policy = new ToolPathPolicy({
     serverName: 'browser',
+    platform: 'win32',
     cwd: 'C:\\work',
     allowedDirectories: [],
     allowedFiles: ['C:\\uploads\\one.png', 'C:\\uploads\\two.png']
@@ -46,6 +48,7 @@ test('path policy detects nested path arrays but ignores ordinary web URLs', asy
 test('path-shaped values are checked even when the argument key is unfamiliar', async () => {
   const policy = new ToolPathPolicy({
     serverName: 'unknown',
+    platform: 'linux',
     cwd: '/workspace',
     allowedDirectories: ['/workspace/project'],
     allowedFiles: []
@@ -75,6 +78,7 @@ test('path policy resolves symlinks before allowing a path', async (t) => {
 test('disallowed paths override allowed directories', async () => {
   const policy = new ToolPathPolicy({
     serverName: 'files',
+    platform: 'win32',
     cwd: 'C:\\work\\project',
     allowedDirectories: ['C:\\work\\project'],
     allowedFiles: [],
@@ -86,4 +90,48 @@ test('disallowed paths override allowed directories', async () => {
   await assert.rejects(policy.assertToolArguments('read', { path: '.env' }), /denied by disallowed/);
 });
   await assert.rejects(policy.assertToolArguments('read', { path: link }), /outside allowed_directories/);
+});
+
+for (const platform of ['linux', 'darwin']) {
+  test(`path policy uses POSIX path rules on ${platform}`, async () => {
+    const policy = new ToolPathPolicy({
+      serverName: 'files',
+      platform,
+      cwd: '/workspace',
+      allowedDirectories: ['/workspace'],
+      allowedFiles: [],
+      disallowedDirectories: ['/workspace/private'],
+      disallowedFiles: ['/workspace/.env']
+    });
+
+    await assert.doesNotReject(policy.assertToolArguments('read', { path: 'private\\secret.txt' }));
+    await assert.rejects(policy.assertToolArguments('read', { path: 'private/secret.txt' }), /denied by disallowed/);
+    await assert.rejects(policy.assertToolArguments('read', { path: '.env' }), /denied by disallowed/);
+    assert.equal(pathPolicyInternals.looksLikePath('C:\\Users\\owner\\file.txt', platform), false);
+    assert.equal(pathPolicyInternals.looksLikePath('/etc/passwd', platform), true);
+    assert.deepEqual(
+      pathPolicyInternals.normalizeLexical('folder\\name.txt', '/workspace', platform),
+      { style: 'posix', path: '/workspace/folder\\name.txt' }
+    );
+    assert.deepEqual(
+      pathPolicyInternals.normalizeLexical('name\\', '/workspace', platform),
+      { style: 'posix', path: '/workspace/name\\' }
+    );
+    assert.deepEqual(
+      pathPolicyInternals.normalizeLexical('file:///C:/temp/file.txt', '/workspace', platform),
+      { style: 'posix', path: '/C:/temp/file.txt' }
+    );
+  });
+}
+
+test('POSIX path policy rejects Windows-only absolute allowlist entries', async () => {
+  const policy = new ToolPathPolicy({
+    serverName: 'files',
+    platform: 'linux',
+    cwd: '/workspace',
+    allowedDirectories: ['C:\\workspace'],
+    allowedFiles: []
+  });
+
+  await assert.rejects(policy.allowed(), /allowed_directories entries must be absolute paths/);
 });

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, posix, resolve, win32 } from 'node:path';
+import { dirname, posix, resolve, win32 } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from './toml-lite.mjs';
@@ -13,7 +13,14 @@ const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_DISALLOWED_FILES'
 ]);
 
-const absoluteFrom = (base, value) => isAbsolute(value) || win32.isAbsolute(value) || posix.isAbsolute(value) ? value : resolve(base, value);
+function platformPath(platform = process.platform) {
+  return platform === 'win32' ? win32 : posix;
+}
+
+const absoluteFrom = (base, value, platform = process.platform) => {
+  const api = platformPath(platform);
+  return api.isAbsolute(value) ? value : api.resolve(base, value);
+};
 
 function stringArray(value, name) {
   if (value === undefined) return [];
@@ -37,10 +44,11 @@ function blockedToolSubstringArray(value, name) {
   return normalized;
 }
 
-function absolutePathArray(value, name) {
+function absolutePathArray(value, name, platform = process.platform) {
   const values = stringArray(value, name);
+  const api = platformPath(platform);
   for (const item of values) {
-    if (!isAbsolute(item) && !win32.isAbsolute(item) && !posix.isAbsolute(item)) {
+    if (!api.isAbsolute(item)) {
       throw new Error(`${name} entries must be absolute paths: ${item}`);
     }
   }
@@ -55,7 +63,7 @@ function normalizeLifecycle(raw, key, serverName) {
   return { server: value.server, tool: value.tool };
 }
 
-function normalizeServer(name, raw, base) {
+function normalizeServer(name, raw, base, platform) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`mcp_servers.${name} must be a table`);
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error(`mcp_servers.${name}.enabled must be boolean`);
   if (raw.enabled === false) return null;
@@ -84,7 +92,7 @@ function normalizeServer(name, raw, base) {
     prefix: typeof raw.prefix === 'string' && raw.prefix ? raw.prefix : name,
     command: raw.command,
     args: stringArray(raw.args, `mcp_servers.${name}.args`),
-    cwd: absoluteFrom(base, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : '.'),
+    cwd: absoluteFrom(base, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : '.', platform),
     env,
     requestTimeoutMs: Math.round(timeoutSeconds * 1000),
     startupTimeoutMs: Math.round(startupTimeoutSeconds * 1000),
@@ -94,10 +102,10 @@ function normalizeServer(name, raw, base) {
     stopAfter: normalizeLifecycle(raw, 'stop_after', name),
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
-    allowedDirectories: absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`),
-    allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`),
-    disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`),
-    disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`)
+    allowedDirectories: absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`, platform),
+    allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform),
+    disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`, platform),
+    disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform)
   };
 }
 
@@ -106,8 +114,8 @@ export function configPathFromArgs(argv = process.argv.slice(2)) {
   return parsed.values.config ?? process.env.MCP_GATEWAY_CONFIG ?? resolve(repositoryRoot, 'config', 'gateway.toml');
 }
 
-export async function loadGatewayConfig(configPath = configPathFromArgs()) {
-  const resolvedConfigPath = absoluteFrom(repositoryRoot, configPath);
+export async function loadGatewayConfig(configPath = configPathFromArgs(), { platform = process.platform } = {}) {
+  const resolvedConfigPath = absoluteFrom(repositoryRoot, configPath, process.platform);
   let raw;
   try {
     raw = parseToml(await readFile(resolvedConfigPath, 'utf8'));
@@ -119,6 +127,11 @@ export async function loadGatewayConfig(configPath = configPathFromArgs()) {
     throw new Error('gateway.toml must define at least one [mcp_servers.<name>] table');
   }
   const base = dirname(resolvedConfigPath);
-  const servers = Object.entries(raw.mcp_servers).map(([name, server]) => normalizeServer(name, server, base)).filter(Boolean);
+  const servers = Object.entries(raw.mcp_servers).map(([name, server]) => normalizeServer(name, server, base, platform)).filter(Boolean);
   return { configPath: resolvedConfigPath, privateUseOnly: true, servers };
 }
+
+export const serverConfigInternals = {
+  absoluteFrom,
+  absolutePathArray
+};

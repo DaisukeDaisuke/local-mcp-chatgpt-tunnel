@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { loadGatewayConfig } from '../app/server-config.mjs';
+import { loadGatewayConfig, serverConfigInternals } from '../app/server-config.mjs';
 import { parseToml } from '../app/toml-lite.mjs';
 
 test('TOML subset parses Codex-style MCP tables, arrays, and env', () => {
@@ -49,7 +49,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     '[mcp_servers.beta]',
     'enabled = false'
   ].join('\n'), 'utf8');
-  const config = await loadGatewayConfig(path);
+  const config = await loadGatewayConfig(path, { platform: 'win32' });
   assert.equal(config.servers.length, 1);
   assert.equal(config.servers[0].name, 'alpha');
   assert.equal(config.servers[0].prefix, 'a');
@@ -110,6 +110,45 @@ test('gateway path allowlists require absolute paths', async () => {
     'allowed_directories = ["relative/project"]'
   ].join('\n'), 'utf8');
   await assert.rejects(loadGatewayConfig(path), /must be absolute paths/);
+});
+
+for (const platform of ['linux', 'darwin']) {
+  test(`gateway path parsing uses POSIX rules on ${platform}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), `gateway-${platform}-paths-`));
+    const path = join(directory, 'gateway.toml');
+    await writeFile(path, [
+      'private_use_only = true',
+      '[mcp_servers.alpha]',
+      'command = "node"',
+      'cwd = "/workspace"',
+      'allowed_directories = ["/workspace"]',
+      'allowed_files = ["/workspace/upload.png"]',
+      'disallowed_directories = ["/workspace/private"]',
+      'disallowed_files = ["/workspace/.env"]'
+    ].join('\n'), 'utf8');
+
+    const config = await loadGatewayConfig(path, { platform });
+    assert.equal(config.servers[0].cwd, '/workspace');
+    assert.deepEqual(config.servers[0].allowedDirectories, ['/workspace']);
+    assert.deepEqual(config.servers[0].disallowedDirectories, ['/workspace/private']);
+    assert.equal(serverConfigInternals.absoluteFrom('/repo/config', '../server', platform), '/repo/server');
+  });
+}
+
+test('gateway rejects Windows-only allowlist paths on POSIX platforms', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-posix-windows-path-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'cwd = "/workspace"',
+    "allowed_directories = ['C:\\work\\project']"
+  ].join('\n'), 'utf8');
+
+  for (const platform of ['linux', 'darwin']) {
+    await assert.rejects(loadGatewayConfig(path, { platform }), /allowed_directories entries must be absolute paths/);
+  }
 });
 
 test('gateway accepts Codex-only token and approval settings and ignores unsupported fields', async () => {
