@@ -31,9 +31,10 @@ test('installation automation and repository hook mutation are absent', async ()
 
 test('runtime key goes directly to tunnel-client and is not handled by repository scripts', async () => {
   const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
-  assert.match(install, /--control-plane\.api-key=sk_REPLACE_ME/);
+  assert.match(install, /--control-plane\.api-key=env:OPENAI_TUNNEL_API_KEY/);
   assert.match(install, /tunnel-client\.exe doctor/);
   assert.match(install, /tunnel-client\.exe run/);
+  assert.doesNotMatch(install, /--control-plane\.api-key=sk_REPLACE_ME/);
   assert.doesNotMatch(install, /promptMasked|Tunnel runtime API key \(not saved\)/);
 });
 

@@ -1,16 +1,36 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const DEFAULT_COMMANDS = [
-  { name: 'node', command: 'node', args: ['--version'] },
-  { name: 'npm', command: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: ['--version'] },
-  { name: 'git', command: 'git', args: ['--version'] },
-  { name: 'rg', command: 'rg', args: ['--version'] },
-  { name: 'py', command: 'py', args: ['--version'] }
-];
+export function createDefaultCommands({ platform = process.platform, env = process.env } = {}) {
+  const npm = platform === 'win32'
+    ? {
+        name: 'npm',
+        command: env.ComSpec || env.COMSPEC || 'cmd.exe',
+        args: ['/d', '/s', '/c', 'npm --version']
+      }
+    : { name: 'npm', command: 'npm', args: ['--version'] };
+
+  return [
+    { name: 'node', command: 'node', args: ['--version'] },
+    npm,
+    { name: 'git', command: 'git', args: ['--version'] },
+    { name: 'rg', command: 'rg', args: ['--version'] },
+    { name: 'py', command: 'py', args: ['--version'] }
+  ];
+}
+
+export const DEFAULT_COMMANDS = createDefaultCommands();
 
 function firstLine(text) {
   return String(text).split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '';
+}
+
+function spawnErrorDetail(error) {
+  if (error?.code === 'ENOENT') return 'not found in PATH';
+  const code = error?.code ?? error?.errno;
+  return code === undefined
+    ? String(error?.message ?? error)
+    : `spawn failed (${code}): ${error?.message ?? 'unknown error'}`;
 }
 
 export function checkCommand(spec, spawnImpl = spawn) {
@@ -23,7 +43,7 @@ export function checkCommand(spec, spawnImpl = spawn) {
         shell: false
       });
     } catch (error) {
-      resolve({ ...spec, ok: false, detail: error.message });
+      resolve({ ...spec, ok: false, detail: spawnErrorDetail(error) });
       return;
     }
     let output = '';
@@ -42,7 +62,7 @@ export function checkCommand(spec, spawnImpl = spawn) {
       clearTimeout(timeout);
       resolve({ ...spec, ok, detail });
     };
-    child.once('error', (error) => finish(false, error.code === 'ENOENT' ? 'not found in PATH' : error.message));
+    child.once('error', (error) => finish(false, spawnErrorDetail(error)));
     child.once('exit', (code) => {
       const version = firstLine(output);
       finish(code === 0 && version !== '', version || `exit ${code ?? 'unknown'} without version output`);
