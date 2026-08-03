@@ -1,17 +1,21 @@
 # Local MCP ChatGPT Tunnel
 Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tunnel経由でChatGPT Developer Modeへ接続するためのローカルGatewayです。<br>
 複数のstdio MCPを1つに集約し、ツール名の名前空間化、公開ツールの除外、パス許可、直列実行、遅延起動を設定ファイルから制御できます。<br>
-> [!WARNING]
-> 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
-> 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
 
 <br>
+
 ![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
 
 # インストール方法
 
 > [!IMPORTANT]
 > Windows環境での導入手順は[INSTALL.md](./INSTALL.md)を参照してください。
+
+# セキュリティ警告
+
+> [!WARNING]
+> 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
+> 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
 
 ## 何ができるか
 - ChatGPTからWindows上のstdio MCPサーバーを呼び出す
