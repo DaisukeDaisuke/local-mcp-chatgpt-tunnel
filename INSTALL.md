@@ -33,8 +33,9 @@ Select-String -Path $sums -Pattern 'tunnel-client-v0\.0\.10-windows-amd64\.zip'
 .\.tools\tunnel-client\tunnel-client.exe --help
 .\.tools\tunnel-client\tunnel-client.exe help doctor
 node mcp\safe-files\server.mjs --help
+node mcp\safe-images\server.mjs --help
 ```
-この3つの出力、リポジトリとWorkspaceの絶対パス、接続したいMCPの起動コマンドをAIへ渡せば、AIが`gateway.toml`とTunnel起動コマンドを組み立てられます。`.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。
+この4つの出力、リポジトリとWorkspaceの絶対パス、接続したいMCPの起動コマンドをAIへ渡せば、AIが`gateway.toml`とTunnel起動コマンドを組み立てられます。`.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。
 ## 4. gateway.tomlを自分で作る
 例をコピーして、必ず自分のパスへ書き換えます。
 ```powershell
@@ -61,6 +62,23 @@ allowed_directories = ['C:\Users\owner\Documents\my-project']
 allowed_files = []
 ```
 `safe-files`は`cwd`をWorkspaceのルートとして使います。複数Workspaceが必要なら、`files_project_a`と`files_project_b`のようにMCPエントリを分け、それぞれ別の`cwd`と`prefix`を指定します。
+Downloads内のPNG、JPEG、WebPをChatGPTへ画像として渡す場合は、次の読み取り専用MCPを追加します。
+```toml
+[mcp_servers.images]
+command = "node"
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\safe-images\server.mjs']
+cwd = 'C:\Users\owner\Downloads'
+enabled = true
+prefix = "images"
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+allowed_directories = ['C:\Users\owner\Downloads']
+allowed_files = []
+[mcp_servers.images.env]
+SAFE_IMAGES_MAX_BYTES = "8388608"
+SAFE_IMAGES_MAX_PIXELS = "52428800"
+```
+ChatGPTからは`images__read_image`へ`{"path":"画像.png"}`を渡します。画像base64はMCP画像コンテンツとして返り、通常のテキスト転送ツールには入りません。Downloads全体を許可したくない場合は`allowed_directories = []`にし、`allowed_files`へ対象画像の絶対パスだけを書きます。
 任意のstdio MCPも同じ形で追加できます。
 ```toml
 [mcp_servers.example]

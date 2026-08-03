@@ -52,6 +52,24 @@ node mcp\safe-files\server.mjs --help
 ```
 AIへhelp出力、リポジトリの絶対パス、Workspaceの絶対パスを渡せば、AIが`args`、`cwd`、`allowed_directories`を組み立てられます。複数WorkspaceはMCPエントリを分けます。許可ルート外とシンボリックリンク脱出を拒否し、高確度の資格情報らしい内容も返しません。危険そうなフォルダ名を一律ブラックリスト化せず、Gatewayの明示許可パスを境界にします。
 `search_text`は固定された`rg`だけを起動します。検索式、許可ルート内の対象パス、globは指定できますが、実行ファイルや任意コマンドは指定できません。`read_file_chunk`と`write_file`は境界内のファイル転送用です。
+## 画像MCP
+`safe-images`はPNG、JPEG、WebPをMCPの画像コンテンツとしてChatGPTへ返す読み取り専用MCPです。`cwd`を画像ルートとして使い、初期状態では8 MiB、50メガピクセルまでに制限します。
+```powershell
+node mcp\safe-images\server.mjs --help
+```
+```toml
+[mcp_servers.images]
+command = "node"
+args = ['C:\work\local-mcp-chatgpt-tunnel\mcp\safe-images\server.mjs']
+cwd = 'C:\Users\owner\Downloads'
+enabled = true
+prefix = "images"
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+allowed_directories = ['C:\Users\owner\Downloads']
+allowed_files = []
+```
+公開ツールは`images__read_image`だけです。拡張子とマジックバイトの不一致、SVG、HEIC、空ファイル、サイズ超過、寸法超過、許可ルート外、シンボリックリンク、NTFS代替データストリームを拒否します。base64はMCPの画像ブロックだけへ格納し、`structuredContent`には重複させません。Tunnel側の確認結果は`docs/tunnel-client-image-forwarding.md`にあります。
 ## Node.jsの役割
 導入時のNode.jsスクリプトは`app/doctor.mjs`だけです。`node`、`npm`、`git`、`rg`、`py`のバージョンをすべて出力し、一つ失敗しても残りを確認します。インストール、ZIP展開、設定生成、runtime key入力、Git hook変更は行いません。
 Gateway本体と同梱MCPは実行時にNode.jsを使います。Tunnelの初期化、診断、起動は公式`tunnel-client.exe`を直接実行します。
