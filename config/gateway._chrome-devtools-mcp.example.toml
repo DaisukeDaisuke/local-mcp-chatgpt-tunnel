@@ -1,0 +1,9 @@
+[mcp_servers.chrome-devtools]
+command = "cmd.exe"
+args = ["/d", "/s", "/c", "npx.cmd --yes chrome-devtools-mcp@latest --categoryExperimentalWebmcp=true --chromeArg=--enable-features=WebMCPTesting,DevToolsWebMCPSupport --allow-unrestricted-paths"]
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = true
+prefix = "chrome-devtools"
+startup_timeout_sec = 10000
+tool_timeout_sec = 100000
+tool_output_token_limit = 1000000
