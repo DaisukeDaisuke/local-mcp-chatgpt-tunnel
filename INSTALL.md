@@ -404,3 +404,18 @@ ChatGPTにツールが利用可能になったか聞いてください。
 
 > [!IMPORTANT]
 > お疲れさまでした。ChatGPTはローカルMCPを使用できるようになりました。
+
+> [!NOTE]
+> # サーバーの再起動後、必ず更新を実施してください
+> サーバーを起動した場合、必ず下記のことをしてください。<br>
+> [プラグインの設定を開きます](https://chatgpt.com/#settings/Plugins)<br>
+> 作成したプラグイン、コネクターをクリックします<br>
+> <img width="745" height="677" alt="image" src="https://github.com/user-attachments/assets/e3332e2d-a854-4f2f-86cd-9c24b8c4227e" /> <br>
+> 次の詳細設定が表示されます。<br>
+> <img width="764" height="631" alt="image" src="https://github.com/user-attachments/assets/76bf233d-d2d9-49cf-8d51-7bab33461c70" /> <br>
+> 一番下までスクロールし、更新をクリックします。<br>
+> <img width="675" height="328" alt="image" src="https://github.com/user-attachments/assets/70a0d485-d980-4be4-9d53-f311e51cc1aa" /> <br>
+> サーバーが起動したことがChatGPTに認識されました。お疲れ様でした。<br>
+
+
+
