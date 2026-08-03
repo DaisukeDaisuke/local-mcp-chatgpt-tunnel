@@ -18,7 +18,7 @@ export function option(name, fallback) {
 
 export async function requireTunnelClient() {
   await access(tunnelClientPath).catch(() => {
-    throw new Error('tunnel-client.exe is missing. Run: node scripts/node/download-tunnel-client.mjs');
+    throw new Error('tunnel-client.exe is missing. Follow INSTALL.md and place it at .tools\\tunnel-client\\tunnel-client.exe');
   });
 }
 

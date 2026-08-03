@@ -52,14 +52,16 @@ test('child MCP environment is allowlisted instead of inheriting credentials', a
   assert.equal(environment.NODE_OPTIONS, undefined);
 });
 
-test('downloaded tunnel archive is verified before extraction', async () => {
-  const downloader = await readFile(new URL('../scripts/node/download-tunnel-client.mjs', import.meta.url), 'utf8');
-  assert.match(downloader, /SHA-256 mismatch/);
-  assert.match(downloader, /assertSafeArchive\(zipPath\)/);
-  assert.match(downloader, /assertSafeExtracted\(staging\)/);
-  assert.match(downloader, /parts\.includes\('\.\.'\)/);
-  assert.match(downloader, /MAX_ZIP_BYTES/);
-  assert.match(downloader, /assertNotElevatedWindows/);
+test('tunnel client acquisition is manual and does not use the GitHub API', async () => {
+  await assert.rejects(access(new URL('../scripts/node/download-tunnel-client.mjs', import.meta.url)));
+  const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(packageJson.scripts['tunnel:download'], undefined);
+  const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
+  assert.match(install, /releases\/latest\/download\/tunnel-client-v0\.0\.10-windows-amd64\.zip/);
+  assert.match(install, /releases\/latest\/download\/SHA256SUMS\.txt/);
+  assert.match(install, /Get-FileHash/);
+  assert.doesNotMatch(install, /api\.github\.com/);
+  assert.doesNotMatch(install, /Expand-Archive|Invoke-WebRequest|download-tunnel-client/);
 });
 
 test('setup scripts refuse elevated Windows execution and npm lifecycle scripts are disabled', async () => {

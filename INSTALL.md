@@ -26,14 +26,29 @@ py -3.12 --version
 npm install --ignore-scripts --no-audit --no-fund --no-package-lock
 ```
 ## 3. OpenAI公式tunnel-clientを取得する
-次のNode.jsスクリプトは`openai/tunnel-client`の最新Windows ZIPと公開SHA256SUMSだけを取得し、SHA-256一致後に`.tools\tunnel-client`へ展開します。wingetやOS設定は変更しません。
-```powershell
-node scripts/node/download-tunnel-client.mjs
+このリポジトリはtunnel-clientのダウンロードやZIP展開を自動化しません。ブラウザーで次の公開URLを開き、OpenAI公式ReleaseのWindows amd64 ZIPとSHA-256一覧を自分で保存します。GitHub APIキーは不要です。
+```text
+https://github.com/openai/tunnel-client/releases/latest/download/tunnel-client-v0.0.10-windows-amd64.zip
+https://github.com/openai/tunnel-client/releases/latest/download/SHA256SUMS.txt
 ```
-確認します。
+この手順が確認済みの版は`v0.0.10`です。最新版のasset名が変わった場合は、URLのファイル名だけを推測して置き換えず、次のReleaseページで実際のasset名を確認します。
+```text
+https://github.com/openai/tunnel-client/releases/latest
+```
+ダウンロードした2ファイルを確認します。次のコマンドは展開も移動もせず、ZIPのSHA-256表示と公式一覧内の該当行表示だけを行います。
+```powershell
+$zip = "$HOME\Downloads\tunnel-client-v0.0.10-windows-amd64.zip"
+$sums = "$HOME\Downloads\SHA256SUMS.txt"
+(Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+Select-String -Path $sums -Pattern 'tunnel-client-v0\.0\.10-windows-amd64\.zip'
+```
+2つのSHA-256が一致したら、エクスプローラーでZIPを開きます。リポジトリ直下に`.tools\tunnel-client`を作り、ZIP内の`tunnel-client.exe`を次の場所へ自分でコピーします。
+```text
+<repository>\.tools\tunnel-client\tunnel-client.exe
+```
+配置後に確認します。
 ```powershell
 .\.tools\tunnel-client\tunnel-client.exe help quickstart
-Get-Content .\.tools\tunnel-client\VERSION.txt
 ```
 ## 4. ローカル設定とWorkspaceを作る
 ```powershell

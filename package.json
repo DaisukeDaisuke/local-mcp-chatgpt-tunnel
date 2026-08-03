@@ -11,7 +11,6 @@
     "doctor": "node app/doctor.mjs",
     "init:workspace": "node scripts/node/init-workspace.mjs",
     "hooks:enable": "node scripts/node/enable-git-hooks.mjs",
-    "tunnel:download": "node scripts/node/download-tunnel-client.mjs",
     "tunnel:init": "node scripts/node/initialize-tunnel.mjs",
     "tunnel:doctor": "node scripts/node/doctor-tunnel.mjs",
     "tunnel:run": "node scripts/node/run-tunnel.mjs",
