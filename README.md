@@ -12,7 +12,7 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 - MCPごとに許可するディレクトリとファイルを制限する
 - 危険なツールを名前または部分文字列で非公開にする
 - 同時実行させたくないMCPを`serial_group`で直列化する
-- 特定ツールの成功後に別MCPを起動または停止する
+- 必要に応じて、特定のmcp全体を無効化する。
 ## このリポジトリが行わないこと
 - OpenAI Responses APIやChat Completions APIの呼び出し
 - 独自AIエージェント、独自ハーネス、モデル課金処理の実装
