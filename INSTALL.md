@@ -194,7 +194,12 @@ npm test
 `Create`が無効のままなら、まず`Description`を入力します。<br>それでも無効なら、ダイアログ内を最下部までスクロールし、残っている必須項目を確認します。<br>
 作成後、Tunnelの詳細画面に表示される`tunnel_id`を**控えます**。<br>後で`CONTROL_PLANE_TUNNEL_ID`へ設定します。<br>
 
-#### このidはあとで使います
+
+
+> [!WARNING]
+> #### このidはあとで使います
+> #### このトンネルidは絶対に流失しないでください。
+> 第三者によって任意コード実行が行われる可能性があります。
 
 <img width="2559" height="668" alt="image" src="https://github.com/user-attachments/assets/42bb5cf1-3ee2-4d32-8efc-5cf4597e6276" />
 
