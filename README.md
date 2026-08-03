@@ -37,6 +37,9 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 - 公開MCP URLやローカル受信ポートの提供
 - Node.js、Git、ripgrep、Python、tunnel-clientの自動インストール
 - Ghidra MCP、Chrome DevTools MCP、DQ9 MCPなど第三者MCPの再配布
+
+<br>
+
 Secure MCP Tunnelへの接続は公式`tunnel-client.exe`が担当します。<br>このリポジトリは、その標準入出力へ接続するローカルMCP Gatewayと同梱MCPを提供します。
 ## 対応環境
 現在の導入手順はWindows 11向けです。<br>実行にはNode.js LTSとOpenAI公式`tunnel-client.exe`を使います。<br>同梱のファイル検索機能にはripgrepを使い、診断スクリプトは`node`、`npm`、`git`、`rg`、`py`を確認します。
