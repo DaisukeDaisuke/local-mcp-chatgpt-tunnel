@@ -1,73 +1,122 @@
-# DQ9 OpenAI MCP Docker Suite
-Windows 11とDocker Desktop上で、コンテナ内Headless Chrome、Chrome DevTools MCP、DQ9 Test MCP、Ghidra MCPブリッジ、UTF-8限定ファイル編集MCPを一つのNode.js CLIから利用する構成です。外部公開ポートはありません。Node.jsからOpenAIへ外向きHTTPS通信を行うため、ルーターのポート開放は不要です。
-## 安全上の境界
-- Node.jsアプリはHTTPサーバーを起動せず、CLIとしてのみ動作します。
-- Docker Composeには`ports`がなく、Chrome CDP、Ghidraブリッジ、MCPは外部公開されません。
-- ファイルMCPは指定ルート内のUTF-8読込、一覧、原子的書込、完全一致置換、ディレクトリ作成だけを提供します。シェル、コマンド実行、削除APIはありません。
-- Ghidraの`run_ghidra_script`と`run_script_inline`はブリッジ登録時に削除され、Agents SDK側でも二重に遮断されます。
-- Ghidraへの接続はWindows OpenSSHのEd25519公開鍵認証と、`PermitOpen`で制限されたローカルフォワードを使用します。Ghidra HTTPポートをLANへ公開しません。
-- OpenAI APIキー、SSH秘密鍵、mTLS秘密鍵はGit管理せず、Windows上のファイルを読取専用でマウントします。
-- OpenAI API呼出しは`OPENAI_BILLING_ACK=I_UNDERSTAND_API_USAGE_IS_BILLED`がない限り拒否されます。
-## 重要な課金仕様
-課金を完全に無効化したままモデルを呼べるOpenAI APIキーはありません。APIキーを作らずに使えるのは`doctor`とローカルMCPの検証だけです。APIキーをマウントして上記確認文字列を設定した場合のみ、課金対象のモデル呼出しが有効になります。プロジェクト予算は通知用であり、厳密なハード上限として扱わないでください。
-API課金を発生させずChatGPT側の契約内でMCPを呼ぶ別経路は、対応プランからSecure MCP Tunnelへ接続する構成です。ただし、書込みを含む完全なMCPは現在Business、Enterprise、Edu向けで、Plusからこのローカル開発環境を直接使う代替にはなりません。本リポジトリはPlusでも技術的に実行できるOpenAI API方式を実装し、既定では課金呼出しを無効化しています。
-## 1. 初期配置
+# DQ9 ChatGPT Local MCP
+ChatGPTのDeveloper ModeからSecure MCP Tunnelを通して、Windowsホスト上のローカルMCP群を利用するためのGit管理リポジトリです。独自のAIハーネス、Responses API呼出し、モデル選択、トークン課金処理、受信HTTPサーバー、Dockerは含みません。
+## 構成
+```text
+ChatGPT Developer Mode
+  ↓ OpenAI管理のSecure MCP Tunnel
+tunnel-client.exe（Windows、外向きHTTPS 443のみ）
+  ↓ stdio
+Node.js MCP gateway
+  ├─ files__*  UTF-8限定ファイル操作、作業ディレクトリ変更、apply_patch
+  ├─ dq9__*    DQ9 Test MCP
+  ├─ chrome__* Chrome DevTools MCP
+  └─ ghidra__* Ghidra MCP bridge
+```
+Chrome、Ghidra、Node.js、tunnel-clientは同じWindowsホストで動きます。ルーターのポート開放は不要です。MCP gatewayはstdioだけを使用し、待受ポートを作りません。
+Chrome DevTools MCPは起動時には接続しません。最初に`dq9__prepare_test_runtime`を呼び、DQ9専用Chromeが`127.0.0.1:9222`で起動した後、gatewayがChrome MCPを遅延追加して`tools/list_changed`を通知します。`dq9__stop_test_runtime`後はChrome MCPも解除します。
+## Dockerを使わない理由
+Dockerは必須ではありません。今回の対象はWindows上のChrome、Ghidra、ROM、State、永続スクリプトなので、Windowsネイティブの方が`127.0.0.1`、ファイルパス、Chromeプロセス所有権をそのまま共有できます。Node.jsは4つのMCPを単一のstdio MCPへ統合するためにだけ必要です。MCPを一つだけ接続する場合や、トンネルをMCPごとに分ける場合はgatewayも不要です。
+## 安全境界
+- OpenAIモデルAPIを呼ぶコードと`openai` SDKはありません。
+- tunnel runtime keyはSecure MCP Tunnelの制御面にだけ使用し、ソース、環境ファイル、Git、ブラウザーへ保存しません。
+- Platform側ではTunnel runtime用の専用ロールと主体を作り、`Tunnels: Read + Use`だけを許可します。`Model capabilities: Request`を含む、Tunnels以外のAPI権限は許可しません。
+- Ghidraの`run_ghidra_script`と`run_script_inline`はブリッジとgatewayの両方で遮断します。
+- ファイルMCPにシェル、任意コマンド、削除コマンドのAPIはありません。`apply_patch`だけが固定実装として存在し、標準diffの場合も固定の`git apply`だけを起動します。
+- ファイルはUTF-8だけを扱い、UTF-16、UTF-32、不正UTF-8、許可ルート外、シンボリックリンク経由の書込みを拒否します。
+- Chrome CDPとGhidra HTTPはWindowsの`127.0.0.1`だけで待受させます。
+## 1. 依存関係を入れる
+通常のPowerShellで実行します。
 ```powershell
-Copy-Item .env.example .env
-Copy-Item config\dq9-runtime.example.json config\dq9-runtime.json
-New-Item -ItemType Directory -Force workspace
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\windows\Install-Dependencies.ps1
 ```
-`.env`の`WORKSPACE_PATH`、`DQ9_CONFIG_PATH`と、`config/dq9-runtime.json`内のROM、State、永続スクリプトのパスをコンテナ内パス`/workspace/...`として設定します。ROMやStateをGitへ追加しないでください。
-## 2. Ghidra用Ed25519トンネル
-管理者PowerShellで実行します。
+このスクリプトはwingetでNode.js LTS、Python 3.12、Git、Google Chromeを導入し、OpenAI公式`openai/tunnel-client`の最新安定版Windows ZIPをSHA-256検証後に`.tools\tunnel-client`へ展開します。インストール後にPowerShellを開き直してください。
+`apply_patch`という正体の確認できるwingetパッケージは前提にしていません。本リポジトリは専用の`files__apply_patch`を実装し、標準Unified Diffだけはwingetで導入したGitの`git apply`へ渡します。任意の実行ファイル名や引数は指定できません。
+## 2. ローカル環境を初期化する
 ```powershell
-.\scripts\windows\Initialize-GhidraTunnel.ps1 -RestrictSshFirewallToDockerInterfaces
+.\scripts\windows\Initialize-LocalMcp.ps1
 ```
-このスクリプトは専用標準ユーザー`mcp-tunnel`、Ed25519クライアント鍵、制限付き`authorized_keys`、`Match User`設定、Windows SSHホスト鍵から生成した固定`known_hosts`を作成します。秘密鍵は既定で`%USERPROFILE%\.dq9-mcp`に作られ、リポジトリには入りません。GhidraプラグインはWindows側`127.0.0.1:8089`で待受させます。デバッガーを使う場合は`127.0.0.1:8099`です。
-## 3. ビルドと無課金検証
+次が生成されます。
+```text
+config\gateway.json
+config\dq9-runtime.json
+.venv\
+node_modules\
+workspace\
+.runtime\
+```
+生成物と秘密情報は`.gitignore`対象です。
+## 3. 設定する
+`config\gateway.json`でファイル操作を許可するルートと、有効にするMCPを指定します。
+```json
+{
+  "workspaceRoots": ["../workspace"],
+  "dq9Config": "./dq9-runtime.json",
+  "ghidraUrl": "http://127.0.0.1:8089",
+  "ghidraDebuggerUrl": "http://127.0.0.1:8099",
+  "enabledServers": ["files", "dq9", "chrome", "ghidra"]
+}
+```
+`config\dq9-runtime.json`にはChrome、ROM、State、永続スクリプト、プロファイルをWindowsパスまたは設定ファイル基準の相対パスで指定します。ROMとStateはGitへ追加しないでください。
+Ghidraプラグインは`127.0.0.1:8089`、デバッガー使用時は`127.0.0.1:8099`で待受させます。SSHリレーや外部bindは不要です。
+## 4. ローカル検証する
 ```powershell
-docker compose build
-docker compose run --rm app node app/doctor.mjs
-docker compose run --rm app npm test
+.\scripts\windows\Test-LocalMcp.ps1
 ```
-`doctor`はAPIキーを必要とせず、OpenAIへのモデル呼出しを行いません。
-## 4. OpenAI APIを使う場合
-OpenAI Platformで専用Projectを作り、そのProject専用のRestricted API keyを作成します。必要なResponses API権限だけを許可し、ブラウザーやソースコードへ入れず、`%USERPROFILE%\.dq9-mcp\openai_api_key`の一行ファイルとして保存します。`.env`の`OPENAI_API_KEY_PATH`をそのファイルへ向けます。APIキーをGit、Dockerfile、Composeの平文環境値へ入れないでください。
-課金を理解して明示的に有効化する場合だけ、`.env`へ次を設定します。
-```dotenv
-OPENAI_BILLING_ACK=I_UNDERSTAND_API_USAGE_IS_BILLED
+`doctor`は設定、Chrome、Node.js、Git、Python環境、tunnel-clientを確認します。この処理はOpenAIモデルAPIを呼びません。
+## 5. Tunnel専用runtime keyを作る
+OpenAI PlatformのOrganization rolesでruntime用カスタムロールを作り、runtime keyを発行する主体へ割り当てます。権限は次のように制限します。
+```text
+Tunnels: Read + Use
+Model capabilities: Request = Off
+Tunnels以外の権限 = No access
 ```
-実行例です。
+Tunnelを作成・編集する管理者には別ロールとして`Tunnels: Read + Manage`を付けます。長時間動かすruntime keyへManage権限やAdmin keyを渡さないでください。PlatformのRuntime API keysでキーを取得したら次を実行します。
 ```powershell
-.\scripts\windows\Invoke-Assistant.ps1 "DQ9テストランタイムを準備し、現在の画面状態を確認して"
+.\scripts\windows\Set-TunnelRuntimeKey.ps1
 ```
-## 5. OpenAI mTLS
-OpenAI mTLSはAPIキーを置き換えず、APIキーとクライアント証明書の両方を要求します。OpenAIの公開要件はクライアント証明書に`Digital Signature`と`Key Encipherment`を要求するため、この構成はEd25519ではなくRSA 3072のX.509証明書を生成します。
+キーは既定で`%USERPROFILE%\.dq9-mcp\tunnel-runtime-key`へUTF-8、継承なしACLで保存されます。実行時だけ`CONTROL_PLANE_API_KEY`へ読み込み、終了時に元の環境値へ戻します。
+この構成にはモデルAPIの呼出し口がなく、権限側でもモデル要求を拒否します。ただし、OpenAIが将来Secure MCP Tunnel自体に料金体系を設定しないことまで、このリポジトリから保証するものではありません。
+## 6. Tunnelを初期化する
+PlatformのTunnels画面で取得した`tunnel_id`を指定します。
 ```powershell
-docker compose --profile tools run --rm certgen
+.\scripts\windows\Initialize-Tunnel.ps1 -TunnelId tunnel_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
-生成先は`.env`の`SECRETS_DIR`です。OpenAIへアップロードするのは`openai_mtls_ca_cert.pem`だけです。`openai_mtls_ca_key.pem`と`openai_mtls_client_key.pem`は絶対にアップロード、共有、Git追加しないでください。OpenAIでCA証明書を有効化した後、`.env`へ次を設定します。
-```dotenv
-OPENAI_MTLS_ENABLED=true
-OPENAI_MTLS_CERT_PATH=C:/Users/owner/.dq9-mcp/openai_mtls_client_cert.pem
-OPENAI_MTLS_KEY_PATH=C:/Users/owner/.dq9-mcp/openai_mtls_client_key.pem
+スクリプトは次と同等の処理を行います。
+```powershell
+tunnel-client.exe init --sample sample_mcp_stdio_local --profile dq9-local --tunnel-id tunnel_xxx --mcp-command '"C:\Program Files\nodejs\node.exe" "C:\path\app\gateway.mjs"'
+tunnel-client.exe doctor --profile dq9-local --explain
 ```
-## 6. Git管理
-秘密情報、ROM、State、実行生成物は`.gitignore`で除外されています。初回取得後は次を確認してください。
+## 7. Tunnelを起動する
+```powershell
+.\scripts\windows\Run-Tunnel.ps1
+```
+このウィンドウを開いている間、tunnel-clientがOpenAIへ外向きHTTPS接続し、ChatGPTからのMCP要求をgatewayへstdio転送します。
+## 8. ChatGPTへ接続する
+ChatGPTでDeveloper Modeを有効にし、Pluginsの追加画面から接続方式`Tunnel`を選び、作成済みのTunnelまたは`tunnel_id`を選択します。検出された`files__*`、`dq9__*`、`chrome__*`、`ghidra__*`を確認してください。
+## ファイル編集API
+`files__set_working_directory`で、後続の相対パスの基準を許可ルート内の既存ディレクトリへ変更できます。
+`files__apply_patch`は次の二形式を受け付けます。
+```text
+*** Begin Patch
+*** Update File: src/example.js
+@@
+-old
++new
+*** End Patch
+```
+```diff
+diff --git a/src/example.js b/src/example.js
+--- a/src/example.js
++++ b/src/example.js
+@@ -1 +1 @@
+-old
++new
+```
+`dryRun: true`で事前検査だけを行えます。バイナリパッチ、ルート外パス、`.git`内部、rename/copy形式、UTF-16/UTF-32対象は拒否されます。
+## Git管理
 ```powershell
 .\scripts\windows\Enable-GitHooks.ps1
 git status --short
-git ls-files | Select-String -Pattern "key|pem|\.nds$|\.dst$"
 ```
-## 構成
-```text
-Node.js CLI
-├─ OpenAI Responses API（外向き443、任意でmTLS）
-├─ stdio: safe-files MCP
-├─ stdio: dq9-test MCP
-├─ stdio: chrome-devtools-mcp
-└─ stdio: Ghidra MCP bridge
-   └─ 127.0.0.1:8089
-      └─ SSH Ed25519 local forward
-         └─ Windows Ghidra 127.0.0.1:8089
-```
+pre-commit hookはTunnel key、OpenAI形式のAPIキー、秘密鍵、証明書秘密鍵、ROM、Stateのコミットを拒否します。

@@ -1,6 +1,6 @@
 # Third-Party Notices
-- `mcp/dq9-test`はユーザー提供の`dq9-test` ZIPを基にDocker Headless Chrome対応と単一実行ロックを追加しています。
-- `mcp/ghidra/bridge_mcp_ghidra.py`はユーザー提供ファイルを基に、任意Ghidraスクリプト実行ツールを登録しない変更を加えています。元プロジェクトのライセンス条件を確認して維持してください。
-- `chrome-devtools-mcp`はDockerビルド時に`1.1.1`をnpmから取得します。
-- `@openai/agents`、`openai`、`undici`、`zod`は各ライセンスに従います。
-- `local-mcp`の設計は参照しましたが、任意コマンド実行機能を避けるためRust実装は同梱せず、新規のUTF-8限定`safe-files` MCPへ置き換えています。
+- `mcp/dq9-test`はユーザー提供の`dq9-test` ZIPを基に、Windows Headless Chrome起動と単一実行制御を維持しています。元プロジェクトのライセンス条件を確認して維持してください。
+- `mcp/ghidra/bridge_mcp_ghidra.py`はユーザー提供ファイルを基に、任意Ghidraスクリプト実行ツールを公開しない変更を加えています。元プロジェクトのライセンス条件を確認して維持してください。
+- `chrome-devtools-mcp`はnpmから`1.6.0`を固定取得します。ライセンスは同パッケージに従います。
+- `tunnel-client`はOpenAI公式GitHub Releaseから取得し、公開された`SHA256SUMS.txt`で検証します。リポジトリ本体にはバイナリをコミットしません。
+- `local-mcp`の設計は参照しましたが、任意コマンド実行機能を避けるためRust実装は同梱せず、UTF-8限定の`safe-files` MCPへ置き換えています。

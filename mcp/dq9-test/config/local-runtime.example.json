@@ -1,14 +1,14 @@
 {
-  "chromePath": "/usr/bin/google-chrome-stable",
+  "chromePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "url": "https://daisukedaisuke.github.io/desmume_webassembly/",
-  "romPath": "/workspace/assets/game.nds",
-  "statePath": "/workspace/assets/battle-state.dst",
+  "romPath": "../../../workspace/assets/game.nds",
+  "statePath": "../../../workspace/assets/battle-state.dst",
   "scriptPaths": {
-    "command": "/workspace/scripts/battle_command_mcp.js",
-    "observer": "/workspace/scripts/battle_observer_mcp.js",
-    "incident": "/workspace/scripts/battle_rng_incident_mcp.js"
+    "command": "../../../workspace/scripts/battle_command_mcp.js",
+    "observer": "../../../workspace/scripts/battle_observer_mcp.js",
+    "incident": "../../../workspace/scripts/battle_rng_incident_mcp.js"
   },
-  "profilePath": "/app/mcp/dq9-test/profiles/battle-runtime-profile-v1.json",
+  "profilePath": "../profiles/battle-runtime-profile-v1.json",
   "cdpPort": 9222,
-  "runtimeDirectory": "/runtime/dq9-test"
+  "runtimeDirectory": "../../../.runtime/dq9-test"
 }

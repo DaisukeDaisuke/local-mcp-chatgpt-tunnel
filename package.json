@@ -1,19 +1,17 @@
 {
-  "name": "dq9-openai-mcp-docker",
-  "version": "0.1.0",
+  "name": "dq9-chatgpt-local-mcp",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=22 <25"
   },
   "scripts": {
-    "ask": "node app/cli.mjs",
+    "gateway": "node app/gateway.mjs",
     "doctor": "node app/doctor.mjs",
     "test": "node --test tests/*.test.mjs mcp/dq9-test/tests/artifact-store.test.mjs mcp/dq9-test/tests/battle-runtime-profile.test.mjs mcp/dq9-test/tests/browser-launcher.test.mjs mcp/dq9-test/tests/cdp-client.test.mjs mcp/dq9-test/tests/contract-freeze.test.mjs mcp/dq9-test/tests/mcp-server.test.mjs mcp/dq9-test/tests/rng-lcg.test.mjs mcp/dq9-test/tests/runtime-manager.test.mjs"
   },
   "dependencies": {
-    "@openai/agents": "0.11.6",
-    "openai": "6.39.0",
-    "undici": "7.25.0"
+    "chrome-devtools-mcp": "1.6.0"
   }
 }

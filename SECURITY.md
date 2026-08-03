@@ -1,13 +1,13 @@
 # Security Policy
 ## 公開面
-この構成は受信HTTP、公開MCP、公開CDPポートを持ちません。`docker compose config`に`ports`が現れた場合は意図しない変更として扱ってください。
-## 秘密情報
-APIキー、SSH秘密鍵、CA秘密鍵、mTLSクライアント秘密鍵をGitへコミットしないでください。漏えいした場合は、APIキーを失効し、SSH鍵を`authorized_keys`から削除し、mTLS証明書をOpenAI側で無効化して再発行してください。
+この構成はWindowsネイティブで動作し、MCP gatewayはstdioのみです。公開MCP URL、Docker公開ポート、ルーターのポート転送は使用しません。tunnel-clientがOpenAIへ外向きHTTPS接続します。tunnel-client自身のヘルスUIがWindowsのloopbackへ待受する場合がありますが、LANやインターネットには公開しません。
+## Tunnel runtime key
+runtime keyの主体には`Tunnels: Read + Use`だけを許可してください。`Model capabilities: Request`を含むTunnels以外のAPI権限と、Tunnel管理用のAdmin keyは付与しません。キーは`%USERPROFILE%\.dq9-mcp\tunnel-runtime-key`に保存し、Git、設定JSON、PowerShell履歴、ログ、ブラウザーへ貼り付けないでください。
+## ファイル操作
+ファイルMCPの許可範囲は`config\gateway.json`の`workspaceRoots`です。UTF-8だけを読み書きし、UTF-16、UTF-32、不正UTF-8、ルート外、シンボリックリンク経由の書込みを拒否します。`set_working_directory`は許可ルート内の既存ディレクトリに限定されます。`apply_patch`は専用パーサーまたは固定の`git apply`だけを使用し、シェルと任意コマンドを公開しません。
 ## Ghidra
-Ghidra HTTPサーバーはWindowsの`127.0.0.1`だけで待受させます。DockerからはEd25519認証済みSSHローカルフォワードだけを使用します。`run_ghidra_script`と`run_script_inline`を再追加しないでください。
+Ghidra HTTPサーバーは`127.0.0.1`だけで待受させてください。`run_ghidra_script`と`run_script_inline`は再公開しないでください。Windowsホスト外からアクセス可能なbindへ変更しないでください。
 ## Chrome
-Chrome CDPはコンテナ内`127.0.0.1:9222`だけで待受します。Composeへ`9222:9222`を追加しないでください。Chromeは非rootユーザーで起動し、`--no-sandbox`を追加しません。
-## OpenAI
-通常TLSでNode.jsはOpenAIのサーバー証明書を検証します。mTLSを有効にするとOpenAI側もクライアント証明書を検証しますが、APIキーは引き続き必要です。課金なしの有効なモデルAPIキーはありません。
-## 報告
-秘密情報がログに出た場合、まず該当資格情報を失効してから、再現に秘密値を含めずに修正してください。
+Chrome CDPは`127.0.0.1:9222`だけで待受します。ChromeはDQ9 MCPが専用プロファイルで起動し、Chrome DevTools MCPは同じCDPへ接続します。通常の閲覧用Chromeプロファイルを指定しないでください。
+## 資格情報漏えい
+runtime keyが漏えいした場合はOpenAI Platformで直ちに失効し、新しいTunnel専用キーを作成してください。ROM、State、秘密鍵、トークンを含むログをIssueやチャットへ添付しないでください。

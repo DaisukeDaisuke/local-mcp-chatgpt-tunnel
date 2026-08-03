@@ -1,5 +1,5 @@
 import { access, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { parseJson, isPlainObject } from '../util/json.mjs';
 import { RelayError } from '../util/errors.mjs';
 
@@ -50,5 +50,19 @@ export async function loadConfig(configPath, { fs, readFile } = {}) {
   } catch {
     throw new RelayError('CONFIG_NOT_FOUND', 'Local runtime configuration is not readable', { path: String(configPath) });
   }
-  return validateConfig(parseJson(text, 'Local runtime configuration'), { fs });
+  const parsed = parseJson(text, 'Local runtime configuration');
+  const baseDirectory = dirname(resolve(String(configPath)));
+  const fromConfig = (value) => typeof value === 'string' && value.trim() !== ''
+    ? (isAbsolute(value) ? value : resolve(baseDirectory, value))
+    : value;
+  const normalized = {
+    ...parsed,
+    chromePath: fromConfig(parsed.chromePath),
+    romPath: fromConfig(parsed.romPath),
+    statePath: fromConfig(parsed.statePath),
+    profilePath: fromConfig(parsed.profilePath),
+    runtimeDirectory: fromConfig(parsed.runtimeDirectory),
+    scriptPaths: Object.fromEntries(Object.entries(parsed.scriptPaths ?? {}).map(([role, path]) => [role, fromConfig(path)]))
+  };
+  return validateConfig(normalized, { fs });
 }
