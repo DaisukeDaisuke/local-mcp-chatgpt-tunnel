@@ -6,6 +6,13 @@ import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+const RESERVED_POLICY_ENVIRONMENT = new Set([
+  'LOCAL_MCP_ALLOWED_DIRECTORIES',
+  'LOCAL_MCP_ALLOWED_FILES',
+  'LOCAL_MCP_DISALLOWED_DIRECTORIES',
+  'LOCAL_MCP_DISALLOWED_FILES'
+]);
+
 const absoluteFrom = (base, value) => isAbsolute(value) || win32.isAbsolute(value) || posix.isAbsolute(value) ? value : resolve(base, value);
 
 function stringArray(value, name) {
@@ -67,6 +74,11 @@ function normalizeServer(name, raw, base) {
   if (Object.values(env).some((value) => !['string', 'number', 'boolean'].includes(typeof value))) {
     throw new Error(`mcp_servers.${name}.env values must be strings, numbers, or booleans`);
   }
+  for (const environmentName of Object.keys(env)) {
+    if (RESERVED_POLICY_ENVIRONMENT.has(environmentName.toUpperCase())) {
+      throw new Error(`mcp_servers.${name}.env may not override reserved path-policy variable ${environmentName}`);
+    }
+  }
   return {
     name,
     prefix: typeof raw.prefix === 'string' && raw.prefix ? raw.prefix : name,
@@ -83,7 +95,9 @@ function normalizeServer(name, raw, base) {
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
     allowedDirectories: absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`),
-    allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`)
+    allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`),
+    disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`),
+    disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`)
   };
 }
 

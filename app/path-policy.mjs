@@ -153,19 +153,46 @@ async function normalizeAllowedEntries(values, base, kind) {
 }
 
 export class ToolPathPolicy {
-  constructor({ serverName, cwd, allowedDirectories = [], allowedFiles = [] }) {
+  constructor({
+    serverName,
+    cwd,
+    allowedDirectories = [],
+    allowedFiles = [],
+    disallowedDirectories = [],
+    disallowedFiles = []
+  }) {
     this.serverName = serverName;
     this.cwd = cwd;
     this.allowedDirectoriesInput = allowedDirectories;
     this.allowedFilesInput = allowedFiles;
+    this.disallowedDirectoriesInput = disallowedDirectories;
+    this.disallowedFilesInput = disallowedFiles;
     this.allowedPromise = null;
   }
 
   async allowed() {
     this.allowedPromise ??= Promise.all([
       normalizeAllowedEntries(this.allowedDirectoriesInput, this.cwd, 'allowed_directories'),
-      normalizeAllowedEntries(this.allowedFilesInput, this.cwd, 'allowed_files')
-    ]).then(([directories, files]) => ({ directories, files }));
+      normalizeAllowedEntries(this.allowedFilesInput, this.cwd, 'allowed_files'),
+      normalizeAllowedEntries(this.disallowedDirectoriesInput, this.cwd, 'disallowed_directories'),
+      normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files')
+    ]).then(([directories, files, disallowedDirectories, disallowedFiles]) => {
+      for (const entry of disallowedDirectories) {
+        const covered = directories.some((allowed) => allowed.style === entry.style
+          && isWithin(allowed.style, allowed.canonical, entry.canonical));
+        if (!covered) throw new Error(`disallowed_directories entry is not inside allowed_directories: ${entry.lexical}`);
+      }
+      for (const entry of disallowedFiles) {
+        const coveredByDirectory = directories.some((allowed) => allowed.style === entry.style
+          && isWithin(allowed.style, allowed.canonical, entry.canonical));
+        const coveredByFile = files.some((allowed) => allowed.style === entry.style
+          && comparable(allowed.style, allowed.canonical) === comparable(entry.style, entry.canonical));
+        if (!coveredByDirectory && !coveredByFile) {
+          throw new Error(`disallowed_files entry is not inside allowed_directories or allowed_files: ${entry.lexical}`);
+        }
+      }
+      return { directories, files, disallowedDirectories, disallowedFiles };
+    });
     return this.allowedPromise;
   }
 
@@ -187,6 +214,13 @@ export class ToolPathPolicy {
         && isWithin(entry.style, entry.canonical, canonical));
       if (!fileAllowed && !directoryAllowed) {
         throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is outside allowed_directories and allowed_files: ${normalized.path}`);
+      }
+      const fileDenied = allowed.disallowedFiles.some((entry) => entry.style === normalized.style
+        && comparable(entry.style, entry.canonical) === comparable(normalized.style, canonical));
+      const directoryDenied = allowed.disallowedDirectories.some((entry) => entry.style === normalized.style
+        && isWithin(entry.style, entry.canonical, canonical));
+      if (fileDenied || directoryDenied) {
+        throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is denied by disallowed_directories or disallowed_files: ${normalized.path}`);
       }
     }
   }

@@ -11,6 +11,27 @@ startup_timeout_sec = 30
 tool_timeout_sec = 1800
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
 allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+
+# Safe Git operations. Disabled by default; set enabled=true after replacing paths.
+# --disable-push=true removes the push tool entirely.
+# --disable-pull=true removes the pull tool entirely.
+# --disable-clone=true removes clone_repository entirely. Set it to false to enable clone.
+[mcp_servers.git]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=false', '--disable-pull=true', '--disable-clone=true']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+prefix = "git"
+startup_timeout_sec = 30
+tool_timeout_sec = 1800
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+# Deny secrets or private subtrees even when they are inside allowed_directories.
+disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
+disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 
 # Read-only image transfer for ChatGPT vision. Enable it only after replacing every dummy path.
 [mcp_servers.images]
@@ -70,6 +91,8 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # blocked_tool_substrings = ["script", "shell", "execute"]
 # allowed_directories = ['C:\work\project']
 # allowed_files = ['C:\Users\owner\Downloads\one-upload-file.png']
+# disallowed_directories = ['C:\work\project\private']
+# disallowed_files = ['C:\work\project\.env']
 #
 # [mcp_servers.my_server.env]
 # EXAMPLE_CONFIG = 'C:\path\to\config.json'

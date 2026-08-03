@@ -71,5 +71,19 @@ test('path policy resolves symlinks before allowing a path', async (t) => {
     throw error;
   }
   const policy = new ToolPathPolicy({ serverName: 'files', cwd: root, allowedDirectories: [root], allowedFiles: [] });
+
+test('disallowed paths override allowed directories', async () => {
+  const policy = new ToolPathPolicy({
+    serverName: 'files',
+    cwd: 'C:\\work\\project',
+    allowedDirectories: ['C:\\work\\project'],
+    allowedFiles: [],
+    disallowedDirectories: ['C:\\work\\project\\private'],
+    disallowedFiles: ['C:\\work\\project\\.env']
+  });
+  await assert.doesNotReject(policy.assertToolArguments('read', { path: 'src\\index.js' }));
+  await assert.rejects(policy.assertToolArguments('read', { path: 'private\\secret.txt' }), /denied by disallowed/);
+  await assert.rejects(policy.assertToolArguments('read', { path: '.env' }), /denied by disallowed/);
+});
   await assert.rejects(policy.assertToolArguments('read', { path: link }), /outside allowed_directories/);
 });

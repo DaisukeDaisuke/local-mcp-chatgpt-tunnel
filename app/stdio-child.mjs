@@ -19,9 +19,15 @@ export class StdioMcpChild {
   async start() {
     if (this.child) return;
     const { command, args = [], cwd, env = {} } = this.config;
+    const policyEnvironment = {
+      LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify(this.config.allowedDirectories ?? []),
+      LOCAL_MCP_ALLOWED_FILES: JSON.stringify(this.config.allowedFiles ?? []),
+      LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(this.config.disallowedDirectories ?? []),
+      LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(this.config.disallowedFiles ?? [])
+    };
     this.child = spawn(command, args, {
       cwd,
-      env: buildChildEnvironment(env),
+      env: buildChildEnvironment({ ...env, ...policyEnvironment }),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       shell: false

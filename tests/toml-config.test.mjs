@@ -39,6 +39,8 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     'blocked_tool_substrings = ["script", "shell"]',
     "allowed_directories = ['C:\\work\\project']",
     "allowed_files = ['C:\\Users\\owner\\Downloads\\upload.png']",
+    "disallowed_directories = ['C:\\work\\project\\private']",
+    "disallowed_files = ['C:\\work\\project\\.env']",
     '[mcp_servers.alpha.env]',
     'CONFIG = "alpha.json"',
     '[mcp_servers.alpha.start_after]',
@@ -61,6 +63,8 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].blockedToolSubstrings, ['script', 'shell']);
   assert.deepEqual(config.servers[0].allowedDirectories, ['C:\\work\\project']);
   assert.deepEqual(config.servers[0].allowedFiles, ['C:\\Users\\owner\\Downloads\\upload.png']);
+  assert.deepEqual(config.servers[0].disallowedDirectories, ['C:\\work\\project\\private']);
+  assert.deepEqual(config.servers[0].disallowedFiles, ['C:\\work\\project\\.env']);
 });
 
 test('gateway config rejects empty or control-character blocked tool substrings', async () => {

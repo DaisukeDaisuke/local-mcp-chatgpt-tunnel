@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises';
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const MAX_TEXT_BYTES = Number(process.env.SAFE_FILES_MAX_BYTES ?? 2 * 1024 * 1024);
@@ -28,7 +28,13 @@ Run one safe-files entry per workspace when you need multiple roots.
 `;
 
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
-const configuredRoots = cli.help ? [] : JSON.parse(process.env.SAFE_FILES_ROOTS ?? JSON.stringify([process.cwd()]));
+const configuredRoots = cli.help ? [] : JSON.parse(
+  process.env.LOCAL_MCP_ALLOWED_DIRECTORIES
+    ?? process.env.SAFE_FILES_ROOTS
+    ?? JSON.stringify([process.cwd()])
+);
+const configuredDisallowedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES ?? '[]');
+const configuredDisallowedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_FILES ?? '[]');
 
 const BLOCKED_SECRET_EXTENSIONS = new Set(['.key', '.kdbx', '.p12', '.pem', '.pfx', '.ppk', '.pub']);
 const BLOCKED_TRANSFER_EXTENSIONS = new Set(['.dsv', '.dst', '.nds', '.sav', ...BLOCKED_SECRET_EXTENSIONS]);
@@ -243,6 +249,7 @@ function assertSafePath(root, candidate) {
 }
 
 let rootsPromise;
+let deniedPromise;
 let workingDirectoryPromise;
 const roots = () => {
   if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
@@ -259,6 +266,38 @@ const workingDirectory = async () => {
   return workingDirectoryPromise;
 };
 
+async function canonicalizeExistingPrefix(path) {
+  let cursor = resolve(path);
+  const missing = [];
+  while (true) {
+    try {
+      const actual = await realpath(cursor);
+      return join(actual, ...missing.reverse());
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      const parent = dirname(cursor);
+      if (parent === cursor) return resolve(path);
+      missing.push(basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+const denied = () => {
+  deniedPromise ??= Promise.all([
+    Promise.all(configuredDisallowedDirectories.map(canonicalizeExistingPrefix)),
+    Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix))
+  ]).then(([directories, files]) => ({ directories, files }));
+  return deniedPromise;
+};
+
+async function assertNotDenied(candidate) {
+  const blocked = await denied();
+  if (blocked.files.includes(candidate) || blocked.directories.some((directory) => within(directory, candidate))) {
+    throw new Error('Path is denied by disallowed_directories or disallowed_files');
+  }
+}
+
 async function chooseRoot(path) {
   if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
   const allowed = await roots();
@@ -274,6 +313,7 @@ async function resolveExisting(path) {
   const actual = await realpath(candidate);
   if (!within(root, actual)) throw new Error('Resolved path escaped the allowed workspace root');
   assertSafePath(root, actual);
+  await assertNotDenied(actual);
   return { root, path: actual };
 }
 
@@ -288,9 +328,11 @@ async function resolveWritable(path) {
     const actual = await realpath(candidate);
     if (!within(root, actual)) throw new Error('Resolved file escaped the allowed workspace root');
     assertSafePath(root, actual);
+    await assertNotDenied(actual);
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
+  await assertNotDenied(candidate);
   return { root, path: candidate };
 }
 
@@ -678,7 +720,7 @@ async function searchText(args) {
 async function callTool(name, args = {}) {
   switch (name) {
     case 'roots':
-      return { roots: await roots(), workingDirectory: await workingDirectory() };
+      return { roots: await roots(), denied: await denied(), workingDirectory: await workingDirectory() };
     case 'get_working_directory':
       return { workingDirectory: await workingDirectory() };
     case 'set_working_directory': {

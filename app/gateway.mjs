@@ -134,7 +134,9 @@ async function startChild(childConfig) {
       serverName: childConfig.name,
       cwd: childConfig.cwd,
       allowedDirectories: childConfig.allowedDirectories,
-      allowedFiles: childConfig.allowedFiles
+      allowedFiles: childConfig.allowedFiles,
+      disallowedDirectories: childConfig.disallowedDirectories,
+      disallowedFiles: childConfig.disallowedFiles
     });
     try {
       await child.pathPolicy.allowed();
