@@ -240,7 +240,9 @@ Tunnelsの権限にReadとUseを設定します。Manageは付与してはいけ
 
 <img width="2559" height="492" alt="image" src="https://github.com/user-attachments/assets/6a81e9f5-c8a9-42e0-b90c-2438cac14f60" />
 Tunnelの作成や編集には別途`Tunnels Read + Manage`が必要ですが、普段`tunnel-client`を動かすruntime主体にはManage権限を付けません。<br>
+
 ### 7.2 自分だけのGroupへロールを割り当てる
+
 [OpenAI PlatformのOrganization Groupsを開く](https://platform.openai.com/settings/organization/people/groups)<br>
 自分だけを含むGroupを作成または選択し、先ほど作ったTunnel実行専用ロールを割り当てます。<br>ロールを作成しただけでは権限は有効になりません。<br>
 
