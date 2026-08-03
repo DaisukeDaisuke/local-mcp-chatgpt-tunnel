@@ -406,3 +406,11 @@ ChatGPTで作成したカスタムアプリを有効にし、表示されたツ�
 ChatGPTに、作成したカスタムアプリのツールが利用可能になったか確認させてください。
 > [!IMPORTANT]
 > お疲れさまでした。ChatGPTからローカルMCPを使用できるようになりました。
+
+
+### 13 参考文献
+
+
+https://x.com/nakasyou0/status/2083740389471904012 <br>
+
+https://azukiazusa.dev/blog/openai-secure-mcp-tunnel/ <br>
