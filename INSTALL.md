@@ -390,7 +390,7 @@ ChatGPT側の画面名や接続方式が変更されていないかを確認し�
 ### 12.1 カスタムアプリを更新する
 > [!NOTE]
 > GatewayまたはTunnelを起動・再起動した後は、ChatGPT側でカスタムアプリを更新してください。<br>
-> `config/gateway.toml`でMCPや公開ツールを変更した場合も、更新するまでChatGPTには古いツール一覧が表示されることがあります。
+> `config/gateway.toml`でMCPや公開ツールを変更した場合も、更新するまでChatGPTには古いツール一覧が表示されることがあります。<br>
 [カスタムアプリの設定を開く](https://chatgpt.com/#settings/Plugins)<br>
 作成したカスタムアプリ（コネクター）をクリックします。<br>
 <img width="745" height="677" alt="image" src="https://github.com/user-attachments/assets/e3332e2d-a854-4f2f-86cd-9c24b8c4227e" /><br>
