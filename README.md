@@ -1,34 +1,106 @@
 # Local MCP ChatGPT Tunnel
-OpenAI公式Secure MCP Tunnelを使い、Windows上の個人用stdio MCPをChatGPT Developer Modeへ接続するためのGatewayです。独自AIハーネス、Responses API、モデルAPI課金処理、公開MCP URL、受信インターネットポートは実装しません。
-## 設定方式
-接続するMCPは`config/gateway.toml`の`[mcp_servers.<name>]`で指定します。`command`、`args`、`cwd`、`enabled`、`env`を使うCodexに近い形式で、Gatewayコード内に特定MCPの起動設定はありません。Ghidra MCP、DQ9 MCP、Chrome DevTools MCPなどの第三者実装も再配布しません。
+Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tunnel経由でChatGPT Developer Modeへ接続するためのローカルGatewayです。
+複数のstdio MCPを1つに集約し、ツール名の名前空間化、公開ツールの除外、パス許可、直列実行、遅延起動を設定ファイルから制御できます。
+> [!WARNING]
+> 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。
+![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
+## 何ができるか
+- ChatGPTからWindows上のstdio MCPサーバーを呼び出す
+- 複数のMCPを`<prefix>__<tool>`形式のツール名へまとめる
+- 任意のstdio MCPを`config/gateway.toml`へ追加する
+- MCPごとに許可するディレクトリとファイルを制限する
+- 危険なツールを名前または部分文字列で非公開にする
+- 同時実行させたくないMCPを`serial_group`で直列化する
+- 特定ツールの成功後に別MCPを起動または停止する
+## このリポジトリが行わないこと
+- OpenAI Responses APIやChat Completions APIの呼び出し
+- 独自AIエージェント、独自ハーネス、モデル課金処理の実装
+- 公開MCP URLやローカル受信ポートの提供
+- Node.js、Git、ripgrep、Python、tunnel-clientの自動インストール
+- Ghidra MCP、Chrome DevTools MCP、DQ9 MCPなど第三者MCPの再配布
+Secure MCP Tunnelへの接続は公式`tunnel-client.exe`が担当します。このリポジトリは、その標準入出力へ接続するローカルMCP Gatewayと同梱MCPを提供します。
+## 対応環境
+現在の導入手順はWindows 11向けです。実行にはNode.js LTSとOpenAI公式`tunnel-client.exe`を使います。同梱のファイル検索機能にはripgrepを使い、診断スクリプトは`node`、`npm`、`git`、`rg`、`py`を確認します。
+macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構成は用意していません。
+## 使い始めるまで
+使えるようになるまでの手順は、[INSTALL.md](./INSTALL.md)にまとめています。
+大まかな流れは次のとおりです。
+1. 必要なソフトと公式`tunnel-client.exe`を手動で用意する
+2. `config/gateway.example.toml`を`config/gateway.toml`へコピーして絶対パスを書き換える
+3. OpenAI Platformで個人用Tunnelと実行専用runtime API keyを作る
+4. Tunnel IDとruntime API keyをWindowsのユーザー環境変数へ保存する
+5. `start.cmd`で診断後にTunnelを起動する
+6. ChatGPT Developer Modeから個人用Tunnelを選択する
+設定や権限を推測して進めず、必ず[INSTALL.md](./INSTALL.md)を上から確認してください。
+## 同梱MCP
+| MCP | 公開ツールの例 | 用途 |
+| --- | --- | --- |
+| `safe-files` | `list_files`、`search_text`、`read_text_file`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、読み書き、限定されたパッチ適用 |
+| `safe-images` | `read_image` | PNG、JPEG、WebPをChatGPTの画像コンテンツとして読み取る |
+| `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
+同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。
+### safe-files
+`safe-files`はプロセスの`cwd`をWorkspaceルートとして使います。主な機能は次のとおりです。
+- 固定された`rg --files --hidden`による再帰一覧
+- 固定された`rg`によるUTF-8テキスト検索
+- UTF-8テキストの読み書きと完全一致置換
+- サイズを制限したbase64ファイル転送
+- ディレクトリ作成
+- 内蔵パーサーまたは固定された`git apply`によるパッチ適用
+再帰一覧では`.git`内部を常に除外し、パッチでは`.git`内部を対象にできません。許可ルート外、シンボリックリンクによる脱出、高確度で資格情報らしい内容なども拒否します。一般シェル、PowerShell、任意コマンド実行ツールは含みません。
+### safe-images
+`safe-images`は読み取り専用です。PNG、JPEG、WebPの拡張子とマジックバイトを照合し、初期状態では8 MiB、50メガピクセルまでに制限します。
+SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク、UNCパス、NTFS代替データストリームを拒否します。
+### safe-download
+`safe-download`は読み取り専用で、単一ファイルまたはディレクトリを常にZIPとして返します。`safe-files`とは別の`cwd`と許可リストを設定し、ChatGPTへ渡してよいソースだけを公開します。
+ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。
+## 任意のstdio MCPを追加する
+接続するMCPは`config/gateway.toml`の`[mcp_servers.<name>]`へ追加します。Gatewayコード内に特定MCPの起動設定はありません。
 ```toml
 private_use_only = true
-[mcp_servers.files]
-command = "node"
-args = ['C:\work\local-mcp-chatgpt-tunnel\mcp\safe-files\server.mjs']
-cwd = 'C:\work\project'
+[mcp_servers.example]
+command = "py"
+args = ['C:\path\to\server.py']
+cwd = 'C:\path\to'
 enabled = true
-prefix = "files"
+prefix = "example"
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
 allowed_directories = ['C:\work\project']
-allowed_files = []
-[mcp_servers.files.env]
-EXAMPLE = "value"
+allowed_files = ['C:\Users\owner\Downloads\one-upload-file.png']
+[mcp_servers.example.env]
+EXAMPLE_CONFIG = 'C:\path\to\config.json'
 ```
-`enabled = false`のMCPは起動しません。Gatewayは有効なstdio MCPだけを子プロセスとして起動し、ツール名を`<prefix>__<tool>`へ名前空間化します。
-Codex固有の`tool_output_token_limit`、ツール別`approval_mode`、Gatewayが使わない未知の項目は無視します。Codexの設定をコピーするときに、それらを削除する必要はありません。ただし、このGateway上では効果もありません。
-競合を避けるため同時実行を直列化する場合は`serial_group`、公開したくないツールは`blocked_tools`を指定できます。別MCPのツール成功後だけ起動・停止する構成も設定側へ書けます。
+有効なstdio MCPだけが子プロセスとして起動し、元のツール名`tool_name`はChatGPT側で`example__tool_name`として公開されます。`enabled = false`のエントリは起動しません。
+Codex設定からコピーした`tool_output_token_limit`、ツール別の承認設定、Gatewayが認識しない項目は無視されます。このGateway上では効果を持ちません。
+## Gateway設定
+### パス許可
+`allowed_directories`は指定したディレクトリとその配下を許可し、`allowed_files`は指定したファイルだけを完全一致で許可します。
+Gatewayはすべての子MCPのツール引数を再帰的に検査し、`path`、`filePath`、`files`、`directory`などのキーや絶対パスらしい文字列を許可リストへ照合します。相対パスは対象MCPの`cwd`から解決します。
+```toml
+allowed_directories = ['C:\work\project']
+allowed_files = ['C:\Users\owner\Downloads\upload.png']
+```
+この検査はChatGPTから子MCPへ渡るツール引数のガードです。接続したMCP自身が内部で勝手にファイルへアクセスすることを、OSレベルで防ぐ機能ではありません。
+### 公開ツールの除外
+ツール名の完全一致は`blocked_tools`、大文字小文字を区別しない部分一致は`blocked_tool_substrings`で非公開にできます。
+```toml
+blocked_tools = ["dangerous_tool"]
+blocked_tool_substrings = ["script", "shell", "execute"]
+```
+`blocked_tool_substrings`はglobや正規表現ではありません。たとえば`"script"`は`evaluate_script`、`runScript`、`SCRIPT_debug`をすべて対象にします。
+### 直列実行と遅延起動
+同じ資源を同時操作させたくないMCPは、同じ`serial_group`へ所属させられます。
+`deferred = true`にしたMCPは初期化時に起動せず、別MCPの指定ツールが成功した後に`start_after`で起動できます。`stop_after`では同様に停止できます。
 ```toml
 [mcp_servers.browser]
 command = "node"
 args = ["browser-server.mjs"]
 cwd = ".."
 enabled = true
+prefix = "browser"
 deferred = true
 serial_group = "browser"
-blocked_tools = ["dangerous_tool"]
 [mcp_servers.browser.start_after]
 server = "controller"
 tool = "prepare_browser"
@@ -36,67 +108,19 @@ tool = "prepare_browser"
 server = "controller"
 tool = "stop_browser"
 ```
-## パス許可
-Gatewayは全MCPのツール引数を再帰的に検査し、パスらしい値を`allowed_directories`と`allowed_files`へ照合します。
-```toml
-allowed_directories = ['C:\work\project']
-allowed_files = ['C:\Users\owner\Downloads\upload.png']
-```
-`allowed_directories`は指定ディレクトリとその配下、`allowed_files`は指定ファイルだけを完全一致で許可します。Windowsの`\`、`/`、JSONで二重にエスケープされた`\\`は正規化し、相対パスはMCPの`cwd`から解決します。既存パスはシンボリックリンクの実体も確認します。
-`path`、`filePath`、`files`、`directory`などのキー、または絶対パスらしい文字列を検出します。パスらしい引数が許可リスト外なら、子MCPへ渡す前に拒否します。URLはファイルパスとして扱いません。
-この検査はChatGPTからMCPへ渡る引数のガードです。悪意あるMCP自身が内部で勝手にファイルを読むことをOSレベルで防ぐものではありません。
-## ファイルMCP
-`safe-files`はプロセスの`cwd`をWorkspaceルートとして使います。`--root`やマーカーファイルは不要です。
+## セキュリティ上の前提
+`gateway.toml`の`command`はローカルプログラムを実行します。信頼できるMCPだけを登録してください。
+Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。
+Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。
+## 診断とテスト
+必要なコマンドの検出とバージョン確認を行います。インストールや設定変更は行いません。
 ```powershell
-node mcp\safe-files\server.mjs --help
+node app\doctor.mjs
 ```
-AIへhelp出力、リポジトリの絶対パス、Workspaceの絶対パスを渡せば、AIが`args`、`cwd`、`allowed_directories`を組み立てられます。複数WorkspaceはMCPエントリを分けます。許可ルート外とシンボリックリンク脱出を拒否し、高確度の資格情報らしい内容も返しません。危険そうなフォルダ名を一律ブラックリスト化せず、Gatewayの明示許可パスを境界にします。
-
-`list_files`は固定された`rg --files --hidden`を使う再帰一覧です。`.git`は常に除外され、`.gitignore`は通常どおり尊重されます。`includeIgnored:true`でignore対象を含め、`excludePaths`で複数のファイルまたはフォルダを正確に除外できます。`globs`は相対パターンだけに制限され、任意のrg引数にはなりません。
-`search_text`は固定された`rg`だけを起動します。検索式、許可ルート内の対象パス、globは指定できますが、実行ファイルや任意コマンドは指定できません。`read_file_chunk`と`write_file`は境界内のファイル転送用です。
-## 画像MCP
-`safe-images`はPNG、JPEG、WebPをMCPの画像コンテンツとしてChatGPTへ返す読み取り専用MCPです。`cwd`を画像ルートとして使い、初期状態では8 MiB、50メガピクセルまでに制限します。
+リポジトリのテストは次で実行できます。
 ```powershell
-node mcp\safe-images\server.mjs --help
+npm test
 ```
-```toml
-[mcp_servers.images]
-command = "node"
-args = ['C:\work\local-mcp-chatgpt-tunnel\mcp\safe-images\server.mjs']
-cwd = 'C:\Users\owner\Downloads'
-enabled = true
-prefix = "images"
-startup_timeout_sec = 30
-tool_timeout_sec = 120
-allowed_directories = ['C:\Users\owner\Downloads']
-allowed_files = []
-```
-
-`safe-download`は単一ファイルまたはディレクトリを常にZIPとして返す読み取り専用MCPです。JSが1ファイルだけでもZIPになります。`safe-files`とは別の`cwd`と許可リストを使い、ChatGPTへ渡してよいソースだけを公開します。
-
-```powershell
-node mcp\safe-download\server.mjs --help
-```
-
-```toml
-[mcp_servers.downloads]
-command = "node"
-args = ['C:\work\local-mcp-chatgpt-tunnel\mcp\safe-download\server.mjs']
-cwd = 'C:\work\downloadable-source'
-enabled = true
-prefix = "downloads"
-allowed_directories = ['C:\work\downloadable-source']
-allowed_files = []
-```
-
-ディレクトリ列挙は固定された`rg --files --hidden`だけを使い、任意引数やシェルは受け付けません。`globs`、`excludePaths`、`includeIgnored`を利用でき、`.git`内部、許可範囲外、シンボリックリンク、ROM・Save・State・秘密鍵形式、資格情報らしい内容は拒否します。
-
-同梱する`safe-files`、`safe-images`、`safe-download`の全ツールは`outputSchema`を宣言します。外部から接続した第三者MCPの出力スキーマは、そのMCP自身が宣言している場合だけGateway経由でも表示されます。
-公開ツールは`images__read_image`だけです。拡張子とマジックバイトの不一致、SVG、HEIC、空ファイル、サイズ超過、寸法超過、許可ルート外、シンボリックリンク、NTFS代替データストリームを拒否します。base64はMCPの画像ブロックだけへ格納し、`structuredContent`には重複させません。Tunnel側の確認結果は`docs/tunnel-client-image-forwarding.md`にあります。
-## Node.jsの役割
-導入時のNode.jsスクリプトは`app/doctor.mjs`だけです。`node`、`npm`、`git`、`rg`、`py`のバージョンをすべて出力し、一つ失敗しても残りを確認します。インストール、ZIP展開、設定生成、runtime key入力、Git hook変更は行いません。
-Gateway本体と同梱MCPは実行時にNode.jsを使います。Tunnelの初期化、診断、起動は公式`tunnel-client.exe`を直接実行します。
-## 個人専用
-このGatewayへ任意コード実行能力を持つMCPを登録できます。Tunnelは自分のOrganizationと自分のChatGPT Workspaceだけに関連付け、共有・公開しないでください。OSレベルで資格情報を隔離する必要がある場合は、専用の標準Windowsユーザーを使います。
-## 導入
-手順は`INSTALL.md`にあります。
+外部npm依存はありません。
+## ライセンス
+このリポジトリ本体は[MIT License](./LICENSE)です。公式`tunnel-client.exe`など第三者コンポーネントについては[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)を確認してください。
