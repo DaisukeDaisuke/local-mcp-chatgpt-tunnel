@@ -95,6 +95,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 1800
 allowed_directories = ['C:\Users\owner\Documents\my-project']
 allowed_files = []
+disallowed_path_globs = ['**.ssh**']
 ```
 `safe-files`は`cwd`をWorkspaceのルートとして使います。<br>複数のWorkspaceを扱う場合は、`files_project_a`と`files_project_b`のようにMCPエントリを分け、それぞれに別の`cwd`と`prefix`を指定します。
 `list_files`は固定された`rg --files --hidden`経路で再帰一覧を返します。<br>
@@ -113,6 +114,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 120
 allowed_directories = ['C:\Users\owner\Downloads']
 allowed_files = []
+disallowed_path_globs = ['**.ssh**']
 
 [mcp_servers.images.env]
 SAFE_IMAGES_MAX_BYTES = "8388608"
@@ -133,6 +135,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 300
 allowed_directories = ['C:\Users\owner\Documents\downloadable-source']
 allowed_files = []
+disallowed_path_globs = ['**.ssh**']
 
 [mcp_servers.downloads.env]
 SAFE_DOWNLOAD_MAX_FILES = "500"
@@ -140,7 +143,7 @@ SAFE_DOWNLOAD_MAX_INPUT_BYTES = "16777216"
 SAFE_DOWNLOAD_MAX_ZIP_BYTES = "20971520"
 SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 ```
-ChatGPTからは`downloads__download_zip`へ`path`を渡します。<br>単一の`.js`や`.mjs`を指定してもZIPで返します。<br>ディレクトリでは固定された`rg --files`で列挙し、`globs`、`excludePaths`、`includeIgnored`を使用できます。<br>ROM、Save、State、秘密鍵形式、資格情報らしい内容、シンボリックリンク、許可ルート外は拒否します。<br>
+ChatGPTからは`downloads__download_zip`へ`path`を渡します。<br>単一の`.js`や`.mjs`を指定してもZIPで返します。<br>ディレクトリでは固定された`rg --files`で列挙し、`globs`、`excludePaths`、`includeIgnored`を使用できます。<br>`disallowed_path_globs`へ一致するファイルまたはフォルダが対象ディレクトリ内に1件でもある場合、これらの絞り込みや除外より前にダウンロード全体を拒否し、エラーへ一致したglobと対象パスを表示します。<br>ROM、Save、State、秘密鍵形式、資格情報らしい内容、シンボリックリンク、許可ルート外は拒否します。<br>
 ### 4.6 任意のstdio MCPを追加する
 任意のstdio MCPも同じ形式で追加できます。<br>
 ```toml
@@ -156,6 +159,9 @@ blocked_tools = ["dangerous_tool"]
 blocked_tool_substrings = ["script", "shell", "execute"]
 allowed_directories = ['C:\work\project']
 allowed_files = ['C:\Users\owner\Downloads\one-upload-file.png']
+disallowed_directories = ['C:\work\project\private']
+disallowed_files = ['C:\work\project\.env']
+disallowed_path_globs = ['**.ssh**']
 
 [mcp_servers.example.env]
 EXAMPLE_CONFIG = 'C:\path\to\config.json'
@@ -164,6 +170,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 `blocked_tool_substrings`は大文字と小文字を区別しない単純な部分一致です。<br>globや正規表現ではありません。<br>たとえば`"script"`を指定すると、`evaluate_script`、`runScript`、`SCRIPT_debug`など、元のツール名に`script`を含むツールを公開しません。<br>
 `allowed_directories`は指定ディレクトリとその配下を許可します。<br>
 `allowed_files`は列挙した絶対パスだけを完全一致で許可します。<br>Chrome DevTools MCPのアップロード元など、Workspace全体を許可する必要がないファイルは`allowed_files`へ一つずつ書きます。<br>Windowsの`\`と`/`、JSONで二重にエスケープされた`\\`は正規化して比較され、相対パスはそのMCPの`cwd`から解決されます。<br>
+`disallowed_path_globs`はファイルとフォルダに共通する拒否globです。`*`は区切りをまたがない任意文字列、`**`は区切りを含む任意文字列、`?`は区切り以外の任意の1文字です。`'**.ssh**'`は正規化されたパスのどこかに`.ssh`を含む場合に拒否します。Windowsでは大文字小文字を区別せず、macOSとLinuxでは区別します。<br>
 Gatewayは全MCPのツール引数を再帰的に検査します。<br>
 `path`、`filePath`、`files`、`directory`などのパスらしいキー、または絶対パスらしい文字列を検出し、許可リスト外なら子MCPへ渡しません。<br>パス引数を持たないツールは許可リストが空でも動きます。<br>
 `enabled = false`のMCPは起動しません。<br>GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。<br>現在直接集約するのは、`command`で起動するstdio MCPです。<br>Ghidra MCPやDQ9 MCPなどの外部MCP本体は同梱していません。<br>

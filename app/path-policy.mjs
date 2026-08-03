@@ -1,5 +1,6 @@
 import { lstat, realpath } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
+import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from './path-glob.mjs';
 
 const PATH_KEY_PATTERN = /(?:^|_)(?:path|paths|file|files|filename|filenames|directory|directories|dir|dirs|folder|folders|cwd)(?:$|_)/;
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -167,6 +168,7 @@ export class ToolPathPolicy {
     allowedFiles = [],
     disallowedDirectories = [],
     disallowedFiles = [],
+    disallowedPathGlobs = [],
     platform = process.platform
   }) {
     this.serverName = serverName;
@@ -175,6 +177,7 @@ export class ToolPathPolicy {
     this.allowedFilesInput = allowedFiles;
     this.disallowedDirectoriesInput = disallowedDirectories;
     this.disallowedFilesInput = disallowedFiles;
+    this.disallowedPathGlobs = normalizeDisallowedPathGlobs(disallowedPathGlobs);
     this.platform = platform;
     this.allowedPromise = null;
   }
@@ -217,6 +220,13 @@ export class ToolPathPolicy {
         throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is invalid: ${error.message}`);
       }
       const canonical = await canonicalizeExistingPrefix(normalized.style, normalized.path);
+      const globMatch = findDisallowedPathGlob(canonical, this.disallowedPathGlobs, this.platform);
+      if (globMatch) {
+        throw disallowedPathGlobError(
+          `${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)}`,
+          globMatch
+        );
+      }
       const fileAllowed = allowed.files.some((entry) => entry.style === normalized.style
         && comparable(entry.style, entry.canonical) === comparable(normalized.style, canonical));
       const directoryAllowed = allowed.directories.some((entry) => entry.style === normalized.style

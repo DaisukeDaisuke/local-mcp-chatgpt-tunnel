@@ -136,7 +136,8 @@ async function startChild(childConfig) {
       allowedDirectories: childConfig.allowedDirectories,
       allowedFiles: childConfig.allowedFiles,
       disallowedDirectories: childConfig.disallowedDirectories,
-      disallowedFiles: childConfig.disallowedFiles
+      disallowedFiles: childConfig.disallowedFiles,
+      disallowedPathGlobs: childConfig.disallowedPathGlobs
     });
     try {
       await child.pathPolicy.allowed();

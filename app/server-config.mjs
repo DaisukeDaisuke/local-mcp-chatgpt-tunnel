@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, posix, resolve, win32 } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { normalizeDisallowedPathGlobs } from './path-glob.mjs';
 import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -10,7 +11,8 @@ const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_ALLOWED_DIRECTORIES',
   'LOCAL_MCP_ALLOWED_FILES',
   'LOCAL_MCP_DISALLOWED_DIRECTORIES',
-  'LOCAL_MCP_DISALLOWED_FILES'
+  'LOCAL_MCP_DISALLOWED_FILES',
+  'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
 ]);
 
 function platformPath(platform = process.platform) {
@@ -105,7 +107,8 @@ function normalizeServer(name, raw, base, platform) {
     allowedDirectories: absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`, platform),
     allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform),
     disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`, platform),
-    disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform)
+    disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform),
+    disallowedPathGlobs: normalizeDisallowedPathGlobs(raw.disallowed_path_globs, `mcp_servers.${name}.disallowed_path_globs`)
   };
 }
 

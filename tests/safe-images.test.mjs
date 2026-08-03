@@ -11,6 +11,7 @@ const fourByThreeWebp = Buffer.from('UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoEAAMAAgA
 
 async function serverFor(root, suffix, env = {}) {
   process.env.SAFE_IMAGES_ROOTS = JSON.stringify([root]);
+  process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(env.disallowedPathGlobs ?? []);
   if (env.maxBytes === undefined) delete process.env.SAFE_IMAGES_MAX_BYTES;
   else process.env.SAFE_IMAGES_MAX_BYTES = String(env.maxBytes);
   if (env.maxPixels === undefined) delete process.env.SAFE_IMAGES_MAX_PIXELS;
@@ -109,6 +110,18 @@ test('read_image rejects paths outside the configured root and symbolic-link pat
   const linked = await server(request(3, 'tools/call', { name: 'read_image', arguments: { path: 'link.png' } }));
   assert.equal(linked.result.isError, true);
   assert.match(linked.result.structuredContent.error, /Symbolic-link/);
+});
+
+test('read_image rejects a configured path glob and reports the matched target', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-images-glob-'));
+  await writeFile(join(root, 'preview.ssh.png'), onePixelPng);
+  const server = await serverFor(root, 'path-glob', { disallowedPathGlobs: ['**.ssh**'] });
+  const refused = await server(request(2, 'tools/call', {
+    name: 'read_image', arguments: { path: 'preview.ssh.png' }
+  }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /glob filter disallowed_path_globs/);
+  assert.match(refused.result.structuredContent.error, /preview\.ssh\.png/);
 });
 
 test('read_image validates its argument surface', async () => {

@@ -77,7 +77,7 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク、UNCパス、NTFS代替データストリームを拒否します。<br>
 ### safe-download
 `safe-download`は読み取り専用で、単一ファイルまたはディレクトリを常にZIPとして返します。`safe-files`とは別の`cwd`と許可リストを設定し、ChatGPTへ渡してよいソースだけを公開します。<br>
-ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。<br>
+ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。`disallowed_path_globs`が設定されている場合は、利用者指定の`globs`や`excludePaths`を適用する前に対象ディレクトリ全体を確認し、拒否パターンへ一致するファイルまたはフォルダが1件でもあればZIP作成全体を拒否します。エラーには一致した設定パターンと対象パスを含めます。<br>
 ### gitmcp
 `gitmcp`は、許可されたディレクトリ内のGitリポジトリに対して、固定されたGitサブコマンドとオプションだけを実行します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、force push、任意refspecには対応しません。<br>
 `status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、ブランチ切り替え、`git add --all -- .`、commitを利用できます。`push`、`pull`、cloneは起動引数で個別に無効化でき、設定例では`pull`とcloneを無効にしています。cloneでは固定の`--recurse-submodules`を選択できます。<br>
@@ -103,28 +103,38 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 Codex設定からコピーした`tool_output_token_limit`、ツール別の承認設定、Gatewayが認識しない項目は無視されます。このGateway上では効果を持ちません。<br>
 ## Gateway設定
 ### ユーザーの決定は尊重されます
-Gatewayの動作は、利用者が`config/gateway.toml`へ明示した設定によって決まります。<br>
-MCPを自動検出して勝手に登録することや、設定ファイルを自動的に書き換えることはありません。<br>
-接続するMCP、その起動コマンド、引数、作業ディレクトリ、環境変数、有効・無効、公開しないツール、パスの許可・拒否範囲、直列実行、遅延起動は、すべて利用者が選択します。<br>Gatewayはその設定を読み取り、検証して適用しますが、利用者の代わりに安全性や用途を推測して設定を追加したり、許可範囲を広げたりしません。<br>
-`config/gateway.example.toml`は設定例であり、そのまま適用される「魔法のスクリプト」ではありません。<br>必要な項目だけを確認して`config/gateway.toml`へ記述し、実際に起動するプログラムと公開する機能を利用者自身が把握できる構成にしています。<br>
+Gatewayの動作は、利用者が`config/gateway.toml`へ明示した設定によって決まります。MCPを自動検出して勝手に登録することや、設定ファイルを自動的に書き換えることはありません。<br>
+接続するMCP、その起動コマンド、引数、作業ディレクトリ、環境変数、有効・無効、公開しないツール、パスの許可・拒否範囲、直列実行、遅延起動は、すべて利用者が選択します。Gatewayはその設定を読み取り、検証して適用しますが、利用者の代わりに安全性や用途を推測して設定を追加したり、許可範囲を広げたりしません。<br>
+`config/gateway.example.toml`は設定例であり、そのまま適用される「魔法のスクリプト」ではありません。必要な項目だけを確認して`config/gateway.toml`へ記述し、実際に起動するプログラムと公開する機能を利用者自身が把握できる構成にしています。<br>
 ### パス許可
 `allowed_directories`は指定したディレクトリとその配下を許可し、`allowed_files`は指定したファイルだけを完全一致で許可します。<br>
 Gatewayはすべての子MCPのツール引数を再帰的に検査し、`path`、`filePath`、`files`、`directory`などのキーや絶対パスらしい文字列を許可リストへ照合します。相対パスは対象MCPの`cwd`から解決します。<br>
 ```toml
 allowed_directories = ['C:\work\project']
 allowed_files = ['C:\Users\owner\Downloads\upload.png']
+disallowed_directories = ['C:\work\project\private']
+disallowed_files = ['C:\work\project\.env']
+disallowed_path_globs = ['**.ssh**']
 ```
-この検査はChatGPTから子MCPへ渡るツール引数のガードです。接続したMCP自身が内部で勝手にファイルへアクセスすることを、OSレベルで防ぐ機能ではありません。<br>
+`disallowed_path_globs`は、ファイルとフォルダの両方を対象に、正規化されたパス全体へ適用する拒否globです。<br>
+`*`はパス区切りをまたがない任意文字列、`**`はパス区切りを含む任意文字列、`?`はパス区切り以外の任意の1文字に一致します。<br>
+たとえば`'**.ssh**'`は、パスのどこかに`.ssh`を含む場合に一律拒否します。Windowsでは`\`と`/`を同じ区切りとして扱い、大文字小文字を区別しません。<br>
+macOSとLinuxでは`/`を区切りとして扱い、大文字小文字を区別します。<br>
+拒否時のエラーには、`disallowed_path_globs`で拒否されたこと、一致したglob、正規化された対象パスが表示されます。<br>
+Gateway側の検査は、ChatGPTから子MCPへ渡るツール引数のガードです。<br>
+同梱の`safe-files`、`safe-images`、`safe-download`、`gitmcp`は同じ設定を子プロセス内でも検査しますが、任意に接続した第三者MCPの内部アクセスをOSレベルで防ぐ機能ではありません。<br>
 ### 公開ツールの除外
 ツール名の完全一致は`blocked_tools`、大文字小文字を区別しない部分一致は`blocked_tool_substrings`で非公開にできます。
 ```toml
 blocked_tools = ["dangerous_tool"]
 blocked_tool_substrings = ["script", "shell", "execute"]
 ```
-`blocked_tool_substrings`はglobや正規表現ではありません。たとえば`"script"`は`evaluate_script`、`runScript`、`SCRIPT_debug`をすべて対象にします。<br>
+`blocked_tool_substrings`はglobや正規表現ではありません。<br>
+たとえば`"script"`は`evaluate_script`、`runScript`、`SCRIPT_debug`をすべて対象にします。<br>
 ### 直列実行と遅延起動
-同じ資源を同時操作させたくないMCPは、同じ`serial_group`へ所属させられます。
-`deferred = true`にしたMCPは初期化時に起動せず、別MCPの指定ツールが成功した後に`start_after`で起動できます。`stop_after`では同様に停止できます。<br>
+同じ資源を同時操作させたくないMCPは、同じ`serial_group`へ所属させられます。<br>
+`deferred = true`にしたMCPは初期化時に起動せず、別MCPの指定ツールが成功した後に`start_after`で起動できます。<br>
+`stop_after`では同様に停止できます。<br>
 ```toml
 [mcp_servers.browser]
 command = "node"

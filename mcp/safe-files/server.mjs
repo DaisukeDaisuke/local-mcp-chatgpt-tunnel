@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const MAX_TEXT_BYTES = Number(process.env.SAFE_FILES_MAX_BYTES ?? 2 * 1024 * 1024);
 const MAX_PATCH_BYTES = Number(process.env.SAFE_FILES_MAX_PATCH_BYTES ?? 4 * 1024 * 1024);
@@ -35,6 +36,10 @@ const configuredRoots = cli.help ? [] : JSON.parse(
 );
 const configuredDisallowedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES ?? '[]');
 const configuredDisallowedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_FILES ?? '[]');
+const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
+  JSON.parse(process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS ?? '[]'),
+  'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
+);
 
 const BLOCKED_SECRET_EXTENSIONS = new Set(['.key', '.kdbx', '.p12', '.pem', '.pfx', '.ppk', '.pub']);
 const BLOCKED_TRANSFER_EXTENSIONS = new Set(['.dsv', '.dst', '.nds', '.sav', ...BLOCKED_SECRET_EXTENSIONS]);
@@ -291,7 +296,9 @@ const denied = () => {
   return deniedPromise;
 };
 
-async function assertNotDenied(candidate) {
+async function assertNotDenied(candidate, context = 'Path') {
+  const globMatch = findDisallowedPathGlob(candidate, configuredDisallowedPathGlobs);
+  if (globMatch) throw disallowedPathGlobError(context, globMatch);
   const blocked = await denied();
   if (blocked.files.includes(candidate) || blocked.directories.some((directory) => within(directory, candidate))) {
     throw new Error('Path is denied by disallowed_directories or disallowed_files');
@@ -672,6 +679,7 @@ async function listFiles(args) {
     if (!info.isFile()) continue;
     const actual = await realpath(lexical);
     if (!within(target.path, actual)) throw new Error(`ripgrep returned a path outside the requested listing root: ${rawPath}`);
+    await assertNotDenied(actual, 'list_files entry');
     if (excludedBy(actual, exclusions)) continue;
     const relativePath = normalizedRelativePath(target.path, actual);
     if (isGitInternalPath(relativePath)) continue;
@@ -720,7 +728,12 @@ async function searchText(args) {
 async function callTool(name, args = {}) {
   switch (name) {
     case 'roots':
-      return { roots: await roots(), denied: await denied(), workingDirectory: await workingDirectory() };
+      return {
+        roots: await roots(),
+        denied: await denied(),
+        disallowedPathGlobs: configuredDisallowedPathGlobs,
+        workingDirectory: await workingDirectory()
+      };
     case 'get_working_directory':
       return { workingDirectory: await workingDirectory() };
     case 'set_working_directory': {
@@ -733,6 +746,7 @@ async function callTool(name, args = {}) {
       const target = await resolveExisting(args.path);
       if (!(await stat(target.path)).isDirectory()) throw new Error('Path is not a directory');
       const entries = await readdir(target.path, { withFileTypes: true });
+      for (const entry of entries) await assertNotDenied(join(target.path, entry.name), 'list_directory entry');
       return {
         path: target.path,
         entries: entries.sort((a, b) => a.name.localeCompare(b.name)).map((entry) => ({

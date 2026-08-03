@@ -135,3 +135,26 @@ test('POSIX path policy rejects Windows-only absolute allowlist entries', async 
 
   await assert.rejects(policy.allowed(), /allowed_directories entries must be absolute paths/);
 });
+
+for (const [platform, cwd, deniedPath, allowedPath] of [
+  ['win32', 'C:\\work', 'C:\\work\\project\\.SSH\\id_ed25519', 'C:\\work\\project\\src\\index.js'],
+  ['darwin', '/work', '/work/project/.ssh/id_ed25519', '/work/project/src/index.js'],
+  ['linux', '/work', '/work/project/.ssh/id_ed25519', '/work/project/src/index.js']
+]) {
+  test(`path policy applies configured disallowed_path_globs on ${platform}`, async () => {
+    const policy = new ToolPathPolicy({
+      serverName: 'files',
+      platform,
+      cwd,
+      allowedDirectories: [platform === 'win32' ? 'C:\\work\\project' : '/work/project'],
+      disallowedPathGlobs: ['**.ssh**']
+    });
+    await assert.doesNotReject(policy.assertToolArguments('read', { path: allowedPath }));
+    await assert.rejects(
+      policy.assertToolArguments('read', { path: deniedPath }),
+      (error) => /glob filter disallowed_path_globs/.test(error.message)
+        && error.message.includes('**.ssh**')
+        && error.message.toLowerCase().includes('.ssh')
+    );
+  });
+}

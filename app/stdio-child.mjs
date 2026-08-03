@@ -23,7 +23,8 @@ export class StdioMcpChild {
       LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify(this.config.allowedDirectories ?? []),
       LOCAL_MCP_ALLOWED_FILES: JSON.stringify(this.config.allowedFiles ?? []),
       LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(this.config.disallowedDirectories ?? []),
-      LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(this.config.disallowedFiles ?? [])
+      LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(this.config.disallowedFiles ?? []),
+      LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? [])
     };
     this.child = spawn(command, args, {
       cwd,

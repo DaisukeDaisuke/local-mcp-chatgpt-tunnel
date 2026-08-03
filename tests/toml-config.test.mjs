@@ -41,6 +41,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     "allowed_files = ['C:\\Users\\owner\\Downloads\\upload.png']",
     "disallowed_directories = ['C:\\work\\project\\private']",
     "disallowed_files = ['C:\\work\\project\\.env']",
+    "disallowed_path_globs = ['**.ssh**']",
     '[mcp_servers.alpha.env]',
     'CONFIG = "alpha.json"',
     '[mcp_servers.alpha.start_after]',
@@ -65,6 +66,29 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].allowedFiles, ['C:\\Users\\owner\\Downloads\\upload.png']);
   assert.deepEqual(config.servers[0].disallowedDirectories, ['C:\\work\\project\\private']);
   assert.deepEqual(config.servers[0].disallowedFiles, ['C:\\work\\project\\.env']);
+  assert.deepEqual(config.servers[0].disallowedPathGlobs, ['**.ssh**']);
+});
+
+test('gateway config validates disallowed_path_globs without treating them as absolute paths', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-path-glob-'));
+  const validPath = join(directory, 'valid.toml');
+  await writeFile(validPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    "disallowed_path_globs = ['**.ssh**', '**/private/**']"
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(validPath);
+  assert.deepEqual(config.servers[0].disallowedPathGlobs, ['**.ssh**', '**/private/**']);
+
+  const invalidPath = join(directory, 'invalid.toml');
+  await writeFile(invalidPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'disallowed_path_globs = [""]'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(invalidPath), /disallowed_path_globs entries must be non-empty/);
 });
 
 test('gateway config rejects empty or control-character blocked tool substrings', async () => {

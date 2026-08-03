@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_IMAGE_PIXELS = 50 * 1024 * 1024;
@@ -24,6 +25,10 @@ The default maximum image size is 8 MiB. Override it with SAFE_IMAGES_MAX_BYTES 
 
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
 const configuredRoots = cli.help ? [] : JSON.parse(process.env.SAFE_IMAGES_ROOTS ?? JSON.stringify([process.cwd()]));
+const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
+  JSON.parse(process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS ?? '[]'),
+  'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
+);
 const MAX_IMAGE_BYTES = readPositiveInteger('SAFE_IMAGES_MAX_BYTES', DEFAULT_MAX_IMAGE_BYTES);
 const MAX_IMAGE_PIXELS = readPositiveInteger('SAFE_IMAGES_MAX_PIXELS', DEFAULT_MAX_IMAGE_PIXELS);
 
@@ -88,6 +93,11 @@ function readPositiveInteger(name, fallback) {
 
 const within = (root, candidate) => candidate === root || candidate.startsWith(`${root}${sep}`);
 
+function assertNotGlobDenied(path, context) {
+  const match = findDisallowedPathGlob(path, configuredDisallowedPathGlobs);
+  if (match) throw disallowedPathGlobError(context, match);
+}
+
 function assertSafePath(root, candidate) {
   const relativePath = relative(root, candidate);
   if (relativePath === '') return;
@@ -111,7 +121,9 @@ const roots = () => {
   rootsPromise ??= Promise.all(configuredRoots.map(async (root) => {
     if (typeof root !== 'string' || root.includes('\0')) throw new Error('Image roots must be valid strings');
     if (/^(?:\\\\|\/\/)/.test(root)) throw new Error('UNC image roots are not supported');
-    return realpath(resolve(root));
+    const actual = await realpath(resolve(root));
+    assertNotGlobDenied(actual, 'safe-images root');
+    return actual;
   }));
   return rootsPromise;
 };
@@ -136,6 +148,7 @@ async function resolveImagePath(path) {
   const actual = await realpath(candidate);
   if (!within(root, actual)) throw new Error('Resolved path escaped the configured image root');
   assertSafePath(root, actual);
+  assertNotGlobDenied(actual, 'read_image path');
   return actual;
 }
 

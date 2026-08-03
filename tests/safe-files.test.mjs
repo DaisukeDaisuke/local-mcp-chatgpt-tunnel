@@ -6,8 +6,11 @@ import test from 'node:test';
 
 const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
 
-async function serverFor(root, suffix) {
+async function serverFor(root, suffix, options = {}) {
   process.env.SAFE_FILES_ROOTS = JSON.stringify([root]);
+  process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
+  process.env.LOCAL_MCP_DISALLOWED_FILES = '[]';
+  process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
   const { createServer } = await import(`../mcp/safe-files/server.mjs?test=${suffix}-${Date.now()}`);
   const server = createServer();
   await server(request(1, 'initialize', {}));
@@ -135,6 +138,36 @@ test('list_files rejects option and scope injection while treating shell metacha
   }));
   assert.equal(outsideExclude.result.isError, true);
   await assert.rejects(access(join(root, 'injected')));
+});
+
+test('safe-files rejects direct access and listings when a configured path glob matches', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-glob-'));
+  await mkdir(join(root, '.ssh'));
+  await writeFile(join(root, '.ssh', 'id_ed25519.txt'), 'dummy', 'utf8');
+  await writeFile(join(root, 'ordinary.txt'), 'safe', 'utf8');
+  const server = await serverFor(root, 'path-glob', { disallowedPathGlobs: ['**.ssh**'] });
+
+  const direct = await server(request(2, 'tools/call', {
+    name: 'read_text_file', arguments: { path: '.ssh/id_ed25519.txt' }
+  }));
+  assert.equal(direct.result.isError, true);
+  assert.match(direct.result.structuredContent.error, /glob filter disallowed_path_globs/);
+  assert.match(direct.result.structuredContent.error, /\*\*\.ssh\*\*/);
+  assert.match(direct.result.structuredContent.error, /\.ssh/);
+
+  const directory = await server(request(3, 'tools/call', {
+    name: 'list_directory', arguments: { path: '.' }
+  }));
+  assert.equal(directory.result.isError, true);
+  assert.match(directory.result.structuredContent.error, /list_directory entry/);
+  assert.match(directory.result.structuredContent.error, /\.ssh/);
+
+  const recursive = await server(request(4, 'tools/call', {
+    name: 'list_files', arguments: { path: '.', includeIgnored: true }
+  }));
+  assert.equal(recursive.result.isError, true);
+  assert.match(recursive.result.structuredContent.error, /list_files entry/);
+  assert.match(recursive.result.structuredContent.error, /\.ssh/);
 });
 
 test('ripgrep search and file transfer stay inside an explicitly configured workspace', async () => {

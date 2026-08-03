@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
@@ -54,6 +55,10 @@ const configuredAllowedDirectories = cli.help ? [] : pathArray('LOCAL_MCP_ALLOWE
 const configuredAllowedFiles = cli.help ? [] : pathArray('LOCAL_MCP_ALLOWED_FILES');
 const configuredDisallowedDirectories = cli.help ? [] : pathArray('LOCAL_MCP_DISALLOWED_DIRECTORIES');
 const configuredDisallowedFiles = cli.help ? [] : pathArray('LOCAL_MCP_DISALLOWED_FILES');
+const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
+  pathArray('LOCAL_MCP_DISALLOWED_PATH_GLOBS'),
+  'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
+);
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const protocolError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
@@ -145,6 +150,11 @@ const within = (root, candidate) => {
   return target === base || target.startsWith(`${base}${sep}`);
 };
 
+function assertNotGlobDenied(path, context) {
+  const match = findDisallowedPathGlob(path, configuredDisallowedPathGlobs);
+  if (match) throw disallowedPathGlobError(context, match);
+}
+
 let policyPromise;
 let workingDirectoryPromise;
 
@@ -183,7 +193,8 @@ async function policy() {
       allowedDirectories: await Promise.all(configuredAllowedDirectories.map(canonicalDirectory)),
       allowedFiles: await Promise.all(configuredAllowedFiles.map(canonicalExisting)),
       disallowedDirectories: await Promise.all(configuredDisallowedDirectories.map(canonicalizeExistingPrefix)),
-      disallowedFiles: await Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix))
+      disallowedFiles: await Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix)),
+      disallowedPathGlobs: configuredDisallowedPathGlobs
     };
   })();
   return policyPromise;
@@ -202,6 +213,7 @@ function lexicalCandidate(path, base) {
 async function assertAllowedExisting(path) {
   const candidate = lexicalCandidate(path, await workingDirectory());
   const actual = await realpath(candidate);
+  assertNotGlobDenied(actual, 'Git path');
   const rules = await policy();
   const allowed = rules.allowedDirectories.some((root) => within(root, actual)) || rules.allowedFiles.some((file) => same(file, actual));
   if (!allowed) throw new Error('Path is outside allowed_directories and allowed_files');
@@ -218,6 +230,7 @@ async function assertAllowedNewDirectory(parentDirectory, destinationDirectory) 
   }
   if (destinationDirectory === '.' || destinationDirectory === '..' || destinationDirectory.toLowerCase() === '.git') throw new Error('Unsafe destinationDirectory');
   const destination = resolve(parent, destinationDirectory);
+  assertNotGlobDenied(destination, 'Git clone destination');
   if (!within(parent, destination)) throw new Error('Clone destination escaped parentDirectory');
   const rules = await policy();
   if (!rules.allowedDirectories.some((root) => within(root, destination))) throw new Error('Clone destination is outside allowed_directories');
@@ -321,7 +334,16 @@ async function repository(path = '.') {
   const top = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).stdout.trim();
   const actualTop = await assertAllowedExisting(top);
   if (!within(actualTop, cwd)) throw new Error('repositoryPath is outside its Git worktree');
+  await assertRepositoryHasNoGlobDeniedPaths(actualTop);
   return actualTop;
+}
+
+async function assertRepositoryHasNoGlobDeniedPaths(cwd) {
+  if (configuredDisallowedPathGlobs.length === 0) return;
+  const output = (await runGit(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).stdout;
+  for (const entry of output.split('\0').filter(Boolean)) {
+    assertNotGlobDenied(resolve(cwd, entry), 'Git repository scan');
+  }
 }
 
 async function deniedTrackedPaths(cwd) {
@@ -329,7 +351,9 @@ async function deniedTrackedPaths(cwd) {
   const rules = await policy();
   return output.split('\0').filter(Boolean).filter((entry) => {
     const absolute = resolve(cwd, entry);
-    return rules.disallowedDirectories.some((root) => within(root, absolute)) || rules.disallowedFiles.some((file) => same(file, absolute));
+    return findDisallowedPathGlob(absolute, configuredDisallowedPathGlobs) !== null
+      || rules.disallowedDirectories.some((root) => within(root, absolute))
+      || rules.disallowedFiles.some((file) => same(file, absolute));
   });
 }
 
@@ -348,7 +372,9 @@ async function assertTreeAvoidsDeniedPaths(cwd, treeish) {
   const rules = await policy();
   const denied = output.split('\0').filter(Boolean).filter((entry) => {
     const absolute = resolve(cwd, entry);
-    return rules.disallowedDirectories.some((root) => within(root, absolute)) || rules.disallowedFiles.some((file) => same(file, absolute));
+    return findDisallowedPathGlob(absolute, configuredDisallowedPathGlobs) !== null
+      || rules.disallowedDirectories.some((root) => within(root, absolute))
+      || rules.disallowedFiles.some((file) => same(file, absolute));
   });
   if (denied.length > 0) throw new Error(`Incoming tree contains denied paths: ${denied.join(', ')}`);
 }

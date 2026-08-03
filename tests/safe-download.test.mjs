@@ -9,6 +9,7 @@ const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, params })
 
 async function serverFor(root, suffix, limits = {}) {
   process.env.SAFE_DOWNLOAD_ROOTS = JSON.stringify([root]);
+  process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(limits.disallowedPathGlobs ?? []);
   process.env.SAFE_DOWNLOAD_MAX_FILES = String(limits.maxFiles ?? 500);
   process.env.SAFE_DOWNLOAD_MAX_INPUT_BYTES = String(limits.maxInputBytes ?? 16 * 1024 * 1024);
   process.env.SAFE_DOWNLOAD_MAX_ZIP_BYTES = String(limits.maxZipBytes ?? 20 * 1024 * 1024);
@@ -148,6 +149,41 @@ test('download_zip rejects scope, option, archive-name, blocked-file, and shell-
     assert.equal(refused.result.isError, true, JSON.stringify(argumentsValue));
   }
   await assert.rejects(access(join(root, 'injected')));
+});
+
+test('safe-download refuses the entire directory before filters when any file or folder matches a configured path glob', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-download-glob-'));
+  await mkdir(join(root, '.ssh'));
+  await writeFile(join(root, 'src.js'), 'safe', 'utf8');
+  const server = await serverFor(root, 'path-glob', { disallowedPathGlobs: ['**.ssh**'] });
+  const refused = await server(request(2, 'tools/call', {
+    name: 'download_zip',
+    arguments: {
+      path: '.',
+      globs: ['**/*.js'],
+      excludePaths: ['.ssh'],
+      archiveName: 'source.zip'
+    }
+  }));
+  assert.equal(refused.result.isError, true);
+  const error = refused.result.structuredContent.error;
+  assert.match(error, /safe-download directory scan/);
+  assert.match(error, /glob filter disallowed_path_globs/);
+  assert.match(error, /\*\*\.ssh\*\*/);
+  assert.match(error, /\.ssh/);
+  assert.equal(refused.result.content.some((part) => part.type === 'resource'), false);
+});
+
+test('safe-download reports the matching glob and target for a directly requested file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-download-glob-file-'));
+  await writeFile(join(root, 'backup.ssh.txt'), 'safe', 'utf8');
+  const server = await serverFor(root, 'path-glob-file', { disallowedPathGlobs: ['**.ssh**'] });
+  const refused = await server(request(2, 'tools/call', {
+    name: 'download_zip', arguments: { path: 'backup.ssh.txt' }
+  }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /download_zip path/);
+  assert.match(refused.result.structuredContent.error, /backup\.ssh\.txt/);
 });
 
 test('download_zip enforces file-count, input-size, ZIP-size, and symlink boundaries', async (t) => {

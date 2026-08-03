@@ -1,22 +1,27 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
+const exec = promisify(execFile);
 
-async function importGitMcp(root, args, suffix) {
+async function importGitMcp(root, args, suffix, options = {}) {
   const previousArgv = process.argv;
   const previousAllowed = process.env.LOCAL_MCP_ALLOWED_DIRECTORIES;
   const previousAllowedFiles = process.env.LOCAL_MCP_ALLOWED_FILES;
   const previousDeniedDirectories = process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES;
   const previousDeniedFiles = process.env.LOCAL_MCP_DISALLOWED_FILES;
+  const previousDeniedPathGlobs = process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS;
   process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'gitmcp.test.mjs'), ...args];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_FILES = '[]';
+  process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
   try {
     return await import(`../mcp/gitmcp/server.mjs?test=${suffix}-${Date.now()}`);
   } finally {
@@ -29,6 +34,8 @@ async function importGitMcp(root, args, suffix) {
     else process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = previousDeniedDirectories;
     if (previousDeniedFiles === undefined) delete process.env.LOCAL_MCP_DISALLOWED_FILES;
     else process.env.LOCAL_MCP_DISALLOWED_FILES = previousDeniedFiles;
+    if (previousDeniedPathGlobs === undefined) delete process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS;
+    else process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = previousDeniedPathGlobs;
   }
 }
 
@@ -59,4 +66,23 @@ test('gitmcp exposes pull and recursive clone only when explicitly enabled', asy
 test('gitmcp rejects unknown CLI options instead of forwarding them to Git', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-options-'));
   await assert.rejects(importGitMcp(root, ['--upload-pack=calc.exe'], 'unknown'), /Unknown argument/);
+});
+
+test('gitmcp refuses repository operations when an internal path matches disallowed_path_globs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitmcp-path-glob-'));
+  await exec('git', ['init'], { cwd: root });
+  await mkdir(join(root, '.ssh'));
+  await writeFile(join(root, '.ssh', 'config.txt'), 'dummy', 'utf8');
+  const { createServer } = await importGitMcp(root, [], 'path-glob', {
+    disallowedPathGlobs: ['**.ssh**']
+  });
+  const server = createServer();
+  await server(request(1, 'initialize'));
+  const refused = await server(request(2, 'tools/call', {
+    name: 'status', arguments: { repositoryPath: root }
+  }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /Git repository scan/);
+  assert.match(refused.result.structuredContent.error, /glob filter disallowed_path_globs/);
+  assert.match(refused.result.structuredContent.error, /\.ssh/);
 });

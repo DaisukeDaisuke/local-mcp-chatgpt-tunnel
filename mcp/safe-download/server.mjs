@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, open, realpath, stat } from 'node:fs/promises';
+import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
+import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const DEFAULT_MAX_FILES = 500;
 const DEFAULT_MAX_INPUT_BYTES = 16 * 1024 * 1024;
@@ -28,6 +29,10 @@ Directory enumeration uses fixed ripgrep arguments. Arbitrary ripgrep arguments 
 
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
 const configuredRoots = cli.help ? [] : JSON.parse(process.env.SAFE_DOWNLOAD_ROOTS ?? JSON.stringify([process.cwd()]));
+const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
+  JSON.parse(process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS ?? '[]'),
+  'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
+);
 const MAX_FILES = readPositiveInteger('SAFE_DOWNLOAD_MAX_FILES', DEFAULT_MAX_FILES);
 const MAX_INPUT_BYTES = readPositiveInteger('SAFE_DOWNLOAD_MAX_INPUT_BYTES', DEFAULT_MAX_INPUT_BYTES);
 const MAX_ZIP_BYTES = readPositiveInteger('SAFE_DOWNLOAD_MAX_ZIP_BYTES', DEFAULT_MAX_ZIP_BYTES);
@@ -104,6 +109,11 @@ function readPositiveInteger(name, fallback) {
 
 const within = (root, candidate) => candidate === root || candidate.startsWith(`${root}${sep}`);
 
+function assertNotGlobDenied(path, context) {
+  const match = findDisallowedPathGlob(path, configuredDisallowedPathGlobs);
+  if (match) throw disallowedPathGlobError(context, match);
+}
+
 function rejectAlternateDataStream(path) {
   const rootLength = parse(path).root.length;
   if (path.slice(rootLength).includes(':')) throw new Error('NTFS alternate data streams are not supported');
@@ -117,6 +127,7 @@ const roots = () => {
     if (/^(?:\\\\|\/\/)/.test(root)) throw new Error('UNC download roots are not supported');
     const actual = await realpath(resolve(root));
     rejectAlternateDataStream(actual);
+    assertNotGlobDenied(actual, 'safe-download root');
     return actual;
   }));
   return rootsPromise;
@@ -136,6 +147,7 @@ async function resolveDownloadPath(path) {
   if (lexicalInfo.isSymbolicLink()) throw new Error('Symbolic-link download paths are not supported');
   const actual = await realpath(candidate);
   if (!within(root, actual)) throw new Error('Resolved path escaped the configured download root');
+  assertNotGlobDenied(actual, 'download_zip path');
   return { root, path: actual, info: await stat(actual) };
 }
 
@@ -229,7 +241,27 @@ const pathSort = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 const archivePath = (base, path) => relative(base, path).split(sep).join('/');
 const isGitInternalPath = (relativePath) => relativePath.split('/').includes('.git');
 
+async function assertDirectoryTreeHasNoGlobDeniedPath(target) {
+  if (configuredDisallowedPathGlobs.length === 0) return;
+  const pending = [target.path];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const lexical = join(directory, entry.name);
+      assertNotGlobDenied(lexical, 'safe-download directory scan');
+      const info = await lstat(lexical);
+      if (info.isSymbolicLink()) throw new Error(`safe-download directory scan found a symbolic link: ${lexical}`);
+      const actual = await realpath(lexical);
+      if (!within(target.path, actual)) throw new Error(`safe-download directory scan escaped the requested download root: ${lexical}`);
+      assertNotGlobDenied(actual, 'safe-download directory scan');
+      if (info.isDirectory()) pending.push(actual);
+    }
+  }
+}
+
 async function enumerateDirectory(target, args) {
+  await assertDirectoryTreeHasNoGlobDeniedPath(target);
   const globs = validateGlobs(args.globs);
   const exclusions = await resolveExcludePaths(target.path, args.excludePaths);
   if (args.includeIgnored !== undefined && typeof args.includeIgnored !== 'boolean') throw new Error('includeIgnored must be a boolean');
@@ -247,6 +279,7 @@ async function enumerateDirectory(target, args) {
     if (!info.isFile()) continue;
     const actual = await realpath(lexical);
     if (!within(target.path, actual)) throw new Error(`ripgrep returned a path outside the requested download root: ${rawPath}`);
+    assertNotGlobDenied(actual, 'safe-download directory entry');
     if (excludedBy(actual, exclusions)) continue;
     const name = archivePath(target.path, actual);
     if (isGitInternalPath(name)) continue;
@@ -337,6 +370,7 @@ function createZip(entries) {
 }
 
 async function readEntry(file) {
+  assertNotGlobDenied(file.path, 'safe-download file');
   if (BLOCKED_DOWNLOAD_EXTENSIONS.has(extname(file.path).toLowerCase())) throw new Error(`Blocked file type cannot be downloaded: ${file.name}`);
   if (!file.info.isFile()) throw new Error(`Download entry is not a regular file: ${file.name}`);
   const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);

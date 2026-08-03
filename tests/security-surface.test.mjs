@@ -63,11 +63,13 @@ test('gateway uses Codex-style generic MCP tables and honors enabled entries', a
   assert.match(config, /\[mcp_servers\.downloads\]/);
   assert.match(config, /command = "node"/);
   assert.match(config, /enabled = true/);
+  assert.match(config, /disallowed_path_globs = \['\*\*\.ssh\*\*'\]/);
   const loader = await readFile(new URL('../app/server-config.mjs', import.meta.url), 'utf8');
   assert.match(loader, /raw\.mcp_servers/);
   assert.match(loader, /raw\.enabled === false/);
   assert.match(loader, /allowed_directories/);
   assert.match(loader, /allowed_files/);
+  assert.match(loader, /disallowed_path_globs/);
   assert.doesNotMatch(loader, /chromeMcpEntry|enabledServers|workspaceRoots|dq9Config|ghidraUrl/);
 });
 
@@ -76,6 +78,7 @@ test('child MCP environment is allowlisted instead of inheriting credentials', a
   assert.match(child, /env: buildChildEnvironment\(\{ \.\.\.env, \.\.\.policyEnvironment \}\)/);
   assert.match(child, /LOCAL_MCP_ALLOWED_DIRECTORIES/);
   assert.match(child, /LOCAL_MCP_DISALLOWED_FILES/);
+  assert.match(child, /LOCAL_MCP_DISALLOWED_PATH_GLOBS/);
   assert.doesNotMatch(child, /env:\s*\{\s*\.\.\.process\.env/);
   const policy = await import('../app/child-environment.mjs');
   const environment = policy.buildChildEnvironment({ EXPLICIT: 'yes' }, {

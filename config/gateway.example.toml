@@ -13,6 +13,7 @@ allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
 allowed_files = []
 disallowed_directories = []
 disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
 
 # Safe Git operations. Disabled by default; set enabled=true after replacing paths.
 # --disable-push=true removes the push tool entirely.
@@ -32,6 +33,7 @@ allowed_files = []
 # Deny secrets or private subtrees even when they are inside allowed_directories.
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
+disallowed_path_globs = ['**.ssh**']
 
 # Read-only image transfer for ChatGPT vision. Enable it only after replacing every dummy path.
 [mcp_servers.images]
@@ -44,6 +46,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 120
 allowed_directories = ['C:\Users\owner\Downloads']
 allowed_files = []
+disallowed_path_globs = ['**.ssh**']
 
 [mcp_servers.images.env]
 SAFE_IMAGES_MAX_BYTES = "8388608"
@@ -60,6 +63,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 300
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\DOWNLOADABLE\SOURCE']
 allowed_files = []
+disallowed_path_globs = ['**.ssh**']
 
 [mcp_servers.downloads.env]
 SAFE_DOWNLOAD_MAX_FILES = "500"
@@ -93,6 +97,7 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # allowed_files = ['C:\Users\owner\Downloads\one-upload-file.png']
 # disallowed_directories = ['C:\work\project\private']
 # disallowed_files = ['C:\work\project\.env']
+# disallowed_path_globs = ['**.ssh**']
 #
 # [mcp_servers.my_server.env]
 # EXAMPLE_CONFIG = 'C:\path\to\config.json'
