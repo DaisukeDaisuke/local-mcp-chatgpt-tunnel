@@ -198,8 +198,8 @@ npm test
 
 > [!WARNING]
 > #### このidはあとで使います
-> #### このトンネルidは絶対に流失しないでください。
-> 第三者によって任意コード実行が行われる可能性があります。
+> #### このトンネルidはパスワードと同じように扱い、絶対に流失しないでください。
+> 流失した場合、第三者によって任意コード実行が行われる可能性があります。
 
 <img width="2559" height="668" alt="image" src="https://github.com/user-attachments/assets/42bb5cf1-3ee2-4d32-8efc-5cf4597e6276" />
 
@@ -275,21 +275,7 @@ Cancelを押してページを閉じます。
 
 <img width="761" height="521" alt="image" src="https://github.com/user-attachments/assets/fa7b97ff-d367-4b8e-b081-908233c69216" />
 
-
-## 8. モデルAPI権限のないruntime API keyを作成する
-
-> [!CAUTION]
-> このセクションは正確に従ってください。<br>
-> 課金可能なAPIキーを作成した場合、流失時に課金が発生し、高額請求、またはクレジットがマイナス(借金)になる可能性があります。<br>
-
-### 8.1 Runtime API keysを開く
-[OpenAI PlatformのRuntime API keysを開く](https://platform.openai.com/settings/organization/api-keys)<br>
-`Create new secret key`を押します。<br>
-
-<img width="2552" height="428" alt="image" src="https://github.com/user-attachments/assets/e0f7ab39-afa1-4441-8613-0e0c0a57dfa3" />
-
-
-### 8.2 Tunnel専用権限を設定する
+### 8 Tunnel専用権限を設定する
 作成画面で次のように設定します。<br>
 1. `Name`: `local-mcp-tunnel-runtime-no-model-api`
 2. `Project`: Tunnelを作成したOrganization内のProject
@@ -310,6 +296,24 @@ Cancelを押してページを閉じます。
 `All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。<br>
 作成直後に表示されるAPI keyを安全な場所へ一時的に控えます。<br>後から同じ値を再表示できない場合があります。<br>
 `<url: 作成直後に表示されたruntime API keyを控える図>`
+
+
+## 8.2 モデルAPI権限のないruntime API keyを作成する
+
+> [!CAUTION]
+> このセクションは正確に従ってください。<br>
+> 課金可能なAPIキーを作成した場合、流失時に課金が発生し、高額請求、またはクレジットがマイナス(借金)になる可能性があります。<br>
+> また、誤ってウェブサイトに張り付けたりしないように、PowerShellと、該当ブラウザのアプリケーションは閉じたうえで行うことをお勧めします。
+> また、作業完了後は、クリップボードを上書きして破壊してくさい。
+
+### 8.1 Runtime API keysを開く
+[OpenAI PlatformのRuntime API keysを開く](https://platform.openai.com/settings/organization/api-keys)<br>
+`Create new secret key`を押します。<br>
+
+<img width="2552" height="428" alt="image" src="https://github.com/user-attachments/assets/e0f7ab39-afa1-4441-8613-0e0c0a57dfa3" />
+
+
+
 ## 9. Tunnel IDとruntime API keyをユーザー環境変数へ保存する
 `tunnel-client`は`CONTROL_PLANE_TUNNEL_ID`と`CONTROL_PLANE_API_KEY`を自動で読みます。<br>起動コマンドへ`--control-plane.tunnel-id`や`--control-plane.api-key`を書く必要はありません。<br>
 通常権限のPowerShellで次を実行し、API keyと`tunnel_...`を自分の値へ置き換えます。<br>
