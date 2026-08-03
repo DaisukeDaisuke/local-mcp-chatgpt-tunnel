@@ -30,7 +30,7 @@ Select-String -Path $sums -Pattern 'tunnel-client-v0\.0\.10-windows-amd64\.zip'
 ## 3. 先にhelpを読む
 設定を推測せず、実際のバイナリとファイルMCPのhelpを出します。
 ```powershell
-.\.tools\tunnel-client\tunnel-client.exe help quickstart
+.\.tools\tunnel-client\tunnel-client.exe --help
 .\.tools\tunnel-client\tunnel-client.exe help doctor
 node mcp\safe-files\server.mjs --help
 ```
@@ -81,21 +81,44 @@ node app\doctor.mjs
 ```powershell
 npm test
 ```
-## 6. 自分専用のTunnelとruntime keyを作る
-公式手順を開きます。
+## 6. OpenAI Platformで自分専用のTunnelを作る
+次のTunnel管理画面を開きます。
 ```text
+https://platform.openai.com/settings/organization/tunnels
 https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+```
+画面右上の`Create tunnel`を押し、次のように入力します。
+1. `Name`: PCを識別できる名前を入力します。例は`local_my_pc`です。
+2. `Description`: `Private tunnel for my local Windows MCP servers. Personal use only.`のように、個人用であることを書きます。
+3. `Organizations`: 自分の`Personal (...)`だけを選びます。
+4. `ChatGPT workspaces`: 自分の`Personal workspace (...)`だけを選びます。
+5. 共有Workspace、他人のOrganization、公開用Workspaceは追加せず、`Create`を押します。
+   スクリーンショットの状態では`Description`が空です。`Create`が無効のままなら、まずDescriptionを入力し、それでも無効ならダイアログ内を最下部までスクロールして残りの必須項目を確認します。
+   作成後、Tunnelの詳細画面に表示される`tunnel_id`を控えます。これは次の起動コマンドで使います。
+   runtime主体には`Tunnels Read + Use`だけを与えます。Tunnelの作成や編集には`Tunnels Read + Manage`が必要ですが、普段`tunnel-client`を動かすキーへ管理権限、モデルAPI、Organization管理、Filesなどの不要な権限は与えません。
+## 7. runtime API keyを用意する
+Tunnel画面またはOpenAI Platformの案内に従い、`tunnel-client`用のruntime API keyを作ります。このキーは`tunnel-client`の実行専用です。リポジトリ、`gateway.toml`、`.env`、メモ帳へ保存しません。
+公式仕様では、Tunnelの作成・編集と、`tunnel-client`の実行に必要な権限は別です。個人利用でも、実行用キーには`Tunnels Read + Use`だけを与えます。
+## 8. API keyを引数で渡して検査・起動する
+`tunnel_id`を自分の値へ置き換えます。現在の`tunnel-client`では、`--control-plane.api-key`へAPI keyそのものではなく、`env:変数名`または`file:パス`形式の参照を渡します。次の例はruntime API keyを一時的な環境変数へ入れ、`tunnel-client`の引数ではその変数を参照します。このリポジトリはキーを保存しません。
+```powershell
+$secureKey = Read-Host 'Runtime API key' -AsSecureString
+$env:OPENAI_TUNNEL_API_KEY = [System.Net.NetworkCredential]::new('', $secureKey).Password
+$mcp = 'command=node app/gateway.mjs --config config/gateway.toml,channel=local-mcp'
+
+.\.tools\tunnel-client\tunnel-client.exe doctor --control-plane.tunnel-id=tunnel_0123456789abcdef0123456789abcdef --control-plane.api-key=env:OPENAI_TUNNEL_API_KEY --mcp.command="$mcp" --explain
+.\.tools\tunnel-client\tunnel-client.exe run --control-plane.tunnel-id=tunnel_0123456789abcdef0123456789abcdef --control-plane.api-key=env:OPENAI_TUNNEL_API_KEY --mcp.command="$mcp"
+```
+`run`を終了した後は、同じPowerShellで次を実行して一時的な環境変数を消します。
+```powershell
+Remove-Item Env:OPENAI_TUNNEL_API_KEY
+```
+`--control-plane.api-key=sk-...`のように生のキーを引数へ直接書く例は使いません。現在のhelpが案内する形式は`env:VARNAME`または`file:/path/to/secret`です。生のキーをコマンド履歴やプロセス引数へ残さず、Node.jsラッパーも追加しません。
+## 9. ChatGPTへ接続する
+次のページを開きます。
+```text
+https://chatgpt.com/plugins
 https://developers.openai.com/plugins/deploy/connect-chatgpt
 ```
-OpenAI PlatformでTunnelを作り、関連付け先を自分のOrganizationと自分のChatGPT Workspaceだけにします。共有Workspace、他人のOrganization、公開Pluginには関連付けません。
-runtime主体には`Tunnels Read + Use`だけを与えます。Tunnel管理用の`Read + Manage`、モデルAPI、Organization管理、Filesなどの権限は与えません。
-## 7. API keyを引数で渡して検査・起動する
-`tunnel_id`、runtime API key、Gatewayコマンドを自分の値へ置き換えます。このリポジトリはキーを保存しません。
-```powershell
-$gateway = 'node app/gateway.mjs --config config/gateway.toml'
-.\.tools\tunnel-client\tunnel-client.exe doctor --control-plane.tunnel-id=tunnel_0123456789abcdef0123456789abcdef --control-plane.api-key=sk_REPLACE_ME --mcp.command="$gateway" --explain
-.\.tools\tunnel-client\tunnel-client.exe run --control-plane.tunnel-id=tunnel_0123456789abcdef0123456789abcdef --control-plane.api-key=sk_REPLACE_ME --mcp.command="$gateway"
-```
-引数方式では、実行したシェルの履歴や同一PC上のプロセス情報にキーが見える可能性があります。これはNode.jsラッパーで隠しません。許容できない環境では、`tunnel-client help quickstart`に表示される環境変数またはファイル参照方式を使ってください。
-## 8. ChatGPTへ接続する
-ChatGPTのDeveloper modeを有効にし、Connectionで作成したTunnelを選びます。表示されたツール名を確認し、想定外のMCPがあれば`gateway.toml`で`enabled = false`にしてTunnelを再起動します。公開申請や第三者共有は行いません。
+ChatGPTのDeveloper modeを有効にし、プラスボタンから開発用Pluginを作ります。Connectionで`Tunnel`を選び、先ほど作成したTunnelを選択します。一覧に出ない場合は、Tunnelへ自分のChatGPT Workspaceが関連付けられているか確認します。
+表示されたツール名を確認し、想定外のMCPがあれば`gateway.toml`で`enabled = false`にしてTunnelを再起動します。公開申請や第三者共有は行いません。
