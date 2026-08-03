@@ -16,8 +16,33 @@ async function importGhWorkflow(args, suffix) {
 test('gh-workflow requires one fixed repository and rejects arbitrary CLI options', async () => {
   await assert.rejects(importGhWorkflow([], 'missing-repository'), /At least one --repository=OWNER\/REPO is required/);
   await assert.rejects(
-    importGhWorkflow(['--repository=DaisukeDaisuke/desmume_webassembly', '--command=run;calc.exe'], 'unknown-option'),
+    importGhWorkflow(['--repository=DaisukeDaisuke/desmume_webassembly', '--command=marker'], 'unknown-option'),
     /Unknown argument/
+  );
+});
+
+test('gh-workflow rejects malformed repository allowlist values and trailing arguments', async () => {
+  const rejectedRepositories = [
+    '--repository=aaa\\aaa',
+    '--repository=aaa/aaa extra',
+    '--repository=aaa/aaa?marker',
+    '--repository=aaa/aaa#marker',
+    '--repository=aaa/aaa;marker',
+    '--repository=aaa/aaa|marker'
+  ];
+  for (const [index, repository] of rejectedRepositories.entries()) {
+    await assert.rejects(
+      importGhWorkflow([repository], `invalid-repository-${index}`),
+      /repository must be OWNER\/REPO|repository is invalid/
+    );
+  }
+  await assert.rejects(
+    importGhWorkflow(['--repository=aaa/aaa', 'marker'], 'trailing-positional'),
+    /Unknown argument: marker/
+  );
+  await assert.rejects(
+    importGhWorkflow(['--repository=aaa/aaa', '--marker=true'], 'trailing-option'),
+    /Unknown argument: --marker=true/
   );
 });
 
@@ -98,7 +123,7 @@ test('gh-workflow rejects option-looking and shell-like tool arguments before ex
   await server(request(1, 'initialize'));
   const branch = await server(request(2, 'tools/call', {
     name: 'list_runs',
-    arguments: { branch: 'main; calc.exe' }
+    arguments: { branch: 'main; marker' }
   }));
   const workflow = await server(request(3, 'tools/call', {
     name: 'view_workflow',
@@ -106,7 +131,7 @@ test('gh-workflow rejects option-looking and shell-like tool arguments before ex
   }));
   const runId = await server(request(4, 'tools/call', {
     name: 'watch_run',
-    arguments: { runId: '1 & whoami' }
+    arguments: { runId: '1 & marker' }
   }));
   assert.equal(branch.result.isError, true);
   assert.equal(workflow.result.isError, true);
