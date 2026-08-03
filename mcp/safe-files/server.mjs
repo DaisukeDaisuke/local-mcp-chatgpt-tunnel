@@ -45,6 +45,16 @@ const CREDENTIAL_PATTERNS = [
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const protocolError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
+const TOOL_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    result: { type: 'object' },
+    error: { type: 'string' }
+  },
+  required: ['ok'],
+  additionalProperties: false
+};
 const toolResult = (value, isError = false) => ({
   content: [{ type: 'text', text: JSON.stringify(value) }],
   structuredContent: value,
@@ -80,6 +90,37 @@ const schemas = [
       properties: { path: { type: 'string', minLength: 1 } },
       required: ['path'],
       additionalProperties: false
+    }
+  },
+  {
+    name: 'list_files',
+    description: 'Recursively list files with fixed ripgrep arguments. Hidden files are included, .git is always excluded, and exact files or directories can be omitted with excludePaths.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', default: '.', description: 'Directory to enumerate.' },
+        globs: {
+          type: 'array',
+          items: { type: 'string', minLength: 1, maxLength: 512 },
+          maxItems: 20,
+          description: 'Safe ripgrep glob patterns relative to path. Absolute, parent-traversing, control-character, and option-looking patterns are rejected.'
+        },
+        excludePaths: {
+          type: 'array',
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+          maxItems: 100,
+          description: 'Exact files or directories to omit. Relative values are resolved below path; descendants of excluded directories are omitted.'
+        },
+        includeIgnored: { type: 'boolean', default: false },
+        maxResults: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_RESULTS, default: 100 }
+      },
+      additionalProperties: false
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
     }
   },
   {
@@ -190,7 +231,7 @@ const schemas = [
       additionalProperties: false
     }
   }
-];
+].map((schema) => ({ ...schema, outputSchema: TOOL_OUTPUT_SCHEMA }));
 
 const within = (root, candidate) => candidate === root || candidate.startsWith(`${root}${sep}`);
 const rootFor = (allowed, candidate) => allowed.find((root) => within(root, candidate));
@@ -219,7 +260,7 @@ const workingDirectory = async () => {
 };
 
 async function chooseRoot(path) {
-  if (typeof path !== 'string' || path.includes('\0')) throw new Error('Path must be a valid string');
+  if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
   const allowed = await roots();
   const candidate = resolve(isAbsolute(path) ? path : join(await workingDirectory(), path));
   const root = rootFor(allowed, candidate);
@@ -255,6 +296,10 @@ async function resolveWritable(path) {
 
 function decodeUtf8(bytes) {
   if (bytes.length > MAX_TEXT_BYTES) throw new Error(`Text file exceeds ${MAX_TEXT_BYTES} bytes`);
+  return decodeUtf8Strict(bytes);
+}
+
+function decodeUtf8Strict(bytes) {
   if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) throw new Error('UTF-16 text is not supported; convert the file to UTF-8 first');
   if ((bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0xfe && bytes[3] === 0xff)
       || (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0x00 && bytes[3] === 0x00)) throw new Error('UTF-32 text is not supported; convert the file to UTF-8 first');
@@ -511,18 +556,100 @@ async function runRipgrep(args) {
   });
 }
 
+function validateGlob(glob) {
+  if (typeof glob !== 'string' || glob.length === 0 || glob.length > 512) throw new Error('Glob must be a non-empty string of at most 512 characters');
+  if (/[\0\r\n]/.test(glob)) throw new Error('Glob patterns may not contain NUL or line breaks');
+  const pattern = glob.startsWith('!') ? glob.slice(1) : glob;
+  if (!pattern) throw new Error('Glob exclusion pattern must not be empty');
+  if (pattern.startsWith('-')) throw new Error('Glob patterns may not start with an option-looking hyphen');
+  if (pattern.includes('\\')) throw new Error('Glob patterns must use forward slashes');
+  if (isAbsolute(pattern) || /^(?:[A-Za-z]:|\/\/)/.test(pattern)) throw new Error('Glob patterns must be relative to the requested path');
+  if (pattern.split('/').includes('..')) throw new Error('Glob patterns may not traverse to a parent directory');
+  return glob;
+}
+
+function validateGlobs(globs) {
+  if (globs === undefined) return [];
+  if (!Array.isArray(globs) || globs.length > 20) throw new Error('globs must be an array with at most 20 items');
+  return globs.map(validateGlob);
+}
+
+async function resolveExcludePaths(base, values) {
+  if (values === undefined) return [];
+  if (!Array.isArray(values) || values.length > 100) throw new Error('excludePaths must be an array with at most 100 items');
+  const output = [];
+  for (const value of values) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 1024 || /[\0\r\n]/.test(value)) {
+      throw new Error('Each excludePaths entry must be a non-empty path without NUL or line breaks');
+    }
+    const candidate = resolve(isAbsolute(value) ? value : join(base, value));
+    if (!within(base, candidate)) throw new Error(`Excluded path is outside the requested listing root: ${value}`);
+    let actual = candidate;
+    try {
+      const info = await lstat(candidate);
+      if (info.isSymbolicLink()) throw new Error(`Excluded path may not be a symbolic link: ${value}`);
+      actual = await realpath(candidate);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (!within(base, actual)) throw new Error(`Excluded path escaped the requested listing root: ${value}`);
+    output.push(actual);
+  }
+  return output;
+}
+
+const pathSort = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+const normalizedRelativePath = (base, path) => relative(base, path).split(sep).join('/');
+const excludedBy = (path, exclusions) => exclusions.some((entry) => path === entry || path.startsWith(`${entry}${sep}`));
+const isGitInternalPath = (relativePath) => relativePath.split('/').includes('.git');
+
+async function listFiles(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Tool arguments must be an object');
+  const allowed = new Set(['path', 'globs', 'excludePaths', 'includeIgnored', 'maxResults']);
+  for (const key of Object.keys(args)) if (!allowed.has(key)) throw new Error(`list_files does not accept the ${key} argument`);
+  const target = await resolveExisting(args.path ?? '.');
+  if (!(await stat(target.path)).isDirectory()) throw new Error('list_files path must be a directory');
+  const globs = validateGlobs(args.globs);
+  const exclusions = await resolveExcludePaths(target.path, args.excludePaths);
+  const maximum = args.maxResults ?? 100;
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_SEARCH_RESULTS) {
+    throw new Error(`maxResults must be an integer from 1 through ${MAX_SEARCH_RESULTS}`);
+  }
+  if (args.includeIgnored !== undefined && typeof args.includeIgnored !== 'boolean') throw new Error('includeIgnored must be a boolean');
+  const command = ['--files', '--hidden', '--null', '--sort', 'path'];
+  if (args.includeIgnored === true) command.push('--no-ignore');
+  for (const glob of globs) command.push('--glob', glob);
+  command.push('--glob', '!.git', '--glob', '!.git/**', '--glob', '!**/.git', '--glob', '!**/.git/**', '--', target.path);
+  const output = decodeUtf8Strict(await runRipgrep(command));
+  const files = [];
+  for (const rawPath of output.split('\0')) {
+    if (!rawPath) continue;
+    const lexical = resolve(rawPath);
+    const info = await lstat(lexical);
+    if (info.isSymbolicLink()) throw new Error(`ripgrep returned a symbolic-link path: ${rawPath}`);
+    if (!info.isFile()) continue;
+    const actual = await realpath(lexical);
+    if (!within(target.path, actual)) throw new Error(`ripgrep returned a path outside the requested listing root: ${rawPath}`);
+    if (excludedBy(actual, exclusions)) continue;
+    const relativePath = normalizedRelativePath(target.path, actual);
+    if (isGitInternalPath(relativePath)) continue;
+    files.push({ path: actual, relativePath });
+  }
+  files.sort((left, right) => pathSort(left.relativePath, right.relativePath));
+  const truncated = files.length > maximum;
+  const selected = files.slice(0, maximum);
+  return { path: target.path, count: selected.length, truncated, files: selected };
+}
+
 async function searchText(args) {
   const target = await resolveExisting(args.path ?? '.');
   const maximum = Math.min(args.maxResults ?? 100, MAX_SEARCH_RESULTS);
   const command = ['--json', '--color=never', '--hidden', '--max-filesize', String(MAX_TEXT_BYTES)];
   if (args.fixedStrings === true) command.push('--fixed-strings');
   if (args.caseSensitive === false) command.push('--ignore-case');
-  for (const glob of args.globs ?? []) {
-    if (typeof glob !== 'string' || glob.includes('\0')) throw new Error('Invalid glob');
-    command.push('--glob', glob);
-  }
+  for (const glob of validateGlobs(args.globs)) command.push('--glob', glob);
   command.push('--', args.query, target.path);
-  const output = decodeUtf8(await runRipgrep(command));
+  const output = decodeUtf8Strict(await runRipgrep(command));
   const matches = [];
   let redacted = false;
   for (const line of output.split(/\r?\n/)) {
@@ -572,6 +699,8 @@ async function callTool(name, args = {}) {
         }))
       };
     }
+    case 'list_files':
+      return listFiles(args);
     case 'search_text':
       return searchText(args);
     case 'read_text_file': {

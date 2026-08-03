@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -34,14 +34,107 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   const names = listed.result.tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
     'apply_patch', 'create_directory', 'get_working_directory', 'list_directory',
-    'read_file_chunk', 'read_text_file', 'replace_text', 'roots', 'search_text',
+    'list_files', 'read_file_chunk', 'read_text_file', 'replace_text', 'roots', 'search_text',
     'set_working_directory', 'write_file', 'write_text_file'
   ]);
+  assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
   assert.ok(!names.some((name) => ['execute', 'shell', 'start_command', 'without_sandbox'].includes(name)));
   await writeFile(join(root, 'utf16.txt'), Buffer.from([0xff, 0xfe, 0x41, 0x00]));
   const result = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'utf16.txt' } }));
   assert.equal(result.result.isError, true);
   assert.match(result.result.structuredContent.error, /UTF-16/);
+});
+
+test('list_files uses fixed ripgrep listing, honors ignore files, and excludes exact files or directories', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-list-'));
+  await mkdir(join(root, '.git'));
+  await mkdir(join(root, 'ignored-directory'));
+  await mkdir(join(root, 'src'));
+  await mkdir(join(root, 'src', 'omit'));
+  await writeFile(join(root, '.gitignore'), 'ignored.txt\nignored-directory/\n', 'utf8');
+  await writeFile(join(root, '.hidden.txt'), 'hidden', 'utf8');
+  await writeFile(join(root, '.git', 'config'), 'git-internal', 'utf8');
+  await writeFile(join(root, 'ignored.txt'), 'ignored', 'utf8');
+  await writeFile(join(root, 'ignored-directory', 'ignored.js'), 'ignored', 'utf8');
+  await writeFile(join(root, 'src', 'a.js'), 'a', 'utf8');
+  await writeFile(join(root, 'src', 'b.txt'), 'b', 'utf8');
+  await writeFile(join(root, 'src', 'omit', 'skip.js'), 'skip', 'utf8');
+  await writeFile(join(root, 'src', 'omit-file.js'), 'skip', 'utf8');
+  await writeFile(join(root, 'src', 'space ; name.js'), 'safe', 'utf8');
+  const server = await serverFor(root, 'list-files');
+
+  const defaultList = await server(request(2, 'tools/call', {
+    name: 'list_files', arguments: { path: '.', maxResults: 100 }
+  }));
+  assert.equal(defaultList.result.isError, false);
+  const defaultRelative = defaultList.result.structuredContent.result.files.map((file) => file.relativePath);
+  assert.ok(defaultRelative.includes('.hidden.txt'));
+  assert.ok(defaultRelative.includes('src/a.js'));
+  assert.ok(!defaultRelative.includes('ignored.txt'));
+  assert.ok(!defaultRelative.some((path) => path.startsWith('ignored-directory/')));
+  assert.ok(!defaultRelative.some((path) => path.startsWith('.git/')));
+  assert.deepEqual(defaultRelative, [...defaultRelative].sort((a, b) => a.localeCompare(b)));
+
+  const filtered = await server(request(3, 'tools/call', {
+    name: 'list_files',
+    arguments: {
+      path: '.',
+      includeIgnored: true,
+      globs: ['**/*.js'],
+      excludePaths: ['ignored-directory', 'src/omit', 'src/omit-file.js'],
+      maxResults: 100
+    }
+  }));
+  assert.equal(filtered.result.isError, false);
+  assert.deepEqual(filtered.result.structuredContent.result.files.map((file) => file.relativePath), [
+    'src/a.js',
+    'src/space ; name.js'
+  ]);
+
+  const truncated = await server(request(4, 'tools/call', {
+    name: 'list_files', arguments: { path: 'src', maxResults: 1 }
+  }));
+  assert.equal(truncated.result.isError, false);
+  assert.equal(truncated.result.structuredContent.result.count, 1);
+  assert.equal(truncated.result.structuredContent.result.truncated, true);
+});
+
+test('list_files rejects option and scope injection while treating shell metacharacters as literal path data', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-injection-'));
+  const literalDirectories = ['--aaa', 'semi;name', 'amp&name', 'dollar$(name)', 'back`tick'];
+  if (process.platform !== 'win32') literalDirectories.push('pipe|name');
+  for (const directory of literalDirectories) {
+    await mkdir(join(root, directory));
+    await writeFile(join(root, directory, 'inside.txt'), directory, 'utf8');
+  }
+  const server = await serverFor(root, 'list-injection');
+  let id = 2;
+  for (const directory of literalDirectories) {
+    const listed = await server(request(id++, 'tools/call', {
+      name: 'list_files', arguments: { path: directory }
+    }));
+    assert.equal(listed.result.isError, false, directory);
+    assert.deepEqual(listed.result.structuredContent.result.files.map((file) => file.relativePath), ['inside.txt']);
+  }
+  await assert.rejects(access(join(root, 'injected')));
+
+  for (const glob of ['--no-ignore', '../../*', '/tmp/**', 'C:/outside/**', 'foo\n--no-ignore', 'foo\0bar']) {
+    const refused = await server(request(id++, 'tools/call', {
+      name: 'list_files', arguments: { path: '.', globs: [glob] }
+    }));
+    assert.equal(refused.result.isError, true, glob);
+  }
+  for (const path of ['missing;touch injected', 'foo\n--no-ignore', 'foo\0bar']) {
+    const refused = await server(request(id++, 'tools/call', {
+      name: 'list_files', arguments: { path }
+    }));
+    assert.equal(refused.result.isError, true, path);
+  }
+  const outsideExclude = await server(request(id++, 'tools/call', {
+    name: 'list_files', arguments: { path: '.', excludePaths: ['../outside'] }
+  }));
+  assert.equal(outsideExclude.result.isError, true);
+  await assert.rejects(access(join(root, 'injected')));
 });
 
 test('ripgrep search and file transfer stay inside an explicitly configured workspace', async () => {

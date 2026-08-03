@@ -14,6 +14,7 @@ runtime主体には`Tunnels Read + Use`だけを与え、モデルAPI、Files、
 各MCPの`allowed_directories`と`allowed_files`が、ChatGPTから子MCPへ渡せるファイルパスを決めます。ディレクトリは配下を含み、ファイルは絶対パスの完全一致です。相対パスはMCPの`cwd`から解決し、Windows区切り文字、JSONの二重エスケープ、既存パスのシンボリックリンクを正規化してから比較します。許可リストが空のMCPでパスらしい引数を使うと拒否します。
 safe-filesは`cwd`だけをWorkspaceルートとして使い、その外側とシンボリックリンクによる脱出を拒否します。危険そうなフォルダ名の一般ブラックリストは使いません。高確度の秘密文字列は内容検査で拒否し、`.git`内部へのpatchは操作固有の制約として拒否します。
 safe-imagesは読み取り専用で、公開するツールは`read_image`だけです。PNG、JPEG、WebPの拡張子とマジックバイトを照合し、ファイルサイズと総画素数を制限します。SVG、HEIC、シンボリックリンク、UNC、NTFS代替データストリーム、許可ルート外の画像は拒否します。画像base64は`content`の画像ブロックだけへ置き、`structuredContent`へ重複させません。
+safe-downloadは読み取り専用で、`safe-files`とは独立した`cwd`、`SAFE_DOWNLOAD_ROOTS`、Gateway許可リストを使います。ディレクトリ一覧は`spawn('rg', args, { shell:false })`の固定引数だけで行い、対象パス直前へ`--`を置きます。利用者は任意のrg引数を渡せません。globは相対範囲へ制限し、除外ファイル・フォルダはrg文字列へ展開せず、列挙後の実パス比較で除外します。`.git`はrg指定と後処理の両方で拒否します。ZIPはファイル数、展開前合計、生成後サイズを制限し、ROM、Save、State、秘密鍵形式、資格情報らしい内容、シンボリックリンク、UNC、NTFS代替データストリームを拒否します。ZIP base64はMCP resourceの`blob`だけへ置き、`structuredContent`へ重複させません。
 `search_text`は固定の`rg`実行です。一般シェル、PowerShell、任意コマンドAPIはありません。`apply_patch`は専用パーサーまたは固定の`git apply`だけを使います。
 ## ファイル転送
 `read_file_chunk`と`write_file`は既定16MiB以下です。ROM、State、鍵、証明書秘密鍵、実行ファイル、DLL、MSI、PowerShell、バッチ、ショートカットを拒否します。テキストはUTF-8だけを正式対応し、UTF-16LE、UTF-16BE、UTF-32、不正UTF-8を拒否します。

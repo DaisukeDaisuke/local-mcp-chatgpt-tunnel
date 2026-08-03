@@ -26,6 +26,7 @@ test('installation automation and repository hook mutation are absent', async ()
   const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
   assert.match(install, /node app\\doctor\.mjs/);
   assert.match(install, /node mcp\\safe-files\\server\.mjs --help/);
+  assert.match(install, /node mcp\\safe-download\\server\.mjs --help/);
   assert.doesNotMatch(install, /Expand-Archive|Invoke-WebRequest|enable-git-hooks|init-workspace/);
 });
 
@@ -59,6 +60,7 @@ test('installation documents tunnel runtime roles and restricted API key creatio
 test('gateway uses Codex-style generic MCP tables and honors enabled entries', async () => {
   const config = await readFile(new URL('../config/gateway.example.toml', import.meta.url), 'utf8');
   assert.match(config, /\[mcp_servers\.files\]/);
+  assert.match(config, /\[mcp_servers\.downloads\]/);
   assert.match(config, /command = "node"/);
   assert.match(config, /enabled = true/);
   const loader = await readFile(new URL('../app/server-config.mjs', import.meta.url), 'utf8');
@@ -102,6 +104,17 @@ test('safe-files uses cwd while the gateway applies generic path allowlists', as
   const gateway = await readFile(new URL('../app/gateway.mjs', import.meta.url), 'utf8');
   assert.match(gateway, /ToolPathPolicy/);
   assert.match(gateway, /assertToolArguments/);
+});
+
+test('bundled MCP tools declare structured output schemas and safe-download is independently rooted', async () => {
+  for (const path of ['../mcp/safe-files/server.mjs', '../mcp/safe-images/server.mjs', '../mcp/safe-download/server.mjs']) {
+    const source = await readFile(new URL(path, import.meta.url), 'utf8');
+    assert.match(source, /outputSchema/);
+  }
+  const download = await readFile(new URL('../mcp/safe-download/server.mjs', import.meta.url), 'utf8');
+  assert.match(download, /SAFE_DOWNLOAD_ROOTS/);
+  assert.match(download, /spawn\('rg', args, \{[^}]*shell:\s*false/s);
+  assert.doesNotMatch(download, /rgArgs|exec\(|execFile\(|shell:\s*true/);
 });
 
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {

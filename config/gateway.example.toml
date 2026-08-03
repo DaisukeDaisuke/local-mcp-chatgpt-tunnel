@@ -28,6 +28,24 @@ allowed_files = []
 SAFE_IMAGES_MAX_BYTES = "8388608"
 SAFE_IMAGES_MAX_PIXELS = "52428800"
 
+# Read-only ZIP download. Keep this disabled until its cwd and allowlist are replaced with a dedicated source-export root.
+[mcp_servers.downloads]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\safe-download\server.mjs']
+cwd = 'C:\ABSOLUTE\PATH\TO\DOWNLOADABLE\SOURCE'
+enabled = false
+prefix = "downloads"
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\DOWNLOADABLE\SOURCE']
+allowed_files = []
+
+[mcp_servers.downloads.env]
+SAFE_DOWNLOAD_MAX_FILES = "500"
+SAFE_DOWNLOAD_MAX_INPUT_BYTES = "16777216"
+SAFE_DOWNLOAD_MAX_ZIP_BYTES = "20971520"
+SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
+
 # Add any other stdio MCP in the same Codex-style shape.
 # Path-looking tool arguments are denied unless they match allowed_directories
 # or allowed_files. Directory entries include descendants. File entries are exact.

@@ -39,6 +39,7 @@ test('safe-images exposes only the read_image tool', async () => {
   const server = await serverFor(root, 'surface');
   const listed = await server(request(2, 'tools/list', {}));
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['read_image']);
+  assert.equal(listed.result.tools[0].outputSchema?.type, 'object');
   assert.equal(listed.result.tools[0].annotations.readOnlyHint, true);
 });
 

@@ -51,6 +51,8 @@ allowed_files = ['C:\Users\owner\Downloads\upload.png']
 node mcp\safe-files\server.mjs --help
 ```
 AIへhelp出力、リポジトリの絶対パス、Workspaceの絶対パスを渡せば、AIが`args`、`cwd`、`allowed_directories`を組み立てられます。複数WorkspaceはMCPエントリを分けます。許可ルート外とシンボリックリンク脱出を拒否し、高確度の資格情報らしい内容も返しません。危険そうなフォルダ名を一律ブラックリスト化せず、Gatewayの明示許可パスを境界にします。
+
+`list_files`は固定された`rg --files --hidden`を使う再帰一覧です。`.git`は常に除外され、`.gitignore`は通常どおり尊重されます。`includeIgnored:true`でignore対象を含め、`excludePaths`で複数のファイルまたはフォルダを正確に除外できます。`globs`は相対パターンだけに制限され、任意のrg引数にはなりません。
 `search_text`は固定された`rg`だけを起動します。検索式、許可ルート内の対象パス、globは指定できますが、実行ファイルや任意コマンドは指定できません。`read_file_chunk`と`write_file`は境界内のファイル転送用です。
 ## 画像MCP
 `safe-images`はPNG、JPEG、WebPをMCPの画像コンテンツとしてChatGPTへ返す読み取り専用MCPです。`cwd`を画像ルートとして使い、初期状態では8 MiB、50メガピクセルまでに制限します。
@@ -69,6 +71,27 @@ tool_timeout_sec = 120
 allowed_directories = ['C:\Users\owner\Downloads']
 allowed_files = []
 ```
+
+`safe-download`は単一ファイルまたはディレクトリを常にZIPとして返す読み取り専用MCPです。JSが1ファイルだけでもZIPになります。`safe-files`とは別の`cwd`と許可リストを使い、ChatGPTへ渡してよいソースだけを公開します。
+
+```powershell
+node mcp\safe-download\server.mjs --help
+```
+
+```toml
+[mcp_servers.downloads]
+command = "node"
+args = ['C:\work\local-mcp-chatgpt-tunnel\mcp\safe-download\server.mjs']
+cwd = 'C:\work\downloadable-source'
+enabled = true
+prefix = "downloads"
+allowed_directories = ['C:\work\downloadable-source']
+allowed_files = []
+```
+
+ディレクトリ列挙は固定された`rg --files --hidden`だけを使い、任意引数やシェルは受け付けません。`globs`、`excludePaths`、`includeIgnored`を利用でき、`.git`内部、許可範囲外、シンボリックリンク、ROM・Save・State・秘密鍵形式、資格情報らしい内容は拒否します。
+
+同梱する`safe-files`、`safe-images`、`safe-download`の全ツールは`outputSchema`を宣言します。外部から接続した第三者MCPの出力スキーマは、そのMCP自身が宣言している場合だけGateway経由でも表示されます。
 公開ツールは`images__read_image`だけです。拡張子とマジックバイトの不一致、SVG、HEIC、空ファイル、サイズ超過、寸法超過、許可ルート外、シンボリックリンク、NTFS代替データストリームを拒否します。base64はMCPの画像ブロックだけへ格納し、`structuredContent`には重複させません。Tunnel側の確認結果は`docs/tunnel-client-image-forwarding.md`にあります。
 ## Node.jsの役割
 導入時のNode.jsスクリプトは`app/doctor.mjs`だけです。`node`、`npm`、`git`、`rg`、`py`のバージョンをすべて出力し、一つ失敗しても残りを確認します。インストール、ZIP展開、設定生成、runtime key入力、Git hook変更は行いません。

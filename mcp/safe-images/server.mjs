@@ -36,6 +36,16 @@ const EXTENSION_MIME_TYPES = new Map([
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const protocolError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
+const TOOL_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    result: { type: 'object' },
+    error: { type: 'string' }
+  },
+  required: ['ok'],
+  additionalProperties: false
+};
 const errorToolResult = (error) => {
   const value = { ok: false, error: error instanceof Error ? error.message : String(error) };
   return {
@@ -58,6 +68,7 @@ const schemas = [
       required: ['path'],
       additionalProperties: false
     },
+    outputSchema: TOOL_OUTPUT_SCHEMA,
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,

@@ -34,8 +34,9 @@ Select-String -Path $sums -Pattern 'tunnel-client-v0\.0\.10-windows-amd64\.zip'
 .\.tools\tunnel-client\tunnel-client.exe help doctor
 node mcp\safe-files\server.mjs --help
 node mcp\safe-images\server.mjs --help
+node mcp\safe-download\server.mjs --help
 ```
-この4つの出力、リポジトリとWorkspaceの絶対パス、接続したいMCPの起動コマンドをAIへ渡せば、AIが`gateway.toml`とTunnel起動コマンドを組み立てられます。`.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。
+これらの出力、リポジトリとWorkspaceの絶対パス、接続したいMCPの起動コマンドをAIへ渡せば、AIが`gateway.toml`とTunnel起動コマンドを組み立てられます。`.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。
 ## 4. gateway.tomlを自分で作る
 例をコピーして、必ず自分のパスへ書き換えます。
 ```powershell
@@ -62,6 +63,8 @@ allowed_directories = ['C:\Users\owner\Documents\my-project']
 allowed_files = []
 ```
 `safe-files`は`cwd`をWorkspaceのルートとして使います。複数Workspaceが必要なら、`files_project_a`と`files_project_b`のようにMCPエントリを分け、それぞれ別の`cwd`と`prefix`を指定します。
+
+`list_files`は固定された`rg --files --hidden`経路で再帰一覧を返します。`excludePaths`へ無視するファイルまたはフォルダを複数指定でき、`globs`は相対globだけを受け付けます。任意のrg引数、親ディレクトリへ出るglob、改行、NUL、オプションに見える先頭`-`は拒否します。`.git`内部は常に除外します。
 Downloads内のPNG、JPEG、WebPをChatGPTへ画像として渡す場合は、次の読み取り専用MCPを追加します。
 ```toml
 [mcp_servers.images]
@@ -79,6 +82,28 @@ SAFE_IMAGES_MAX_BYTES = "8388608"
 SAFE_IMAGES_MAX_PIXELS = "52428800"
 ```
 ChatGPTからは`images__read_image`へ`{"path":"画像.png"}`を渡します。画像base64はMCP画像コンテンツとして返り、通常のテキスト転送ツールには入りません。Downloads全体を許可したくない場合は`allowed_directories = []`にし、`allowed_files`へ対象画像の絶対パスだけを書きます。
+
+ソースコードなどをZIPで受け取る場合は、`safe-download`を`safe-files`や`safe-images`とは別のMCPエントリとして追加します。`cwd`と`allowed_directories`も別にし、ChatGPTへ渡してよいソースだけを含むディレクトリを指定します。
+
+```toml
+[mcp_servers.downloads]
+command = "node"
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\safe-download\server.mjs']
+cwd = 'C:\Users\owner\Documents\downloadable-source'
+enabled = true
+prefix = "downloads"
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+allowed_directories = ['C:\Users\owner\Documents\downloadable-source']
+allowed_files = []
+
+[mcp_servers.downloads.env]
+SAFE_DOWNLOAD_MAX_FILES = "500"
+SAFE_DOWNLOAD_MAX_INPUT_BYTES = "16777216"
+SAFE_DOWNLOAD_MAX_ZIP_BYTES = "20971520"
+```
+
+ChatGPTからは`downloads__download_zip`へ`path`を渡します。単一の`.js`や`.mjs`を指定してもZIPで返します。ディレクトリでは固定された`rg --files`で列挙し、`globs`、`excludePaths`、`includeIgnored`を使用できます。ROM、Save、State、秘密鍵形式、資格情報らしい内容、シンボリックリンク、許可ルート外は拒否します。
 任意のstdio MCPも同じ形で追加できます。
 ```toml
 [mcp_servers.example]

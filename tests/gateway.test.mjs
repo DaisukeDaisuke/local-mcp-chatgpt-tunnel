@@ -85,10 +85,12 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   const listed = await nextLine(child.stdout);
   const names = listed.result.tools.map((tool) => tool.name);
   assert.ok(names.includes('files__apply_patch'));
+  assert.ok(names.includes('files__list_files'));
   assert.ok(names.includes('files__search_text'));
   assert.ok(names.includes('files__read_file_chunk'));
   assert.ok(names.includes('files__set_working_directory'));
   assert.ok(names.every((name) => name.startsWith('files__')));
+  assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
     name: 'files__read_text_file', arguments: { path: 'inside.txt' }
   } })}\n`);
@@ -101,6 +103,45 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   const outside = await nextLine(child.stdout);
   assert.equal(outside.result.isError, true);
   assert.match(outside.result.content[0].text, /outside allowed_directories/);
+});
+
+test('gateway preserves safe-download outputSchema and embedded ZIP resource content', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-download-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-download-config-'));
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(join(workspace, 'server.mjs'), 'export const value = 1;\n', 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.downloads]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/safe-download/server.mjs')}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "downloads"'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
+  const listed = await nextLine(child.stdout);
+  const tool = listed.result.tools.find((candidate) => candidate.name === 'downloads__download_zip');
+  assert.equal(tool.outputSchema.type, 'object');
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'downloads__download_zip', arguments: { path: 'server.mjs', archiveName: 'server.zip' }
+  } })}\n`);
+  const downloaded = await nextLine(child.stdout);
+  assert.equal(downloaded.result.isError, false);
+  const resource = downloaded.result.content.find((part) => part.type === 'resource');
+  assert.equal(resource.resource.mimeType, 'application/zip');
+  assert.equal(Buffer.from(resource.resource.blob, 'base64').readUInt32LE(0), 0x04034b50);
+  assert.equal(Object.hasOwn(downloaded.result.structuredContent.result, 'blob'), false);
 });
 
 test('gateway initialization survives an unavailable child MCP', async (t) => {
