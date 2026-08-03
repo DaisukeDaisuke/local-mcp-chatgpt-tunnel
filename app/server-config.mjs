@@ -89,6 +89,5 @@ export async function loadGatewayConfig(configPath = configPathFromArgs()) {
   }
   const base = dirname(resolvedConfigPath);
   const servers = Object.entries(raw.mcp_servers).map(([name, server]) => normalizeServer(name, server, base)).filter(Boolean);
-  if (servers.length === 0) throw new Error('gateway.toml has no enabled MCP servers');
   return { configPath: resolvedConfigPath, privateUseOnly: true, servers };
 }

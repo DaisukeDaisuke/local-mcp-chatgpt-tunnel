@@ -61,6 +61,18 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].allowedFiles, ['C:\\Users\\owner\\Downloads\\upload.png']);
 });
 
+test('gateway config permits every MCP entry to be disabled', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-disabled-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    'enabled = false'
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(path);
+  assert.deepEqual(config.servers, []);
+});
+
 test('gateway path allowlists require absolute paths', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-relative-path-'));
   const path = join(directory, 'gateway.toml');

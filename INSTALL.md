@@ -41,6 +41,11 @@ node mcp\safe-files\server.mjs --help
 Copy-Item config\gateway.example.toml config\gateway.toml
 code config\gateway.toml
 ```
+`gateway.example.toml`内の`C:\ABSOLUTE\PATH\TO`は説明用のダミーです。`args`にはこのリポジトリ内の`mcp\safe-files\server.mjs`の絶対パスを、`cwd`と`allowed_directories`には実際に操作するWorkspaceの絶対パスを書きます。ダミーが残っていないことを確認します。
+```powershell
+rg -n -F 'C:\ABSOLUTE\PATH\TO' config\gateway.toml
+```
+何も表示されなければダミーパスは残っていません。ダミーのまま起動すると、Node.jsは`Cannot find module 'C:\ABSOLUTE\PATH\TO\...'`と`MODULE_NOT_FOUND`を出します。これはnpmパッケージのインストール不足ではなく、`gateway.toml`のパス未設定です。
 形式はCodexのMCP設定に近い`[mcp_servers.<name>]`です。
 ```toml
 private_use_only = true
@@ -74,6 +79,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 `allowed_directories`は指定ディレクトリとその配下を許可します。`allowed_files`は列挙した絶対パスだけを完全一致で許可します。Chrome DevTools MCPのアップロード元など、Workspace全体を許可する必要がないファイルは`allowed_files`へ一つずつ書きます。Windowsの`\`と`/`、JSONで二重にエスケープされた`\\`は正規化して比較され、相対パスはそのMCPの`cwd`から解決されます。
 Gatewayは全MCPのツール引数を再帰的に検査します。`path`、`filePath`、`files`、`directory`などのパスらしいキー、または絶対パスらしい文字列を検出し、許可リスト外なら子MCPへ渡しません。パス引数を持たないツールは許可リストが空でも動きます。
 `enabled = false`なら起動しません。GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。現在のGatewayが直接集約するのは`command`で起動するstdio MCPです。Ghidra MCPやDQ9 MCPの実装は同梱せず、必要な外部MCPを利用者自身が設定します。
+有効なMCPの一部が起動できなくても、Gateway自体は初期化を続行し、起動できたMCPのツールだけを公開します。起動できなかったMCPは標準エラーへ`unavailable and was skipped`として記録されます。すべてを一時的に無効化した設定でもGatewayは起動し、ツール一覧は空になります。
 Codex設定からコピーした`tool_output_token_limit`、`[mcp_servers.<name>.tools.<tool>]`の承認設定、その他Gatewayが使わない項目は、そのまま残して構いません。Gatewayは認識する項目だけを読み、未対応項目を無視します。トークン数の計測やCodexの承認UIは実装していないため、無視された項目はこのGatewayでは効果を持ちません。
 ## 5. Node.jsで最終検証する
 Node.jsが導入作業を変更することはありません。次のコマンドは`node`、`npm`、`git`、`rg`、`py`を全部確認し、途中の失敗で止まらず、最後に問題のあるコマンドをまとめます。バージョン番号が例と違うだけでは失敗にしません。

@@ -12,6 +12,7 @@ const MAX_TOOL_NAME = 64;
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+const warn = (message) => process.stderr.write(`[gateway] ${message}\n`);
 
 const namespacedName = (prefix, name) => {
   const normalized = `${prefix}__${name}`.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -57,14 +58,13 @@ function rebuildRoutes() {
 
 async function startChildren() {
   if (started) return;
-  try {
-    for (const childConfig of config.servers.filter((candidate) => !candidate.deferred)) await startChild(childConfig);
-  } catch (error) {
-    await Promise.allSettled(children.map((child) => child.close()));
-    children.length = 0;
-    childrenByName.clear();
-    childStarts.clear();
-    throw error;
+  for (const childConfig of config.servers.filter((candidate) => !candidate.deferred)) {
+    try {
+      await startChild(childConfig);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warn(`MCP "${childConfig.name}" is unavailable and was skipped: ${message}`);
+    }
   }
   rebuildRoutes();
   started = true;
