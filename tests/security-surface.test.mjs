@@ -73,7 +73,9 @@ test('gateway uses Codex-style generic MCP tables and honors enabled entries', a
 
 test('child MCP environment is allowlisted instead of inheriting credentials', async () => {
   const child = await readFile(new URL('../app/stdio-child.mjs', import.meta.url), 'utf8');
-  assert.match(child, /env: buildChildEnvironment\(env\)/);
+  assert.match(child, /env: buildChildEnvironment\(\{ \.\.\.env, \.\.\.policyEnvironment \}\)/);
+  assert.match(child, /LOCAL_MCP_ALLOWED_DIRECTORIES/);
+  assert.match(child, /LOCAL_MCP_DISALLOWED_FILES/);
   assert.doesNotMatch(child, /env:\s*\{\s*\.\.\.process\.env/);
   const policy = await import('../app/child-environment.mjs');
   const environment = policy.buildChildEnvironment({ EXPLICIT: 'yes' }, {

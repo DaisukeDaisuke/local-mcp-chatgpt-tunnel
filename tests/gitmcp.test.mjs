@@ -12,7 +12,7 @@ async function importGitMcp(root, args, suffix) {
   const previousAllowedFiles = process.env.LOCAL_MCP_ALLOWED_FILES;
   const previousDeniedDirectories = process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES;
   const previousDeniedFiles = process.env.LOCAL_MCP_DISALLOWED_FILES;
-  process.argv = [previousArgv[0], join(process.cwd(), 'mcp', 'gitmcp', 'server.mjs'), ...args];
+  process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'gitmcp.test.mjs'), ...args];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
