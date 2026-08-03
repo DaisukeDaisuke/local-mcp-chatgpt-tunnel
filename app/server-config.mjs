@@ -1,17 +1,27 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, posix, resolve, win32 } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const absoluteFrom = (base, value) => isAbsolute(value) ? value : resolve(base, value);
+const absoluteFrom = (base, value) => isAbsolute(value) || win32.isAbsolute(value) || posix.isAbsolute(value) ? value : resolve(base, value);
 
 function stringArray(value, name) {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) throw new Error(`${name} must be an array of strings`);
   return value;
+}
+
+function absolutePathArray(value, name) {
+  const values = stringArray(value, name);
+  for (const item of values) {
+    if (!isAbsolute(item) && !win32.isAbsolute(item) && !posix.isAbsolute(item)) {
+      throw new Error(`${name} entries must be absolute paths: ${item}`);
+    }
+  }
+  return values;
 }
 
 function normalizeLifecycle(raw, key, serverName) {
@@ -56,7 +66,9 @@ function normalizeServer(name, raw, base) {
     deferred: raw.deferred === true,
     startAfter: normalizeLifecycle(raw, 'start_after', name),
     stopAfter: normalizeLifecycle(raw, 'stop_after', name),
-    blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`))
+    blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
+    allowedDirectories: absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`),
+    allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`)
   };
 }
 

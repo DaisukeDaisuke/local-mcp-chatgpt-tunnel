@@ -14,6 +14,19 @@ async function serverFor(root, suffix) {
   return server;
 }
 
+async function createSymlinkOrSkip(t, target, path) {
+  try {
+    await symlink(target, path);
+    return true;
+  } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+      t.skip(`Symbolic links are unavailable in this Windows environment: ${error.code}`);
+      return false;
+    }
+    throw error;
+  }
+}
+
 test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safe-files-'));
   const server = await serverFor(root, 'surface');
@@ -51,16 +64,16 @@ test('ripgrep search and file transfer stay inside an explicitly configured work
   assert.deepEqual(await readFile(join(root, 'src', 'image.bin')), Buffer.from([0, 1, 2, 3]));
 });
 
-test('credential-like paths and detected credentials are never returned', async () => {
+test('the explicit workspace is not name-blacklisted, while detected credential content is refused', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safe-files-'));
   const fakeRuntimeKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-');
   await mkdir(join(root, '.ssh'));
-  await writeFile(join(root, '.ssh', 'id_ed25519.pub'), 'public-key', 'utf8');
+  await writeFile(join(root, '.ssh', 'ordinary.txt'), 'public information', 'utf8');
   await writeFile(join(root, 'notes.txt'), fakeRuntimeKey, 'utf8');
   const server = await serverFor(root, 'credentials');
-  const pathRefused = await server(request(2, 'tools/call', { name: 'read_text_file', arguments: { path: '.ssh/id_ed25519.pub' } }));
-  assert.equal(pathRefused.result.isError, true);
-  assert.match(pathRefused.result.structuredContent.error, /Credential-like path/);
+  const ordinary = await server(request(2, 'tools/call', { name: 'read_text_file', arguments: { path: '.ssh/ordinary.txt' } }));
+  assert.equal(ordinary.result.isError, false);
+  assert.equal(ordinary.result.structuredContent.result.content, 'public information');
   const contentRefused = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'notes.txt' } }));
   assert.equal(contentRefused.result.isError, true);
   assert.match(contentRefused.result.structuredContent.error, /credential/i);
@@ -111,7 +124,7 @@ test('unified apply_patch uses fixed git apply and blocks .git internals', async
   const patch = ['diff --git a/a.txt b/a.txt', '--- a/a.txt', '+++ b/a.txt', '@@ -1 +1 @@', '-old', '+new', ''].join('\n');
   const applied = await server(request(2, 'tools/call', { name: 'apply_patch', arguments: { patch } }));
   assert.equal(applied.result.isError, false);
-  assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'new\n');
+  assert.equal((await readFile(join(root, 'a.txt'), 'utf8')).replace(/\r\n/g, '\n'), 'new\n');
   const unsafe = ['diff --git a/.git/config b/.git/config', '--- a/.git/config', '+++ b/.git/config', '@@ -1 +1 @@', '-a', '+b', ''].join('\n');
   const refused = await server(request(3, 'tools/call', { name: 'apply_patch', arguments: { patch: unsafe } }));
   assert.equal(refused.result.isError, true);
@@ -126,13 +139,13 @@ test('unified apply_patch uses fixed git apply and blocks .git internals', async
   assert.match(symlinkRefused.result.structuredContent.error, /Symlink/);
 });
 
-test('safe-files refuses symlink escape and performs exact replacement', async () => {
+test('safe-files refuses symlink escape and performs exact replacement', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'safe-files-'));
   const outside = await mkdtemp(join(tmpdir(), 'safe-files-outside-'));
   await mkdir(join(root, 'src'));
   await writeFile(join(root, 'src', 'a.txt'), 'alpha alpha', 'utf8');
   await writeFile(join(outside, 'secret.txt'), 'secret', 'utf8');
-  await symlink(join(outside, 'secret.txt'), join(root, 'escape.txt'));
+  if (!await createSymlinkOrSkip(t, join(outside, 'secret.txt'), join(root, 'escape.txt'))) return;
   const server = await serverFor(root, 'symlink');
   const escaped = await server(request(2, 'tools/call', { name: 'read_text_file', arguments: { path: 'escape.txt' } }));
   assert.equal(escaped.result.isError, true);

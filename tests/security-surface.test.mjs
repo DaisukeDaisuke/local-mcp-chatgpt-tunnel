@@ -46,6 +46,8 @@ test('gateway uses Codex-style generic MCP tables and honors enabled entries', a
   const loader = await readFile(new URL('../app/server-config.mjs', import.meta.url), 'utf8');
   assert.match(loader, /raw\.mcp_servers/);
   assert.match(loader, /raw\.enabled === false/);
+  assert.match(loader, /allowed_directories/);
+  assert.match(loader, /allowed_files/);
   assert.doesNotMatch(loader, /chromeMcpEntry|enabledServers|workspaceRoots|dq9Config|ghidraUrl/);
 });
 
@@ -71,14 +73,24 @@ test('child MCP environment is allowlisted instead of inheriting credentials', a
   assert.equal(environment.NODE_OPTIONS, undefined);
 });
 
-test('safe-files uses explicit root arguments without marker files', async () => {
+test('safe-files uses cwd while the gateway applies generic path allowlists', async () => {
   const filesServer = await readFile(new URL('../mcp/safe-files/server.mjs', import.meta.url), 'utf8');
-  assert.match(filesServer, /--root <path>/);
-  assert.match(filesServer, /parseSafeFilesArgs/);
+  assert.match(filesServer, /process working directory is the workspace root/i);
+  assert.doesNotMatch(filesServer, /--root <path>|parseSafeFilesArgs/);
   assert.doesNotMatch(filesServer, /chatgpt-local-mcp-root|ROOT_MARKER/);
   assert.doesNotMatch(filesServer, /name:\s*['"](?:execute|start_command|without_sandbox|shell)['"]/);
   assert.match(filesServer, /spawn\('git', args/);
   assert.match(filesServer, /spawn\('rg', args/);
+  const gateway = await readFile(new URL('../app/gateway.mjs', import.meta.url), 'utf8');
+  assert.match(gateway, /ToolPathPolicy/);
+  assert.match(gateway, /assertToolArguments/);
+});
+
+test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {
+  await assert.rejects(access(new URL('../mcp/ghidra', import.meta.url)));
+  await assert.rejects(access(new URL('../mcp/dq9-test', import.meta.url)));
+  const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.doesNotMatch(packageJson.scripts.test, /dq9-test|ghidra/);
 });
 
 test('tunnel client acquisition remains manual and uses the public release endpoint', async () => {
@@ -87,4 +99,11 @@ test('tunnel client acquisition remains manual and uses the public release endpo
   assert.match(install, /releases\/latest\/download\/SHA256SUMS\.txt/);
   assert.match(install, /Get-FileHash/);
   assert.doesNotMatch(install, /api\.github\.com/);
+});
+
+test('ChatGPT setup uses direct Developer Mode and connector creation links', async () => {
+  const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
+  assert.match(install, /chatgpt\.com\/plugins#settings\/Security\?section=developer-mode/);
+  assert.match(install, /chatgpt\.com\/plugins#settings\/Connectors\?create-connector=true/);
+  assert.match(install, /developers\.openai\.com\/plugins\/deploy\/connect-chatgpt/);
 });

@@ -31,12 +31,14 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
   const repository = resolve('.');
+  await writeFile(join(workspace, 'inside.txt'), 'inside', 'utf8');
   const config = [
     'private_use_only = true',
     '[mcp_servers.files]',
     `command = '${process.execPath}'`,
-    `args = ['${resolve('mcp/safe-files/server.mjs')}', '--root', '${workspace}']`,
-    `cwd = '${repository}'`,
+    `args = ['${resolve('mcp/safe-files/server.mjs')}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
     'enabled = true',
     'prefix = "files"'
   ].join('\n');
@@ -60,4 +62,16 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   assert.ok(names.includes('files__read_file_chunk'));
   assert.ok(names.includes('files__set_working_directory'));
   assert.ok(names.every((name) => name.startsWith('files__')));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'files__read_text_file', arguments: { path: 'inside.txt' }
+  } })}\n`);
+  const inside = await nextLine(child.stdout);
+  assert.equal(inside.result.isError, false);
+  assert.equal(inside.result.structuredContent.result.content, 'inside');
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'files__read_text_file', arguments: { path: join(tmpdir(), 'outside.txt') }
+  } })}\n`);
+  const outside = await nextLine(child.stdout);
+  assert.equal(outside.result.isError, true);
+  assert.match(outside.result.content[0].text, /outside allowed_directories/);
 });

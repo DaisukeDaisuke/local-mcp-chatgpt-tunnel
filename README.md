@@ -1,17 +1,19 @@
 # Local MCP ChatGPT Tunnel
 OpenAI公式Secure MCP Tunnelを使い、Windows上の個人用stdio MCPをChatGPT Developer Modeへ接続するためのGatewayです。独自AIハーネス、Responses API、モデルAPI課金処理、公開MCP URL、受信インターネットポートは実装しません。
 ## 設定方式
-接続するMCPは`config/gateway.toml`の`[mcp_servers.<name>]`で指定します。`command`、`args`、`cwd`、`enabled`、`env`を使うCodexに近い形式で、Gatewayコード内にDQ9、Chrome、Ghidraなどの起動設定はありません。
+接続するMCPは`config/gateway.toml`の`[mcp_servers.<name>]`で指定します。`command`、`args`、`cwd`、`enabled`、`env`を使うCodexに近い形式で、Gatewayコード内に特定MCPの起動設定はありません。Ghidra MCP、DQ9 MCP、Chrome DevTools MCPなどの第三者実装も再配布しません。
 ```toml
 private_use_only = true
 [mcp_servers.files]
 command = "node"
-args = ["mcp/safe-files/server.mjs", "--root", 'C:\work\project']
-cwd = ".."
+args = ['C:\work\local-mcp-chatgpt-tunnel\mcp\safe-files\server.mjs']
+cwd = 'C:\work\project'
 enabled = true
 prefix = "files"
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
+allowed_directories = ['C:\work\project']
+allowed_files = []
 [mcp_servers.files.env]
 EXAMPLE = "value"
 ```
@@ -34,13 +36,21 @@ tool = "prepare_browser"
 server = "controller"
 tool = "stop_browser"
 ```
+## パス許可
+Gatewayは全MCPのツール引数を再帰的に検査し、パスらしい値を`allowed_directories`と`allowed_files`へ照合します。
+```toml
+allowed_directories = ['C:\work\project']
+allowed_files = ['C:\Users\owner\Downloads\upload.png']
+```
+`allowed_directories`は指定ディレクトリとその配下、`allowed_files`は指定ファイルだけを完全一致で許可します。Windowsの`\`、`/`、JSONで二重にエスケープされた`\\`は正規化し、相対パスはMCPの`cwd`から解決します。既存パスはシンボリックリンクの実体も確認します。
+`path`、`filePath`、`files`、`directory`などのキー、または絶対パスらしい文字列を検出します。パスらしい引数が許可リスト外なら、子MCPへ渡す前に拒否します。URLはファイルパスとして扱いません。
+この検査はChatGPTからMCPへ渡る引数のガードです。悪意あるMCP自身が内部で勝手にファイルを読むことをOSレベルで防ぐものではありません。
 ## ファイルMCP
-許可パスはマーカーファイルではなく起動引数で明示します。
+`safe-files`はプロセスの`cwd`をWorkspaceルートとして使います。`--root`やマーカーファイルは不要です。
 ```powershell
 node mcp\safe-files\server.mjs --help
-node mcp\safe-files\server.mjs --root C:\work\project-a --root D:\work\project-b
 ```
-AIへhelp出力と実際のWorkspaceパスを渡せば、AIが`gateway.toml`の`args`を組み立てられます。許可ルート外、シンボリックリンク脱出、`.ssh`、`.codex`、`.git`、`.env`、鍵、資格情報らしい名前と内容は拒否します。
+AIへhelp出力、リポジトリの絶対パス、Workspaceの絶対パスを渡せば、AIが`args`、`cwd`、`allowed_directories`を組み立てられます。複数WorkspaceはMCPエントリを分けます。許可ルート外とシンボリックリンク脱出を拒否し、高確度の資格情報らしい内容も返しません。危険そうなフォルダ名を一律ブラックリスト化せず、Gatewayの明示許可パスを境界にします。
 `search_text`は固定された`rg`だけを起動します。検索式、許可ルート内の対象パス、globは指定できますが、実行ファイルや任意コマンドは指定できません。`read_file_chunk`と`write_file`は境界内のファイル転送用です。
 ## Node.jsの役割
 導入時のNode.jsスクリプトは`app/doctor.mjs`だけです。`node`、`npm`、`git`、`rg`、`py`のバージョンをすべて出力し、一つ失敗しても残りを確認します。インストール、ZIP展開、設定生成、runtime key入力、Git hook変更は行いません。

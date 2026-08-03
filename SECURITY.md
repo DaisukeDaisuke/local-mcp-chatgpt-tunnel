@@ -2,7 +2,7 @@
 ## 想定用途
 このリポジトリは一人の所有者が自分のWindows開発環境へ接続するprivate MCP Gatewayです。公開Plugin、第三者配布、共同利用、インターネット公開を想定しません。
 ## 任意MCPの危険性
-`gateway.toml`の`command`はローカルプログラムを実行します。登録したMCP自体が悪意を持つか侵害されていれば、safe-filesのパス制限とは無関係に、そのWindowsユーザーが読めるファイルへアクセスできます。信頼できるMCPだけを登録し、不要なものは`enabled = false`にします。
+`gateway.toml`の`command`はローカルプログラムを実行します。登録したMCP自体が悪意を持つか侵害されていれば、Gatewayのツール引数検査とは無関係に、そのWindowsユーザーが読めるファイルへ内部からアクセスできます。信頼できるMCPだけを登録し、不要なものは`enabled = false`にします。
 ## OS境界
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーのファイルACLまでは隔離できません。SSH鍵、GitHub、Discord、Codex、ChatGPT関連ファイルから強く分離する場合は、専用の標準Windowsユーザーを使います。
 ## Tunnelの公開範囲
@@ -10,7 +10,8 @@ Secure MCP Tunnelは外向きHTTPSでOpenAIへ接続し、ローカルMCPの受�
 ## Runtime API key
 runtime主体には`Tunnels Read + Use`だけを与えます。INSTALL.mdはruntime API keyを`tunnel-client`の引数で渡す例を示します。このリポジトリはキーを保存しませんが、コマンドライン引数はシェル履歴や同一PC上のプロセス情報から見える場合があります。必要なら公式helpにある環境変数またはファイル参照方式を使います。
 ## ファイル操作
-safe-filesの許可範囲は`--root`で渡したディレクトリだけです。マーカーファイルは使いません。ユーザープロファイル全体、その上位、許可ルート外、シンボリックリンクによる脱出を拒否します。`.ssh`、`.git`、`.codex`、`.env`、秘密鍵、資格情報らしい名前と高確度の秘密文字列は返しません。
+各MCPの`allowed_directories`と`allowed_files`が、ChatGPTから子MCPへ渡せるファイルパスを決めます。ディレクトリは配下を含み、ファイルは絶対パスの完全一致です。相対パスはMCPの`cwd`から解決し、Windows区切り文字、JSONの二重エスケープ、既存パスのシンボリックリンクを正規化してから比較します。許可リストが空のMCPでパスらしい引数を使うと拒否します。
+safe-filesは`cwd`だけをWorkspaceルートとして使い、その外側とシンボリックリンクによる脱出を拒否します。危険そうなフォルダ名の一般ブラックリストは使いません。高確度の秘密文字列は内容検査で拒否し、`.git`内部へのpatchは操作固有の制約として拒否します。
 `search_text`は固定の`rg`実行です。一般シェル、PowerShell、任意コマンドAPIはありません。`apply_patch`は専用パーサーまたは固定の`git apply`だけを使います。
 ## ファイル転送
 `read_file_chunk`と`write_file`は既定16MiB以下です。ROM、State、鍵、証明書秘密鍵、実行ファイル、DLL、MSI、PowerShell、バッチ、ショートカットを拒否します。テキストはUTF-8だけを正式対応し、UTF-16LE、UTF-16BE、UTF-32、不正UTF-8を拒否します。

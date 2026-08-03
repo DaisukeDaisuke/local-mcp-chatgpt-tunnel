@@ -34,7 +34,7 @@ Select-String -Path $sums -Pattern 'tunnel-client-v0\.0\.10-windows-amd64\.zip'
 .\.tools\tunnel-client\tunnel-client.exe help doctor
 node mcp\safe-files\server.mjs --help
 ```
-この3つの出力、読ませたいWorkspaceの絶対パス、接続したいMCPの起動コマンドをAIへ渡せば、AIが`gateway.toml`の`args`とTunnel起動コマンドを組み立てられます。`.chatgpt-local-mcp-root`のようなマーカーファイルは不要です。
+この3つの出力、リポジトリとWorkspaceの絶対パス、接続したいMCPの起動コマンドをAIへ渡せば、AIが`gateway.toml`とTunnel起動コマンドを組み立てられます。`.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。
 ## 4. gateway.tomlを自分で作る
 例をコピーして、必ず自分のパスへ書き換えます。
 ```powershell
@@ -46,17 +46,16 @@ code config\gateway.toml
 private_use_only = true
 [mcp_servers.files]
 command = "node"
-args = ["mcp/safe-files/server.mjs", "--root", 'C:\Users\owner\Documents\my-project']
-cwd = ".."
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\safe-files\server.mjs']
+cwd = 'C:\Users\owner\Documents\my-project'
 enabled = true
 prefix = "files"
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
+allowed_directories = ['C:\Users\owner\Documents\my-project']
+allowed_files = []
 ```
-複数Workspaceを許可する場合は`--root`を繰り返します。
-```toml
-args = ["mcp/safe-files/server.mjs", "--root", 'C:\work\project-a', "--root", 'D:\work\project-b']
-```
+`safe-files`は`cwd`をWorkspaceのルートとして使います。複数Workspaceが必要なら、`files_project_a`と`files_project_b`のようにMCPエントリを分け、それぞれ別の`cwd`と`prefix`を指定します。
 任意のstdio MCPも同じ形で追加できます。
 ```toml
 [mcp_servers.example]
@@ -67,10 +66,14 @@ enabled = false
 prefix = "example"
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
+allowed_directories = ['C:\work\project']
+allowed_files = ['C:\Users\owner\Downloads\one-upload-file.png']
 [mcp_servers.example.env]
 EXAMPLE_CONFIG = 'C:\path\to\config.json'
 ```
-`enabled = false`なら起動しません。GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。現在のGatewayが直接集約するのは`command`で起動するstdio MCPです。
+`allowed_directories`は指定ディレクトリとその配下を許可します。`allowed_files`は列挙した絶対パスだけを完全一致で許可します。Chrome DevTools MCPのアップロード元など、Workspace全体を許可する必要がないファイルは`allowed_files`へ一つずつ書きます。Windowsの`\`と`/`、JSONで二重にエスケープされた`\\`は正規化して比較され、相対パスはそのMCPの`cwd`から解決されます。
+Gatewayは全MCPのツール引数を再帰的に検査します。`path`、`filePath`、`files`、`directory`などのパスらしいキー、または絶対パスらしい文字列を検出し、許可リスト外なら子MCPへ渡しません。パス引数を持たないツールは許可リストが空でも動きます。
+`enabled = false`なら起動しません。GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。現在のGatewayが直接集約するのは`command`で起動するstdio MCPです。Ghidra MCPやDQ9 MCPの実装は同梱せず、必要な外部MCPを利用者自身が設定します。
 Codex設定からコピーする場合、`tool_output_token_limit`と`[mcp_servers.<name>.tools.<tool>]`の承認設定は削除してください。Gatewayはトークン数の計測やCodexの承認UIを持たないため、これらが書かれている有効MCPは明示エラーにします。
 ## 5. Node.jsで最終検証する
 Node.jsが導入作業を変更することはありません。次のコマンドは`node`、`npm`、`git`、`rg`、`py`を全部確認し、途中の失敗で止まらず、最後に問題のあるコマンドをまとめます。バージョン番号が例と違うだけでは失敗にしません。
@@ -115,10 +118,14 @@ Remove-Item Env:OPENAI_TUNNEL_API_KEY
 ```
 `--control-plane.api-key=sk-...`のように生のキーを引数へ直接書く例は使いません。現在のhelpが案内する形式は`env:VARNAME`または`file:/path/to/secret`です。生のキーをコマンド履歴やプロセス引数へ残さず、Node.jsラッパーも追加しません。
 ## 9. ChatGPTへ接続する
-次のページを開きます。
+最初にDeveloper modeを直接開き、有効にします。
 ```text
-https://chatgpt.com/plugins
+https://chatgpt.com/plugins#settings/Security?section=developer-mode
+```
+次に新しいカスタムアプリ作成画面を直接開きます。
+```text
+https://chatgpt.com/plugins#settings/Connectors?create-connector=true
 https://developers.openai.com/plugins/deploy/connect-chatgpt
 ```
-ChatGPTのDeveloper modeを有効にし、プラスボタンから開発用Pluginを作ります。Connectionで`Tunnel`を選び、先ほど作成したTunnelを選択します。一覧に出ない場合は、Tunnelへ自分のChatGPT Workspaceが関連付けられているか確認します。
+名前と説明を入力し、Connectionで`Tunnel`を選び、先ほど作成したTunnelを選択します。Tunnelが選べない場合は、Tunnelへ自分のChatGPT Workspaceが関連付けられているか確認します。カスタムMCPの警告を読み、個人用Tunnelであることを確認して作成します。
 表示されたツール名を確認し、想定外のMCPがあれば`gateway.toml`で`enabled = false`にしてTunnelを再起動します。公開申請や第三者共有は行いません。

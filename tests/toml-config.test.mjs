@@ -36,6 +36,8 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     'deferred = true',
     'serial_group = "browser"',
     'blocked_tools = ["dangerous"]',
+    "allowed_directories = ['C:\\work\\project']",
+    "allowed_files = ['C:\\Users\\owner\\Downloads\\upload.png']",
     '[mcp_servers.alpha.env]',
     'CONFIG = "alpha.json"',
     '[mcp_servers.alpha.start_after]',
@@ -55,6 +57,20 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.equal(config.servers[0].serialGroup, 'browser');
   assert.deepEqual(config.servers[0].startAfter, { server: 'controller', tool: 'prepare' });
   assert.equal(config.servers[0].blockedTools.has('dangerous'), true);
+  assert.deepEqual(config.servers[0].allowedDirectories, ['C:\\work\\project']);
+  assert.deepEqual(config.servers[0].allowedFiles, ['C:\\Users\\owner\\Downloads\\upload.png']);
+});
+
+test('gateway path allowlists require absolute paths', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-relative-path-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'allowed_directories = ["relative/project"]'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /must be absolute paths/);
 });
 
 test('gateway rejects Codex-only token and approval settings instead of silently ignoring them', async () => {

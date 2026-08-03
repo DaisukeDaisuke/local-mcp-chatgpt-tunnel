@@ -12,9 +12,5 @@ node_modules/
 *.pem
 *.pub
 tunnel-runtime-key
-mcp/dq9-test/config/local-runtime.json
-mcp/dq9-test/config/local-dependencies.json
-mcp/dq9-test/runtime/
-mcp/dq9-test/artifacts/
 profile-*/
 /.idea

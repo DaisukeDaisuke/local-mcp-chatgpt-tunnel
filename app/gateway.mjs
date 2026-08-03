@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { scrubSecretEnvironment } from './child-environment.mjs';
+import { ToolPathPolicy } from './path-policy.mjs';
 import { StdioMcpChild } from './stdio-child.mjs';
 import { loadGatewayConfig } from './server-config.mjs';
 import { assertNotElevatedWindows } from './windows-integrity.mjs';
@@ -85,7 +86,14 @@ async function startChild(childConfig) {
         notifyToolsChanged();
       }
     });
+    child.pathPolicy = new ToolPathPolicy({
+      serverName: childConfig.name,
+      cwd: childConfig.cwd,
+      allowedDirectories: childConfig.allowedDirectories,
+      allowedFiles: childConfig.allowedFiles
+    });
     try {
+      await child.pathPolicy.allowed();
       await child.start();
     } catch (error) {
       await child.close().catch(() => {});
@@ -136,7 +144,7 @@ async function handle(request) {
     return response(request.id, {
       protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
       capabilities: { tools: { listChanged: true } },
-      serverInfo: { name: 'local-mcp-gateway', version: '0.4.0' },
+      serverInfo: { name: 'local-mcp-gateway', version: '0.5.0' },
       instructions: 'Private stdio MCP gateway for ChatGPT Secure MCP Tunnel. Enabled child servers come only from gateway.toml, and public tool names are namespaced.'
     });
   }
@@ -151,9 +159,11 @@ async function handle(request) {
     const route = toolRoutes.get(request.params?.name);
     if (!route) return errorResponse(request.id, -32602, `Unknown tool: ${request.params?.name ?? ''}`);
     try {
+      const toolArguments = request.params?.arguments ?? {};
+      await route.child.pathPolicy.assertToolArguments(route.originalName, toolArguments);
       const result = await queues.run(route.child.config.serialGroup, () => route.child.request('tools/call', {
         name: route.originalName,
-        arguments: request.params?.arguments ?? {}
+        arguments: toolArguments
       }));
       await applyLifecycle(route, result);
       return response(request.id, result);

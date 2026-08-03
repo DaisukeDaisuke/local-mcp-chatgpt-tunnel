@@ -2,9 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const MAX_TEXT_BYTES = Number(process.env.SAFE_FILES_MAX_BYTES ?? 2 * 1024 * 1024);
@@ -19,42 +17,19 @@ const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]
 export const SAFE_FILES_HELP = `safe-files MCP
 
 Usage:
-  node mcp/safe-files/server.mjs --root <workspace> [--root <workspace> ...]
+  node mcp/safe-files/server.mjs
 
 Options:
-  --root <path>  Explicitly allow one workspace root. Repeat for multiple roots.
-  --help         Print this help and exit.
+  --help  Print this help and exit.
 
-Relative roots are resolved from the command working directory. A root does not need a marker file.
-Do not pass a user profile, drive root, .ssh, .codex, credential store, or password directory.
-Credential-like paths and contents remain blocked even when they are below an allowed root.
+The process working directory is the workspace root. Set cwd in gateway.toml instead of passing --root.
+When exposed through the gateway, add the same absolute directory to allowed_directories.
+Run one safe-files entry per workspace when you need multiple roots.
 `;
 
-export function parseSafeFilesArgs(argv = process.argv.slice(2), cwd = process.cwd()) {
-  const parsed = parseArgs({
-    args: argv,
-    options: {
-      root: { type: 'string', multiple: true },
-      help: { type: 'boolean', short: 'h' }
-    },
-    strict: true,
-    allowPositionals: false
-  });
-  return { help: parsed.values.help === true, roots: (parsed.values.root ?? []).map((root) => resolve(cwd, root)) };
-}
+const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
+const configuredRoots = cli.help ? [] : JSON.parse(process.env.SAFE_FILES_ROOTS ?? JSON.stringify([process.cwd()]));
 
-const cli = directExecution ? parseSafeFilesArgs() : { help: false, roots: [] };
-const configuredRoots = cli.help ? [] : cli.roots.length > 0 ? cli.roots : JSON.parse(process.env.SAFE_FILES_ROOTS ?? '[]');
-
-const BLOCKED_COMPONENTS = new Set([
-  '.aws', '.azure', '.codex', '.docker', '.git', '.gnupg', '.kube', '.secrets', '.ssh',
-  'credentials', 'secrets'
-]);
-const BLOCKED_EXACT_NAMES = new Set([
-  '.git-credentials', '.netrc', '.npmrc', '.pypirc', 'authorized_keys', 'credentials.json',
-  'id_dsa', 'id_ecdsa', 'id_ed25519', 'id_rsa', 'known_hosts', 'passwords.txt',
-  'secrets.json', 'tokens.json'
-]);
 const BLOCKED_SECRET_EXTENSIONS = new Set(['.key', '.kdbx', '.p12', '.pem', '.pfx', '.ppk', '.pub']);
 const BLOCKED_TRANSFER_EXTENSIONS = new Set(['.dsv', '.dst', '.nds', '.sav', ...BLOCKED_SECRET_EXTENSIONS]);
 const BLOCKED_BINARY_WRITE_EXTENSIONS = new Set(['.bat', '.cmd', '.com', '.dll', '.exe', '.lnk', '.msi', '.ps1', '.scr']);
@@ -79,7 +54,7 @@ const toolResult = (value, isError = false) => ({
 const schemas = [
   {
     name: 'roots',
-    description: 'List explicitly allowed workspace roots and the current working directory.',
+    description: 'List the process working directory used as the workspace root.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -89,7 +64,7 @@ const schemas = [
   },
   {
     name: 'set_working_directory',
-    description: 'Change the relative-path base to an existing directory inside an explicitly allowed workspace root.',
+    description: 'Change the relative-path base to an existing directory inside the process working directory.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -99,7 +74,7 @@ const schemas = [
   },
   {
     name: 'list_directory',
-    description: 'List one workspace directory. Credential-like files and directories are omitted.',
+    description: 'List one directory inside the workspace root.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -109,7 +84,7 @@ const schemas = [
   },
   {
     name: 'search_text',
-    description: 'Search UTF-8 workspace text with ripgrep. The executable and arguments are fixed; paths outside roots and credential-like paths are rejected.',
+    description: 'Search UTF-8 workspace text with ripgrep. The executable and arguments are fixed; paths outside the workspace root are rejected.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -126,7 +101,7 @@ const schemas = [
   },
   {
     name: 'read_text_file',
-    description: 'Read a UTF-8 workspace file. UTF-16, UTF-32, invalid UTF-8, credential-like paths, and detected credentials are rejected.',
+    description: 'Read a UTF-8 workspace file. UTF-16, UTF-32, invalid UTF-8, and detected credentials are rejected.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -136,7 +111,7 @@ const schemas = [
   },
   {
     name: 'read_file_chunk',
-    description: 'Transfer a bounded chunk of a non-secret workspace file as base64. ROM, state, key, and credential-like files are rejected.',
+    description: 'Transfer a bounded chunk of a non-secret workspace file as base64. ROM, state, and key file types are rejected.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -220,37 +195,21 @@ const schemas = [
 const within = (root, candidate) => candidate === root || candidate.startsWith(`${root}${sep}`);
 const rootFor = (allowed, candidate) => allowed.find((root) => within(root, candidate));
 
-function isBlockedName(name) {
-  const lower = name.toLowerCase();
-  if (BLOCKED_COMPONENTS.has(lower) || BLOCKED_EXACT_NAMES.has(lower)) return true;
-  if (lower === '.env' || lower.startsWith('.env.')) return true;
-  if (/^(?:passwords?|credentials?|secrets?|tokens?|cookies?)(?:\.|$)/i.test(lower)) return true;
-  return BLOCKED_SECRET_EXTENSIONS.has(extname(lower));
-}
-
 function assertSafePath(root, candidate) {
   const relativePath = relative(root, candidate);
   if (relativePath === '') return;
   if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) throw new Error('Path escaped the allowed workspace root');
-  const parts = relativePath.split(/[\\/]+/);
-  const blocked = parts.find((part) => isBlockedName(part));
-  if (blocked) throw new Error(`Credential-like path is not accessible: ${blocked}`);
 }
 
 let rootsPromise;
 let workingDirectoryPromise;
 const roots = () => {
   if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
-    return Promise.reject(new Error('No workspace roots are configured. Run with --help, then pass at least one --root path'));
+    return Promise.reject(new Error('No workspace root is configured'));
   }
   rootsPromise ??= Promise.all(configuredRoots.map(async (root) => {
     if (typeof root !== 'string') throw new Error('Workspace roots must be strings');
-    const actual = await realpath(resolve(root));
-    const home = resolve(homedir());
-    if (within(actual, home)) throw new Error(`Workspace root may not be a user profile or its ancestor: ${actual}`);
-    const blockedRootPart = actual.split(/[\\/]+/).find((part) => isBlockedName(part));
-    if (blockedRootPart) throw new Error(`Workspace root contains a credential-like path component: ${blockedRootPart}`);
-    return actual;
+    return realpath(resolve(root));
   }));
   return rootsPromise;
 };
@@ -402,7 +361,7 @@ function validatePatchPath(path) {
   if (typeof path !== 'string' || path.trim() === '' || isAbsolute(path)) throw new Error(`Unsafe patch path: ${path}`);
   const parts = path.split(/[\\/]+/);
   if (parts.includes('..')) throw new Error(`Unsafe patch path: ${path}`);
-  if (parts.some((part) => isBlockedName(part))) throw new Error(`Credential-like patch path is not allowed: ${path}`);
+  if (parts.some((part) => part.toLowerCase() === '.git')) throw new Error(`Git internals are not patch targets: ${path}`);
 }
 
 function applyUpdateHunks(current, body, path) {
@@ -558,16 +517,7 @@ async function searchText(args) {
   const command = ['--json', '--color=never', '--hidden', '--max-filesize', String(MAX_TEXT_BYTES)];
   if (args.fixedStrings === true) command.push('--fixed-strings');
   if (args.caseSensitive === false) command.push('--ignore-case');
-  const deniedGlobs = [
-    '!**/.git/**', '!**/.ssh/**', '!**/.gnupg/**', '!**/.aws/**',
-    '!**/.azure/**', '!**/.kube/**', '!**/.docker/**', '!**/.codex/**', '!**/.secrets/**',
-    '!**/credentials/**', '!**/secrets/**', '!**/.env', '!**/.env.*', '!**/.git-credentials',
-    '!**/.netrc', '!**/.npmrc', '!**/.pypirc', '!**/authorized_keys', '!**/credentials.json',
-    '!**/id_dsa', '!**/id_ecdsa', '!**/id_ed25519', '!**/id_rsa', '!**/known_hosts',
-    '!**/passwords.txt', '!**/secrets.json', '!**/tokens.json', '!**/*.key', '!**/*.pem',
-    '!**/*.p12', '!**/*.pfx', '!**/*.ppk', '!**/*.pub'
-  ];
-  for (const glob of [...(args.globs ?? []), ...deniedGlobs]) {
+  for (const glob of args.globs ?? []) {
     if (typeof glob !== 'string' || glob.includes('\0')) throw new Error('Invalid glob');
     command.push('--glob', glob);
   }
@@ -614,18 +564,9 @@ async function callTool(name, args = {}) {
       const target = await resolveExisting(args.path);
       if (!(await stat(target.path)).isDirectory()) throw new Error('Path is not a directory');
       const entries = await readdir(target.path, { withFileTypes: true });
-      let blockedEntries = 0;
-      const visible = entries.filter((entry) => {
-        if (isBlockedName(entry.name)) {
-          blockedEntries += 1;
-          return false;
-        }
-        return true;
-      });
       return {
         path: target.path,
-        blockedEntries,
-        entries: visible.sort((a, b) => a.name.localeCompare(b.name)).map((entry) => ({
+        entries: entries.sort((a, b) => a.name.localeCompare(b.name)).map((entry) => ({
           name: entry.name,
           type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'other'
         }))
@@ -720,8 +661,8 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-files', version: '3.0.0' },
-        instructions: 'Workspace-only UTF-8 editing, fixed ripgrep search, and bounded file transfer. User profiles, credential-like paths, shell access, and arbitrary commands are unavailable.'
+        serverInfo: { name: 'safe-files', version: '4.0.0' },
+        instructions: 'Current-working-directory UTF-8 editing, fixed ripgrep search, and bounded file transfer. The gateway enforces configured path allowlists before tool calls are forwarded.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
@@ -760,8 +701,8 @@ export async function startStdio(input = process.stdin, output = process.stdout)
 
 if (directExecution) {
   if (cli.help) process.stdout.write(SAFE_FILES_HELP);
-  else if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
-    process.stderr.write('No workspace roots were provided. Run with --help and add at least one --root path.\n');
+  else if (process.argv.slice(2).length > 0) {
+    process.stderr.write('Unknown argument. Run with --help.\n');
     process.exitCode = 2;
   } else await startStdio();
 }

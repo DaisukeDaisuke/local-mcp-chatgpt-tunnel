@@ -38,7 +38,7 @@ export class StdioMcpChild {
     await this.request('initialize', {
       protocolVersion: DEFAULT_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'local-mcp-gateway', version: '0.4.0' }
+      clientInfo: { name: 'local-mcp-gateway', version: '0.5.0' }
     }, this.config.startupTimeoutMs);
     this.notify('notifications/initialized', {});
     await this.refreshTools();
