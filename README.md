@@ -109,7 +109,12 @@ server = "controller"
 tool = "stop_browser"
 ```
 ## セキュリティ上の前提
-`gateway.toml`の`command`はローカルプログラムを実行します。信頼できるMCPだけを登録してください。
+> [!WARNING]
+> `gateway.toml`の`command`はローカルプログラムを実行します。信頼できるMCPだけを登録してください。
+> コマンドによっては、ネット上のmcpプログラムを直接取得して実行するものもあります。
+> gateway.tomlによるコマンド指定は、サンドボックス状ではなく、実際にユーザー権限のパソコン上としてプログラムとして実行されます。
+> 信頼できないmcpを指定しないでください。
+
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。
 Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。
 ## 診断とテスト
