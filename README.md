@@ -57,6 +57,7 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 | `safe-files` | `list_files`、`search_text`、`read_text_file`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、読み書き、限定されたパッチ適用 |
 | `safe-images` | `read_image` | PNG、JPEG、WebPをChatGPTの画像コンテンツとして読み取る |
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
+| `gitmcp` | `status`、`diff`、`log`、`branches`、`switch_branch`、`add_all`、`commit`、`push`、`pull`、`clone_repository` | 許可したリポジトリに対する限定されたGit操作 |
 同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。<br>
 ### safe-files
 `safe-files`は、`gateway.toml`で指定された`cwd`をプロセスの作業ディレクトリ兼Workspaceルートとして使います。<br>
@@ -74,6 +75,10 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 ### safe-download
 `safe-download`は読み取り専用で、単一ファイルまたはディレクトリを常にZIPとして返します。`safe-files`とは別の`cwd`と許可リストを設定し、ChatGPTへ渡してよいソースだけを公開します。<br>
 ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。<br>
+### gitmcp
+`gitmcp`は、許可されたディレクトリ内のGitリポジトリに対して、固定されたGitサブコマンドとオプションだけを実行します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、force push、任意refspecには対応しません。<br>
+`status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、ブランチ切り替え、`git add --all -- .`、commitを利用できます。`push`、`pull`、cloneは起動引数で個別に無効化でき、設定例では`pull`とcloneを無効にしています。cloneでは固定の`--recurse-submodules`を選択できます。<br>
+`repositoryPath`へサブモジュールや入れ子のGitリポジトリを直接指定すると、そのリポジトリ自身のstatus、diff、logなどを取得できます。親リポジトリ配下を再帰探索して、すべての入れ子リポジトリを自動列挙するツールは含みません。<br>
 ## 任意のstdio MCPを追加する
 接続するMCPの起動コマンドや引数は、Gateway本体ではなく`config/gateway.toml`の`[mcp_servers.<name>]`へ記述します。<br>
 ```toml
