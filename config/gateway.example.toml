@@ -1,0 +1,28 @@
+private_use_only = true
+
+# Replace the placeholder with the workspace that ChatGPT may access.
+# Run `node mcp/safe-files/server.mjs --help` before editing this command.
+[mcp_servers.files]
+command = "node"
+args = ["mcp/safe-files/server.mjs", "--root", 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+cwd = ".."
+enabled = true
+prefix = "files"
+startup_timeout_sec = 30
+tool_timeout_sec = 1800
+
+# Add any other stdio MCP in the same Codex-style shape.
+# `enabled = false` keeps an entry without starting it.
+#
+# [mcp_servers.my_server]
+# command = "py"
+# args = ['C:\path\to\server.py']
+# cwd = 'C:\path\to'
+# enabled = false
+# prefix = "my_server"
+# startup_timeout_sec = 30
+# tool_timeout_sec = 1800
+# blocked_tools = ["dangerous_tool"]
+#
+# [mcp_servers.my_server.env]
+# EXAMPLE_CONFIG = 'C:\path\to\config.json'

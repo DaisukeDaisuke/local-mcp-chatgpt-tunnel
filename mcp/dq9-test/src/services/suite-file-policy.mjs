@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { RelayError } from '../util/errors.mjs';
@@ -25,9 +25,9 @@ const CREDENTIAL_PATTERNS = [
 
 const within = (root, candidate) => candidate === root || candidate.startsWith(`${root}${sep}`);
 
-function blockedName(name, marker) {
+function blockedName(name) {
   const lower = name.toLowerCase();
-  if (lower === marker.toLowerCase() || BLOCKED_COMPONENTS.has(lower) || BLOCKED_NAMES.has(lower)) return true;
+  if (BLOCKED_COMPONENTS.has(lower) || BLOCKED_NAMES.has(lower)) return true;
   if (lower === '.env' || lower.startsWith('.env.')) return true;
   return /^(?:passwords?|credentials?|secrets?|tokens?|cookies?)(?:\.|$)/i.test(lower);
 }
@@ -47,32 +47,30 @@ function decodeUtf8(bytes) {
   }
 }
 
-async function validatedRoots(configuredRoots, marker) {
+async function validatedRoots(configuredRoots) {
   if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
-    throw new RelayError('SUITE_ROOTS_NOT_CONFIGURED', 'No marked workspace roots are configured for battle suites');
+    throw new RelayError('SUITE_ROOTS_NOT_CONFIGURED', 'No workspace roots are configured for battle suites');
   }
   return Promise.all(configuredRoots.map(async (root) => {
     if (typeof root !== 'string' || !isAbsolute(root)) throw new RelayError('SUITE_ROOT_INVALID', 'Suite workspace roots must be absolute paths');
     const actual = await realpath(root).catch(() => { throw new RelayError('SUITE_ROOT_INVALID', 'Suite workspace root is not readable', { root }); });
     const home = resolve(homedir());
     if (within(actual, home)) throw new RelayError('SUITE_ROOT_INVALID', 'Suite workspace root may not be a user profile or its ancestor', { root: actual });
-    if (actual.split(/[\\/]+/).some((part) => blockedName(part, marker))) throw new RelayError('SUITE_ROOT_INVALID', 'Suite workspace root contains a credential-like component', { root: actual });
-    const markerInfo = await lstat(join(actual, marker)).catch(() => null);
-    if (!markerInfo?.isFile() || markerInfo.isSymbolicLink()) throw new RelayError('SUITE_ROOT_UNMARKED', `Suite workspace root is missing a regular ${marker} marker`, { root: actual });
+    if (actual.split(/[\\/]+/).some((part) => blockedName(part))) throw new RelayError('SUITE_ROOT_INVALID', 'Suite workspace root contains a credential-like component', { root: actual });
     return actual;
   }));
 }
 
-export async function loadAllowedSuiteFile(path, { roots, marker = '.chatgpt-local-mcp-root' } = {}) {
+export async function loadAllowedSuiteFile(path, { roots } = {}) {
   if (typeof path !== 'string' || !path || path.includes('\0')) throw new RelayError('INVALID_SUITE_PATH', 'suitePath must be a valid local JSON path');
-  const allowedRoots = await validatedRoots(roots, marker);
+  const allowedRoots = await validatedRoots(roots);
   const candidate = resolve(isAbsolute(path) ? path : join(allowedRoots[0], path));
   const selectedRoot = allowedRoots.find((root) => within(root, candidate));
-  if (!selectedRoot) throw new RelayError('SUITE_PATH_OUTSIDE_WORKSPACE', 'Suite path is outside all marked workspace roots');
+  if (!selectedRoot) throw new RelayError('SUITE_PATH_OUTSIDE_WORKSPACE', 'Suite path is outside all configured workspace roots');
   const actual = await realpath(candidate).catch(() => { throw new RelayError('SUITE_NOT_FOUND', 'Suite file is not readable', { path: candidate }); });
-  if (!within(selectedRoot, actual)) throw new RelayError('SUITE_PATH_OUTSIDE_WORKSPACE', 'Resolved suite path escaped the marked workspace root');
+  if (!within(selectedRoot, actual)) throw new RelayError('SUITE_PATH_OUTSIDE_WORKSPACE', 'Resolved suite path escaped the configured workspace root');
   const relativePath = relative(selectedRoot, actual);
-  if (relativePath.split(/[\\/]+/).some((part) => blockedName(part, marker))) throw new RelayError('SUITE_PATH_BLOCKED', 'Credential-like suite paths are not accessible');
+  if (relativePath.split(/[\\/]+/).some((part) => blockedName(part))) throw new RelayError('SUITE_PATH_BLOCKED', 'Credential-like suite paths are not accessible');
   if (extname(actual).toLowerCase() !== '.json') throw new RelayError('INVALID_SUITE_PATH', 'Battle suite must be a .json file');
   const info = await stat(actual);
   if (!info.isFile()) throw new RelayError('INVALID_SUITE_PATH', 'Battle suite path is not a regular file');

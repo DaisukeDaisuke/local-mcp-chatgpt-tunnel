@@ -1,28 +1,51 @@
-# DQ9 ChatGPT Local MCP
-ChatGPT Developer ModeからOpenAI公式Secure MCP Tunnelを通して、Windows上の個人用MCPへ接続するリポジトリです。独自AIハーネス、Responses API、モデル呼出し、課金処理、公開MCP URL、受信インターネットポートは実装しません。
-## 最初に読むもの
-導入とruntime API keyの手順は`INSTALL.md`に分離しました。一括インストールPowerShell、管理者権限スクリプト、キー保存スクリプトは廃止しています。
-## 構成
-```text
-ChatGPT Developer Mode（自分のWorkspaceだけ）
-  ↓ OpenAI Secure MCP Tunnel
-tunnel-client.exe（外向きHTTPSのみ）
-  ↓ stdio
-Node.js gateway
-  ├─ files__*  明示許可Workspaceだけを読む、rg検索、編集、ファイル転送
-  ├─ dq9__*    DQ9 Test MCP
-  ├─ chrome__* Chrome DevTools MCP
-  └─ ghidra__* Ghidra MCP bridge
+# Local MCP ChatGPT Tunnel
+OpenAI公式Secure MCP Tunnelを使い、Windows上の個人用stdio MCPをChatGPT Developer Modeへ接続するためのGatewayです。独自AIハーネス、Responses API、モデルAPI課金処理、公開MCP URL、受信インターネットポートは実装しません。
+## 設定方式
+接続するMCPは`config/gateway.toml`の`[mcp_servers.<name>]`で指定します。`command`、`args`、`cwd`、`enabled`、`env`を使うCodexに近い形式で、Gatewayコード内にDQ9、Chrome、Ghidraなどの起動設定はありません。
+```toml
+private_use_only = true
+[mcp_servers.files]
+command = "node"
+args = ["mcp/safe-files/server.mjs", "--root", 'C:\work\project']
+cwd = ".."
+enabled = true
+prefix = "files"
+startup_timeout_sec = 30
+tool_timeout_sec = 1800
+[mcp_servers.files.env]
+EXAMPLE = "value"
 ```
-gatewayとファイルMCPはstdioだけを使用し、公開HTTPサーバーを作りません。Secure MCP TunnelはローカルMCPを公開インターネットへ出さずに接続する仕組みです。
+`enabled = false`のMCPは起動しません。Gatewayは有効なstdio MCPだけを子プロセスとして起動し、ツール名を`<prefix>__<tool>`へ名前空間化します。
+Codex固有の`tool_output_token_limit`とツール別`approval_mode`は実装していません。有効MCPに書かれている場合は、効いたように見せず設定エラーにします。
+競合を避けるため同時実行を直列化する場合は`serial_group`、公開したくないツールは`blocked_tools`を指定できます。別MCPのツール成功後だけ起動・停止する構成も設定側へ書けます。
+```toml
+[mcp_servers.browser]
+command = "node"
+args = ["browser-server.mjs"]
+cwd = ".."
+enabled = true
+deferred = true
+serial_group = "browser"
+blocked_tools = ["dangerous_tool"]
+[mcp_servers.browser.start_after]
+server = "controller"
+tool = "prepare_browser"
+[mcp_servers.browser.stop_after]
+server = "controller"
+tool = "stop_browser"
+```
+## ファイルMCP
+許可パスはマーカーファイルではなく起動引数で明示します。
+```powershell
+node mcp\safe-files\server.mjs --help
+node mcp\safe-files\server.mjs --root C:\work\project-a --root D:\work\project-b
+```
+AIへhelp出力と実際のWorkspaceパスを渡せば、AIが`gateway.toml`の`args`を組み立てられます。許可ルート外、シンボリックリンク脱出、`.ssh`、`.codex`、`.git`、`.env`、鍵、資格情報らしい名前と内容は拒否します。
+`search_text`は固定された`rg`だけを起動します。検索式、許可ルート内の対象パス、globは指定できますが、実行ファイルや任意コマンドは指定できません。`read_file_chunk`と`write_file`は境界内のファイル転送用です。
+## Node.jsの役割
+導入時のNode.jsスクリプトは`app/doctor.mjs`だけです。`node`、`npm`、`git`、`rg`、`py`のバージョンをすべて出力し、一つ失敗しても残りを確認します。インストール、ZIP展開、設定生成、runtime key入力、Git hook変更は行いません。
+Gateway本体と同梱MCPは実行時にNode.jsを使います。Tunnelの初期化、診断、起動は公式`tunnel-client.exe`を直接実行します。
 ## 個人専用
-このMCPは任意コード実行能力を含むローカル開発環境向けです。Tunnelの関連付け先は自分のPlatform Organizationと自分のChatGPT Workspaceだけに限定し、Pluginの公開申請、他人への配布、共有Workspaceへの登録を行わないでください。`config/gateway.json`は`"privateUseOnly": true`がないと起動しません。
-## ファイル境界
-`workspaceRoots`に書いたディレクトリでも、直下に`.chatgpt-local-mcp-root`がなければ拒否します。ユーザープロファイル全体やその上位ディレクトリは許可できません。`.ssh`、`.git`、`.codex`、`.env`、秘密鍵、資格情報らしいファイルはルート内にあっても読みません。
-`files__search_text`は固定引数で`rg`を起動します。任意コマンドや任意引数は渡せません。`files__read_file_chunk`と`files__write_file`は16MiB以下のファイル転送用で、ROM、State、鍵、実行ファイル、PowerShellやバッチは拒否します。DQ9の`run_cases`も同じ明示許可Workspace内のUTF-8 JSONだけを読みます。
-## OS権限の限界
-パス検査はChatGPTへ公開するファイルAPIを制限しますが、同じWindowsユーザーで動くMCPプログラム自体をOSサンドボックス化するものではありません。ownerアカウントのSSH鍵、Discord、GitHub、ChatGPT情報を本当に隔離するには、専用の標準Windowsユーザーでこのリポジトリ、Chrome専用プロファイル、Ghidra、ROM、Stateだけを管理してください。管理者PowerShellでは起動しないでください。
-## 公式資料
-https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
-https://developers.openai.com/plugins/deploy/connect-chatgpt
-https://github.com/openai/tunnel-client/releases/latest
+このGatewayへ任意コード実行能力を持つMCPを登録できます。Tunnelは自分のOrganizationと自分のChatGPT Workspaceだけに関連付け、共有・公開しないでください。OSレベルで資格情報を隔離する必要がある場合は、専用の標準Windowsユーザーを使います。
+## 導入
+手順は`INSTALL.md`にあります。

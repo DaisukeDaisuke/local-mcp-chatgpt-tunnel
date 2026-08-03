@@ -32,11 +32,10 @@ export const validateSuite = (suite) => {
 };
 
 export class RunService {
-  constructor({ runtimeManager, artifactStore, allowedSuiteRoots = [], workspaceRootMarker = '.chatgpt-local-mcp-root', loadSuiteFile = loadAllowedSuiteFile } = {}) {
+  constructor({ runtimeManager, artifactStore, allowedSuiteRoots = [], loadSuiteFile = loadAllowedSuiteFile } = {}) {
     this.runtimeManager = runtimeManager;
     this.artifactStore = artifactStore;
     this.allowedSuiteRoots = allowedSuiteRoots;
-    this.workspaceRootMarker = workspaceRootMarker;
     this.loadSuiteFile = loadSuiteFile;
     this.runs = new Map();
     this.runtimeManager.onStopping?.(() => this.#markStopped());
@@ -44,7 +43,7 @@ export class RunService {
 
   async start(suitePath) {
     if (typeof suitePath !== 'string' || !suitePath) throw new RelayError('INVALID_SUITE_PATH', 'suitePath must be a local JSON file path');
-    const loaded = await this.loadSuiteFile(suitePath, { roots: this.allowedSuiteRoots, marker: this.workspaceRootMarker });
+    const loaded = await this.loadSuiteFile(suitePath, { roots: this.allowedSuiteRoots });
     const resolvedPath = loaded.path;
     const source = loaded.text;
     const cases = validateSuite(parseJson(source, 'Suite'));

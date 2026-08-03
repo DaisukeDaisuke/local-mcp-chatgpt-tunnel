@@ -1,22 +1,11 @@
 {
-  "name": "dq9-chatgpt-local-mcp",
-  "version": "0.3.0",
+  "name": "local-mcp-chatgpt-tunnel",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=24.17.0 <25"
-  },
   "scripts": {
-    "gateway": "node app/gateway-launcher.mjs",
+    "gateway": "node app/gateway.mjs --config config/gateway.toml",
     "doctor": "node app/doctor.mjs",
-    "init:workspace": "node scripts/node/init-workspace.mjs",
-    "hooks:enable": "node scripts/node/enable-git-hooks.mjs",
-    "tunnel:init": "node scripts/node/initialize-tunnel.mjs",
-    "tunnel:doctor": "node scripts/node/doctor-tunnel.mjs",
-    "tunnel:run": "node scripts/node/run-tunnel.mjs",
     "test": "node --test tests/*.test.mjs mcp/dq9-test/tests/artifact-store.test.mjs mcp/dq9-test/tests/battle-runtime-profile.test.mjs mcp/dq9-test/tests/browser-launcher.test.mjs mcp/dq9-test/tests/cdp-client.test.mjs mcp/dq9-test/tests/contract-freeze.test.mjs mcp/dq9-test/tests/mcp-server.test.mjs mcp/dq9-test/tests/rng-lcg.test.mjs mcp/dq9-test/tests/runtime-manager.test.mjs"
-  },
-  "dependencies": {
-    "chrome-devtools-mcp": "1.6.0"
   }
 }

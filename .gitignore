@@ -4,8 +4,7 @@
 .venv/
 .runtime/
 workspace/
-config/dq9-runtime.json
-config/gateway.json
+config/gateway.toml
 node_modules/
 *.log
 *.pid

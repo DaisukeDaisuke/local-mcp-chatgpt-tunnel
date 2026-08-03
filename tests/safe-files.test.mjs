@@ -7,7 +7,6 @@ import test from 'node:test';
 const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
 
 async function serverFor(root, suffix) {
-  await writeFile(join(root, '.chatgpt-local-mcp-root'), 'allowed\n', 'utf8');
   process.env.SAFE_FILES_ROOTS = JSON.stringify([root]);
   const { createServer } = await import(`../mcp/safe-files/server.mjs?test=${suffix}-${Date.now()}`);
   const server = createServer();
@@ -32,7 +31,7 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   assert.match(result.result.structuredContent.error, /UTF-16/);
 });
 
-test('ripgrep search and file transfer stay inside marked workspace', async () => {
+test('ripgrep search and file transfer stay inside an explicitly configured workspace', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safe-files-'));
   await mkdir(join(root, 'src'));
   await writeFile(join(root, 'src', 'a.txt'), 'alpha\nbeta\n', 'utf8');

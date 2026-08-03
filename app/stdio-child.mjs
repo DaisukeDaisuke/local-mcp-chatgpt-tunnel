@@ -38,8 +38,8 @@ export class StdioMcpChild {
     await this.request('initialize', {
       protocolVersion: DEFAULT_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'dq9-local-mcp-gateway', version: '0.3.0' }
-    });
+      clientInfo: { name: 'local-mcp-gateway', version: '0.4.0' }
+    }, this.config.startupTimeoutMs);
     this.notify('notifications/initialized', {});
     await this.refreshTools();
   }
@@ -50,7 +50,7 @@ export class StdioMcpChild {
     return this.tools;
   }
 
-  request(method, params = {}) {
+  request(method, params = {}, timeoutOverrideMs) {
     if (!this.child?.stdin?.writable) return Promise.reject(new Error(`${this.config.name} is not running`));
     const id = this.nextId++;
     const payload = { jsonrpc: '2.0', id, method, params };
@@ -58,7 +58,7 @@ export class StdioMcpChild {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${this.config.name} timed out handling ${method}`));
-      }, this.config.requestTimeoutMs ?? 30 * 60 * 1000);
+      }, timeoutOverrideMs ?? this.config.requestTimeoutMs ?? 30 * 60 * 1000);
       this.pending.set(id, { resolve, reject, timeout });
       this.child.stdin.write(`${JSON.stringify(payload)}\n`);
     });

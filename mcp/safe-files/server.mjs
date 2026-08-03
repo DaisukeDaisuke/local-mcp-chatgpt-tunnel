@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const MAX_TEXT_BYTES = Number(process.env.SAFE_FILES_MAX_BYTES ?? 2 * 1024 * 1024);
@@ -12,8 +13,38 @@ const MAX_TRANSFER_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_BYTES ?? 1
 const MAX_TRANSFER_CHUNK_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_CHUNK_BYTES ?? 512 * 1024);
 const MAX_SEARCH_OUTPUT_BYTES = Number(process.env.SAFE_FILES_MAX_SEARCH_OUTPUT_BYTES ?? 8 * 1024 * 1024);
 const MAX_SEARCH_RESULTS = Number(process.env.SAFE_FILES_MAX_SEARCH_RESULTS ?? 500);
-const ROOT_MARKER = process.env.SAFE_FILES_ROOT_MARKER ?? '.chatgpt-local-mcp-root';
-const configuredRoots = JSON.parse(process.env.SAFE_FILES_ROOTS ?? JSON.stringify([process.cwd()]));
+const modulePath = fileURLToPath(import.meta.url);
+const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
+
+export const SAFE_FILES_HELP = `safe-files MCP
+
+Usage:
+  node mcp/safe-files/server.mjs --root <workspace> [--root <workspace> ...]
+
+Options:
+  --root <path>  Explicitly allow one workspace root. Repeat for multiple roots.
+  --help         Print this help and exit.
+
+Relative roots are resolved from the command working directory. A root does not need a marker file.
+Do not pass a user profile, drive root, .ssh, .codex, credential store, or password directory.
+Credential-like paths and contents remain blocked even when they are below an allowed root.
+`;
+
+export function parseSafeFilesArgs(argv = process.argv.slice(2), cwd = process.cwd()) {
+  const parsed = parseArgs({
+    args: argv,
+    options: {
+      root: { type: 'string', multiple: true },
+      help: { type: 'boolean', short: 'h' }
+    },
+    strict: true,
+    allowPositionals: false
+  });
+  return { help: parsed.values.help === true, roots: (parsed.values.root ?? []).map((root) => resolve(cwd, root)) };
+}
+
+const cli = directExecution ? parseSafeFilesArgs() : { help: false, roots: [] };
+const configuredRoots = cli.help ? [] : cli.roots.length > 0 ? cli.roots : JSON.parse(process.env.SAFE_FILES_ROOTS ?? '[]');
 
 const BLOCKED_COMPONENTS = new Set([
   '.aws', '.azure', '.codex', '.docker', '.git', '.gnupg', '.kube', '.secrets', '.ssh',
@@ -58,7 +89,7 @@ const schemas = [
   },
   {
     name: 'set_working_directory',
-    description: 'Change the relative-path base to an existing directory inside an explicitly marked workspace root.',
+    description: 'Change the relative-path base to an existing directory inside an explicitly allowed workspace root.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -191,7 +222,6 @@ const rootFor = (allowed, candidate) => allowed.find((root) => within(root, cand
 
 function isBlockedName(name) {
   const lower = name.toLowerCase();
-  if (lower === ROOT_MARKER.toLowerCase()) return true;
   if (BLOCKED_COMPONENTS.has(lower) || BLOCKED_EXACT_NAMES.has(lower)) return true;
   if (lower === '.env' || lower.startsWith('.env.')) return true;
   if (/^(?:passwords?|credentials?|secrets?|tokens?|cookies?)(?:\.|$)/i.test(lower)) return true;
@@ -210,16 +240,16 @@ function assertSafePath(root, candidate) {
 let rootsPromise;
 let workingDirectoryPromise;
 const roots = () => {
+  if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
+    return Promise.reject(new Error('No workspace roots are configured. Run with --help, then pass at least one --root path'));
+  }
   rootsPromise ??= Promise.all(configuredRoots.map(async (root) => {
-    if (typeof root !== 'string' || !isAbsolute(root)) throw new Error('SAFE_FILES_ROOTS must contain absolute paths');
-    const actual = await realpath(root);
+    if (typeof root !== 'string') throw new Error('Workspace roots must be strings');
+    const actual = await realpath(resolve(root));
     const home = resolve(homedir());
     if (within(actual, home)) throw new Error(`Workspace root may not be a user profile or its ancestor: ${actual}`);
     const blockedRootPart = actual.split(/[\\/]+/).find((part) => isBlockedName(part));
     if (blockedRootPart) throw new Error(`Workspace root contains a credential-like path component: ${blockedRootPart}`);
-    const markerPath = join(actual, ROOT_MARKER);
-    const marker = await lstat(markerPath).catch(() => null);
-    if (!marker?.isFile() || marker.isSymbolicLink()) throw new Error(`Workspace root is missing a regular explicit marker ${ROOT_MARKER}: ${actual}`);
     return actual;
   }));
   return rootsPromise;
@@ -529,7 +559,7 @@ async function searchText(args) {
   if (args.fixedStrings === true) command.push('--fixed-strings');
   if (args.caseSensitive === false) command.push('--ignore-case');
   const deniedGlobs = [
-    `!**/${ROOT_MARKER}`, '!**/.git/**', '!**/.ssh/**', '!**/.gnupg/**', '!**/.aws/**',
+    '!**/.git/**', '!**/.ssh/**', '!**/.gnupg/**', '!**/.aws/**',
     '!**/.azure/**', '!**/.kube/**', '!**/.docker/**', '!**/.codex/**', '!**/.secrets/**',
     '!**/credentials/**', '!**/secrets/**', '!**/.env', '!**/.env.*', '!**/.git-credentials',
     '!**/.netrc', '!**/.npmrc', '!**/.pypirc', '!**/authorized_keys', '!**/credentials.json',
@@ -571,7 +601,7 @@ async function searchText(args) {
 async function callTool(name, args = {}) {
   switch (name) {
     case 'roots':
-      return { roots: await roots(), workingDirectory: await workingDirectory(), marker: ROOT_MARKER };
+      return { roots: await roots(), workingDirectory: await workingDirectory() };
     case 'get_working_directory':
       return { workingDirectory: await workingDirectory() };
     case 'set_working_directory': {
@@ -728,4 +758,10 @@ export async function startStdio(input = process.stdin, output = process.stdout)
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) await startStdio();
+if (directExecution) {
+  if (cli.help) process.stdout.write(SAFE_FILES_HELP);
+  else if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
+    process.stderr.write('No workspace roots were provided. Run with --help and add at least one --root path.\n');
+    process.exitCode = 2;
+  } else await startStdio();
+}

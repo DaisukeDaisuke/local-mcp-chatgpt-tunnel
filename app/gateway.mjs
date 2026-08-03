@@ -119,14 +119,7 @@ async function applyLifecycle(route, result) {
   let changed = false;
   for (const candidate of config.servers) {
     if (candidate.startAfter?.server === route.child.config.name && candidate.startAfter?.tool === route.originalName) {
-      try {
-        await startChild(candidate);
-      } catch (error) {
-        if (route.child.config.name === 'dq9' && route.originalName === 'prepare_test_runtime') {
-          await route.child.request('tools/call', { name: 'stop_test_runtime', arguments: {} }).catch(() => {});
-        }
-        throw new Error(`${candidate.name} could not attach after ${route.originalName}; the prepared runtime was stopped: ${error.message}`);
-      }
+      await startChild(candidate);
       changed = true;
     }
     if (candidate.stopAfter?.server === route.child.config.name && candidate.stopAfter?.tool === route.originalName) {
@@ -143,8 +136,8 @@ async function handle(request) {
     return response(request.id, {
       protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
       capabilities: { tools: { listChanged: true } },
-      serverInfo: { name: 'dq9-local-mcp-gateway', version: '0.3.0' },
-      instructions: 'Windows-local MCP gateway for ChatGPT Secure MCP Tunnel. Tool names are namespaced. Browser-changing tools are serialized. Host command execution and Ghidra script execution are not exposed.'
+      serverInfo: { name: 'local-mcp-gateway', version: '0.4.0' },
+      instructions: 'Private stdio MCP gateway for ChatGPT Secure MCP Tunnel. Enabled child servers come only from gateway.toml, and public tool names are namespaced.'
     });
   }
   if (request.method === 'notifications/initialized') {
