@@ -1,13 +1,41 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const MAX_TEXT_BYTES = Number(process.env.SAFE_FILES_MAX_BYTES ?? 2 * 1024 * 1024);
 const MAX_PATCH_BYTES = Number(process.env.SAFE_FILES_MAX_PATCH_BYTES ?? 4 * 1024 * 1024);
+const MAX_TRANSFER_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_BYTES ?? 16 * 1024 * 1024);
+const MAX_TRANSFER_CHUNK_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_CHUNK_BYTES ?? 512 * 1024);
+const MAX_SEARCH_OUTPUT_BYTES = Number(process.env.SAFE_FILES_MAX_SEARCH_OUTPUT_BYTES ?? 8 * 1024 * 1024);
+const MAX_SEARCH_RESULTS = Number(process.env.SAFE_FILES_MAX_SEARCH_RESULTS ?? 500);
+const ROOT_MARKER = process.env.SAFE_FILES_ROOT_MARKER ?? '.chatgpt-local-mcp-root';
 const configuredRoots = JSON.parse(process.env.SAFE_FILES_ROOTS ?? JSON.stringify([process.cwd()]));
+
+const BLOCKED_COMPONENTS = new Set([
+  '.aws', '.azure', '.codex', '.docker', '.git', '.gnupg', '.kube', '.secrets', '.ssh',
+  'credentials', 'secrets'
+]);
+const BLOCKED_EXACT_NAMES = new Set([
+  '.git-credentials', '.netrc', '.npmrc', '.pypirc', 'authorized_keys', 'credentials.json',
+  'id_dsa', 'id_ecdsa', 'id_ed25519', 'id_rsa', 'known_hosts', 'passwords.txt',
+  'secrets.json', 'tokens.json'
+]);
+const BLOCKED_SECRET_EXTENSIONS = new Set(['.key', '.kdbx', '.p12', '.pem', '.pfx', '.ppk', '.pub']);
+const BLOCKED_TRANSFER_EXTENSIONS = new Set(['.dsv', '.dst', '.nds', '.sav', ...BLOCKED_SECRET_EXTENSIONS]);
+const BLOCKED_BINARY_WRITE_EXTENSIONS = new Set(['.bat', '.cmd', '.com', '.dll', '.exe', '.lnk', '.msi', '.ps1', '.scr']);
+const CREDENTIAL_PATTERNS = [
+  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
+  /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/,
+  /\b[A-Za-z\d_-]{23,28}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{25,}\b/
+];
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const protocolError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
@@ -20,7 +48,7 @@ const toolResult = (value, isError = false) => ({
 const schemas = [
   {
     name: 'roots',
-    description: 'List allowed filesystem roots and the current working directory.',
+    description: 'List explicitly allowed workspace roots and the current working directory.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -30,7 +58,7 @@ const schemas = [
   },
   {
     name: 'set_working_directory',
-    description: 'Change the working directory used by subsequent file calls. The target must be an existing directory inside an allowed root.',
+    description: 'Change the relative-path base to an existing directory inside an explicitly marked workspace root.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -40,17 +68,34 @@ const schemas = [
   },
   {
     name: 'list_directory',
-    description: 'List one directory inside an allowed root.',
+    description: 'List one workspace directory. Credential-like files and directories are omitted.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
       required: ['path'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'search_text',
+    description: 'Search UTF-8 workspace text with ripgrep. The executable and arguments are fixed; paths outside roots and credential-like paths are rejected.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', minLength: 1, maxLength: 4096 },
+        path: { type: 'string', default: '.' },
+        fixedStrings: { type: 'boolean', default: false },
+        caseSensitive: { type: 'boolean', default: true },
+        globs: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 512 }, maxItems: 20 },
+        maxResults: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_RESULTS, default: 100 }
+      },
+      required: ['query'],
       additionalProperties: false
     }
   },
   {
     name: 'read_text_file',
-    description: 'Read a UTF-8 text file. UTF-16, UTF-32, invalid UTF-8, and paths outside allowed roots are rejected.',
+    description: 'Read a UTF-8 workspace file. UTF-16, UTF-32, invalid UTF-8, credential-like paths, and detected credentials are rejected.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -59,8 +104,37 @@ const schemas = [
     }
   },
   {
+    name: 'read_file_chunk',
+    description: 'Transfer a bounded chunk of a non-secret workspace file as base64. ROM, state, key, and credential-like files are rejected.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1 },
+        offset: { type: 'integer', minimum: 0, default: 0 },
+        length: { type: 'integer', minimum: 1, maximum: MAX_TRANSFER_CHUNK_BYTES, default: MAX_TRANSFER_CHUNK_BYTES }
+      },
+      required: ['path'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'write_file',
+    description: 'Atomically receive one bounded base64 file inside a workspace. Native executables, PowerShell/batch launchers, secrets, ROMs, and state files are rejected.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1 },
+        dataBase64: { type: 'string', minLength: 1 },
+        overwrite: { type: 'boolean', default: false },
+        sha256: { type: 'string', pattern: '^[A-Fa-f0-9]{64}$' }
+      },
+      required: ['path', 'dataBase64'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'write_text_file',
-    description: 'Atomically create or replace one UTF-8 text file inside an allowed root.',
+    description: 'Atomically create or replace one UTF-8 text file inside a workspace.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -89,7 +163,7 @@ const schemas = [
   },
   {
     name: 'create_directory',
-    description: 'Create one directory inside an allowed root. Existing directories are accepted.',
+    description: 'Create one directory inside a workspace. Existing directories are accepted.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -99,7 +173,7 @@ const schemas = [
   },
   {
     name: 'apply_patch',
-    description: 'Apply a structured *** Begin Patch change or a standard unified Git diff in the current working directory. This is a dedicated patch operation, not a shell or arbitrary-command API.',
+    description: 'Apply a structured patch or unified Git diff in the workspace. This invokes only the built-in parser or fixed git apply command.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -112,12 +186,41 @@ const schemas = [
   }
 ];
 
+const within = (root, candidate) => candidate === root || candidate.startsWith(`${root}${sep}`);
+const rootFor = (allowed, candidate) => allowed.find((root) => within(root, candidate));
+
+function isBlockedName(name) {
+  const lower = name.toLowerCase();
+  if (lower === ROOT_MARKER.toLowerCase()) return true;
+  if (BLOCKED_COMPONENTS.has(lower) || BLOCKED_EXACT_NAMES.has(lower)) return true;
+  if (lower === '.env' || lower.startsWith('.env.')) return true;
+  if (/^(?:passwords?|credentials?|secrets?|tokens?|cookies?)(?:\.|$)/i.test(lower)) return true;
+  return BLOCKED_SECRET_EXTENSIONS.has(extname(lower));
+}
+
+function assertSafePath(root, candidate) {
+  const relativePath = relative(root, candidate);
+  if (relativePath === '') return;
+  if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) throw new Error('Path escaped the allowed workspace root');
+  const parts = relativePath.split(/[\\/]+/);
+  const blocked = parts.find((part) => isBlockedName(part));
+  if (blocked) throw new Error(`Credential-like path is not accessible: ${blocked}`);
+}
+
 let rootsPromise;
 let workingDirectoryPromise;
 const roots = () => {
   rootsPromise ??= Promise.all(configuredRoots.map(async (root) => {
     if (typeof root !== 'string' || !isAbsolute(root)) throw new Error('SAFE_FILES_ROOTS must contain absolute paths');
-    return realpath(root);
+    const actual = await realpath(root);
+    const home = resolve(homedir());
+    if (within(actual, home)) throw new Error(`Workspace root may not be a user profile or its ancestor: ${actual}`);
+    const blockedRootPart = actual.split(/[\\/]+/).find((part) => isBlockedName(part));
+    if (blockedRootPart) throw new Error(`Workspace root contains a credential-like path component: ${blockedRootPart}`);
+    const markerPath = join(actual, ROOT_MARKER);
+    const marker = await lstat(markerPath).catch(() => null);
+    if (!marker?.isFile() || marker.isSymbolicLink()) throw new Error(`Workspace root is missing a regular explicit marker ${ROOT_MARKER}: ${actual}`);
+    return actual;
   }));
   return rootsPromise;
 };
@@ -126,34 +229,35 @@ const workingDirectory = async () => {
   return workingDirectoryPromise;
 };
 
-const within = (root, candidate) => candidate === root || candidate.startsWith(`${root}${sep}`);
-const rootFor = (allowed, candidate) => allowed.find((root) => within(root, candidate));
-
 async function chooseRoot(path) {
   if (typeof path !== 'string' || path.includes('\0')) throw new Error('Path must be a valid string');
   const allowed = await roots();
   const candidate = resolve(isAbsolute(path) ? path : join(await workingDirectory(), path));
   const root = rootFor(allowed, candidate);
-  if (!root) throw new Error('Path is outside all allowed roots');
+  if (!root) throw new Error('Path is outside all allowed workspace roots');
+  assertSafePath(root, candidate);
   return { root, candidate };
 }
 
 async function resolveExisting(path) {
   const { root, candidate } = await chooseRoot(path);
   const actual = await realpath(candidate);
-  if (!within(root, actual)) throw new Error('Resolved path escaped the allowed root');
+  if (!within(root, actual)) throw new Error('Resolved path escaped the allowed workspace root');
+  assertSafePath(root, actual);
   return { root, path: actual };
 }
 
 async function resolveWritable(path) {
   const { root, candidate } = await chooseRoot(path);
   const parent = await realpath(dirname(candidate));
-  if (!within(root, parent)) throw new Error('Resolved parent escaped the allowed root');
+  if (!within(root, parent)) throw new Error('Resolved parent escaped the allowed workspace root');
+  assertSafePath(root, parent);
   try {
     const info = await lstat(candidate);
     if (info.isSymbolicLink()) throw new Error('Writing through symbolic links is not allowed');
     const actual = await realpath(candidate);
-    if (!within(root, actual)) throw new Error('Resolved file escaped the allowed root');
+    if (!within(root, actual)) throw new Error('Resolved file escaped the allowed workspace root');
+    assertSafePath(root, actual);
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
@@ -162,19 +266,34 @@ async function resolveWritable(path) {
 
 function decodeUtf8(bytes) {
   if (bytes.length > MAX_TEXT_BYTES) throw new Error(`Text file exceeds ${MAX_TEXT_BYTES} bytes`);
-  if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) {
-    throw new Error('UTF-16 text is not supported; convert the file to UTF-8 first');
-  }
+  if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) throw new Error('UTF-16 text is not supported; convert the file to UTF-8 first');
   if ((bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0xfe && bytes[3] === 0xff)
-      || (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0x00 && bytes[3] === 0x00)) {
-    throw new Error('UTF-32 text is not supported; convert the file to UTF-8 first');
-  }
+      || (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0x00 && bytes[3] === 0x00)) throw new Error('UTF-32 text is not supported; convert the file to UTF-8 first');
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^\uFEFF/, '');
 }
 
-async function atomicWrite(path, content, overwrite) {
-  const encoded = new TextEncoder().encode(content);
-  if (encoded.length > MAX_TEXT_BYTES) throw new Error(`Text content exceeds ${MAX_TEXT_BYTES} bytes`);
+function containsCredential(text) {
+  return CREDENTIAL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function rejectCredentialContent(text) {
+  if (containsCredential(text)) throw new Error('File content resembles a credential or private key and was not returned');
+}
+
+function redactCredentialContent(text) {
+  let redacted = false;
+  let output = text;
+  for (const pattern of CREDENTIAL_PATTERNS) {
+    const global = new RegExp(pattern.source, `${pattern.flags.replace('g', '')}g`);
+    output = output.replace(global, () => {
+      redacted = true;
+      return '[REDACTED_CREDENTIAL]';
+    });
+  }
+  return { text: output, redacted };
+}
+
+async function atomicWriteBytes(path, bytes, overwrite) {
   const { path: destination } = await resolveWritable(path);
   if (!overwrite) {
     try {
@@ -187,7 +306,7 @@ async function atomicWrite(path, content, overwrite) {
   const temporary = join(dirname(destination), `.${randomUUID()}.tmp`);
   const handle = await open(temporary, 'wx', 0o600);
   try {
-    await handle.writeFile(encoded);
+    await handle.writeFile(bytes);
     await handle.sync();
   } finally {
     await handle.close();
@@ -216,6 +335,22 @@ async function atomicWrite(path, content, overwrite) {
   return destination;
 }
 
+async function atomicWrite(path, content, overwrite) {
+  rejectCredentialContent(content);
+  const encoded = new TextEncoder().encode(content);
+  if (encoded.length > MAX_TEXT_BYTES) throw new Error(`Text content exceeds ${MAX_TEXT_BYTES} bytes`);
+  return atomicWriteBytes(path, encoded, overwrite);
+}
+
+function decodeBase64Strict(value) {
+  if (typeof value !== 'string' || value.length > Math.ceil(MAX_TRANSFER_BYTES / 3) * 4 + 4) throw new Error('Invalid or oversized base64 payload');
+  const normalized = value.replace(/\s+/g, '');
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(normalized)) throw new Error('Invalid base64 payload');
+  const bytes = Buffer.from(normalized, 'base64');
+  if (bytes.length > MAX_TRANSFER_BYTES) throw new Error(`File exceeds ${MAX_TRANSFER_BYTES} bytes`);
+  return bytes;
+}
+
 function parseStructuredPatch(patch) {
   const lines = patch.replace(/\r\n/g, '\n').replace(/\n+$/, '').split('\n');
   if (lines[0] !== '*** Begin Patch' || lines.at(-1) !== '*** End Patch') throw new Error('Invalid structured patch envelope');
@@ -237,7 +372,7 @@ function validatePatchPath(path) {
   if (typeof path !== 'string' || path.trim() === '' || isAbsolute(path)) throw new Error(`Unsafe patch path: ${path}`);
   const parts = path.split(/[\\/]+/);
   if (parts.includes('..')) throw new Error(`Unsafe patch path: ${path}`);
-  if (parts.some((part) => part.toLowerCase() === '.git')) throw new Error(`Patching .git internals is not allowed: ${path}`);
+  if (parts.some((part) => isBlockedName(part))) throw new Error(`Credential-like patch path is not allowed: ${path}`);
 }
 
 function applyUpdateHunks(current, body, path) {
@@ -311,9 +446,7 @@ async function applyStructuredPatch(patch, dryRun) {
 function unifiedPatchPaths(patch) {
   if (/GIT binary patch|Binary files .* differ/.test(patch)) throw new Error('Binary patches are not supported');
   if (/^(?:rename|copy) (?:from|to) /m.test(patch)) throw new Error('Rename and copy patches are not supported');
-  if (/^(?:new file mode|old mode|new mode|deleted file mode) (?:120000|160000)$/m.test(patch)) {
-    throw new Error('Symlink and Gitlink mode patches are not supported');
-  }
+  if (/^(?:new file mode|old mode|new mode|deleted file mode) (?:120000|160000)$/m.test(patch)) throw new Error('Symlink and Gitlink mode patches are not supported');
   const paths = new Set();
   for (const line of patch.replace(/\r\n/g, '\n').split('\n')) {
     const match = /^(?:---|\+\+\+)\s+(.+?)(?:\t.*)?$/.exec(line);
@@ -356,10 +489,89 @@ async function runGitApply(patch, dryRun) {
   return { format: 'unified', dryRun, paths: paths.map((path) => resolve(cwd, path)) };
 }
 
+async function runRipgrep(args) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('rg', args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: false });
+    const stdout = [];
+    const stderr = [];
+    let stdoutBytes = 0;
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error); else resolvePromise(value);
+    };
+    child.stdout.on('data', (chunk) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > MAX_SEARCH_OUTPUT_BYTES) {
+        child.kill();
+        finish(new Error(`ripgrep output exceeded ${MAX_SEARCH_OUTPUT_BYTES} bytes`));
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.once('error', (error) => finish(error));
+    child.once('exit', (code) => {
+      if (code !== 0 && code !== 1) {
+        finish(new Error(Buffer.concat(stderr).toString('utf8').trim() || `ripgrep exited with ${code}`));
+        return;
+      }
+      finish(null, Buffer.concat(stdout));
+    });
+  });
+}
+
+async function searchText(args) {
+  const target = await resolveExisting(args.path ?? '.');
+  const maximum = Math.min(args.maxResults ?? 100, MAX_SEARCH_RESULTS);
+  const command = ['--json', '--color=never', '--hidden', '--max-filesize', String(MAX_TEXT_BYTES)];
+  if (args.fixedStrings === true) command.push('--fixed-strings');
+  if (args.caseSensitive === false) command.push('--ignore-case');
+  const deniedGlobs = [
+    `!**/${ROOT_MARKER}`, '!**/.git/**', '!**/.ssh/**', '!**/.gnupg/**', '!**/.aws/**',
+    '!**/.azure/**', '!**/.kube/**', '!**/.docker/**', '!**/.codex/**', '!**/.secrets/**',
+    '!**/credentials/**', '!**/secrets/**', '!**/.env', '!**/.env.*', '!**/.git-credentials',
+    '!**/.netrc', '!**/.npmrc', '!**/.pypirc', '!**/authorized_keys', '!**/credentials.json',
+    '!**/id_dsa', '!**/id_ecdsa', '!**/id_ed25519', '!**/id_rsa', '!**/known_hosts',
+    '!**/passwords.txt', '!**/secrets.json', '!**/tokens.json', '!**/*.key', '!**/*.pem',
+    '!**/*.p12', '!**/*.pfx', '!**/*.ppk', '!**/*.pub'
+  ];
+  for (const glob of [...(args.globs ?? []), ...deniedGlobs]) {
+    if (typeof glob !== 'string' || glob.includes('\0')) throw new Error('Invalid glob');
+    command.push('--glob', glob);
+  }
+  command.push('--', args.query, target.path);
+  const output = decodeUtf8(await runRipgrep(command));
+  const matches = [];
+  let redacted = false;
+  for (const line of output.split(/\r?\n/)) {
+    if (!line) continue;
+    let event;
+    try { event = JSON.parse(line); }
+    catch { continue; }
+    if (event.type !== 'match') continue;
+    const rawPath = event.data?.path?.text;
+    if (typeof rawPath !== 'string') continue;
+    const actual = await resolveExisting(rawPath);
+    const rawLine = event.data?.lines?.text ?? '';
+    const safeLine = redactCredentialContent(rawLine.replace(/\r?\n$/, ''));
+    redacted ||= safeLine.redacted;
+    matches.push({
+      path: actual.path,
+      line: event.data?.line_number ?? null,
+      column: (event.data?.submatches?.[0]?.start ?? 0) + 1,
+      text: safeLine.text
+    });
+    if (matches.length >= maximum) break;
+  }
+  return { query: args.query, path: target.path, count: matches.length, truncated: matches.length >= maximum, redacted, matches };
+}
+
 async function callTool(name, args = {}) {
   switch (name) {
     case 'roots':
-      return { roots: await roots(), workingDirectory: await workingDirectory() };
+      return { roots: await roots(), workingDirectory: await workingDirectory(), marker: ROOT_MARKER };
     case 'get_working_directory':
       return { workingDirectory: await workingDirectory() };
     case 'set_working_directory': {
@@ -372,18 +584,63 @@ async function callTool(name, args = {}) {
       const target = await resolveExisting(args.path);
       if (!(await stat(target.path)).isDirectory()) throw new Error('Path is not a directory');
       const entries = await readdir(target.path, { withFileTypes: true });
+      let blockedEntries = 0;
+      const visible = entries.filter((entry) => {
+        if (isBlockedName(entry.name)) {
+          blockedEntries += 1;
+          return false;
+        }
+        return true;
+      });
       return {
         path: target.path,
-        entries: entries.sort((a, b) => a.name.localeCompare(b.name)).map((entry) => ({
+        blockedEntries,
+        entries: visible.sort((a, b) => a.name.localeCompare(b.name)).map((entry) => ({
           name: entry.name,
           type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'other'
         }))
       };
     }
+    case 'search_text':
+      return searchText(args);
     case 'read_text_file': {
       const target = await resolveExisting(args.path);
       if (!(await stat(target.path)).isFile()) throw new Error('Path is not a file');
-      return { path: target.path, content: decodeUtf8(await readFile(target.path)) };
+      const content = decodeUtf8(await readFile(target.path));
+      rejectCredentialContent(content);
+      return { path: target.path, content };
+    }
+    case 'read_file_chunk': {
+      const target = await resolveExisting(args.path);
+      const info = await stat(target.path);
+      if (!info.isFile()) throw new Error('Path is not a file');
+      if (BLOCKED_TRANSFER_EXTENSIONS.has(extname(target.path).toLowerCase())) throw new Error('This file type is not available through file transfer');
+      if (info.size > MAX_TRANSFER_BYTES) throw new Error(`File exceeds transfer limit of ${MAX_TRANSFER_BYTES} bytes`);
+      const bytes = await readFile(target.path);
+      rejectCredentialContent(bytes.toString('utf8'));
+      const offset = args.offset ?? 0;
+      const length = Math.min(args.length ?? MAX_TRANSFER_CHUNK_BYTES, MAX_TRANSFER_CHUNK_BYTES);
+      if (offset > bytes.length) throw new Error('Offset is beyond end of file');
+      const chunk = bytes.subarray(offset, Math.min(offset + length, bytes.length));
+      return {
+        path: target.path,
+        offset,
+        bytes: chunk.length,
+        totalBytes: bytes.length,
+        eof: offset + chunk.length >= bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        dataBase64: chunk.toString('base64')
+      };
+    }
+    case 'write_file': {
+      const extension = extname(args.path).toLowerCase();
+      if (BLOCKED_TRANSFER_EXTENSIONS.has(extension) || BLOCKED_BINARY_WRITE_EXTENSIONS.has(extension)) throw new Error('This file type is not accepted through binary transfer');
+      const bytes = decodeBase64Strict(args.dataBase64);
+      rejectCredentialContent(bytes.toString('utf8'));
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      if (args.sha256 && args.sha256.toLowerCase() !== digest) throw new Error('SHA-256 mismatch');
+      const destination = await atomicWriteBytes(args.path, bytes, args.overwrite === true);
+      return { path: destination, bytes: bytes.length, sha256: digest };
     }
     case 'write_text_file': {
       const destination = await atomicWrite(args.path, args.content, args.overwrite === true);
@@ -402,7 +659,8 @@ async function callTool(name, args = {}) {
     case 'create_directory': {
       const { root, candidate } = await chooseRoot(args.path);
       const parent = await realpath(dirname(candidate));
-      if (!within(root, parent)) throw new Error('Resolved parent escaped the allowed root');
+      if (!within(root, parent)) throw new Error('Resolved parent escaped the allowed workspace root');
+      assertSafePath(root, parent);
       try {
         await mkdir(candidate, { recursive: false, mode: 0o700 });
       } catch (error) {
@@ -432,8 +690,8 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-files', version: '2.0.0' },
-        instructions: 'UTF-8 filesystem and dedicated patch operations only. No shell, arbitrary command, or access outside configured roots.'
+        serverInfo: { name: 'safe-files', version: '3.0.0' },
+        instructions: 'Workspace-only UTF-8 editing, fixed ripgrep search, and bounded file transfer. User profiles, credential-like paths, shell access, and arbitrary commands are unavailable.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');

@@ -33,6 +33,7 @@ export async function loadGatewayConfig(configPath = process.env.MCP_GATEWAY_CON
     throw new Error(`Gateway configuration is not readable at ${resolvedConfigPath}: ${error.message}`);
   }
   const base = dirname(resolvedConfigPath);
+  if (raw.privateUseOnly !== true) throw new Error('gateway.json must set privateUseOnly to true');
   const workspaceRoots = (raw.workspaceRoots ?? []).map((path) => absoluteFrom(base, path));
   if (workspaceRoots.length === 0) throw new Error('gateway.json must define at least one workspaceRoots entry');
   const dq9Config = absoluteFrom(base, raw.dq9Config ?? './dq9-runtime.json');
@@ -50,7 +51,10 @@ export async function loadGatewayConfig(configPath = process.env.MCP_GATEWAY_CON
       prefix: 'files',
       command: process.execPath,
       args: [join(repositoryRoot, 'mcp', 'safe-files', 'server.mjs')],
-      env: { SAFE_FILES_ROOTS: JSON.stringify(workspaceRoots) }
+      env: {
+        SAFE_FILES_ROOTS: JSON.stringify(workspaceRoots),
+        SAFE_FILES_ROOT_MARKER: raw.workspaceRootMarker ?? '.chatgpt-local-mcp-root'
+      }
     });
   if (enabled.has('dq9')) servers.push({
       ...common,
@@ -59,7 +63,11 @@ export async function loadGatewayConfig(configPath = process.env.MCP_GATEWAY_CON
       serialGroup: 'browser',
       command: process.execPath,
       args: [join(repositoryRoot, 'mcp', 'dq9-test', 'mcp-server.mjs')],
-      env: { DQ9_TEST_CONFIG: dq9Config }
+      env: {
+        DQ9_TEST_CONFIG: dq9Config,
+        DQ9_ALLOWED_SUITE_ROOTS: JSON.stringify(workspaceRoots),
+        DQ9_WORKSPACE_ROOT_MARKER: raw.workspaceRootMarker ?? '.chatgpt-local-mcp-root'
+      }
     });
   if (enabled.has('chrome')) servers.push({
       ...common,
@@ -90,6 +98,7 @@ export async function loadGatewayConfig(configPath = process.env.MCP_GATEWAY_CON
   if (unknown.length) throw new Error(`gateway.json contains unknown enabledServers: ${unknown.join(', ')}`);
   return {
     configPath: resolvedConfigPath,
+    privateUseOnly: true,
     workspaceRoots,
     dq9Config,
     servers

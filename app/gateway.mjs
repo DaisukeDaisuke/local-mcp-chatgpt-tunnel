@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
+import { scrubSecretEnvironment } from './child-environment.mjs';
 import { StdioMcpChild } from './stdio-child.mjs';
 import { loadGatewayConfig } from './server-config.mjs';
+import { assertNotElevatedWindows } from './windows-integrity.mjs';
+
+scrubSecretEnvironment(process.env);
+await assertNotElevatedWindows();
 
 const MAX_TOOL_NAME = 64;
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
@@ -138,7 +143,7 @@ async function handle(request) {
     return response(request.id, {
       protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
       capabilities: { tools: { listChanged: true } },
-      serverInfo: { name: 'dq9-local-mcp-gateway', version: '0.2.0' },
+      serverInfo: { name: 'dq9-local-mcp-gateway', version: '0.3.0' },
       instructions: 'Windows-local MCP gateway for ChatGPT Secure MCP Tunnel. Tool names are namespaced. Browser-changing tools are serialized. Host command execution and Ghidra script execution are not exposed.'
     });
   }

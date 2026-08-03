@@ -1,8 +1,7 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { documentedBattleHandlers } from '../cdp/desmume-adapter.mjs';
 import { RelayError, asRelayError } from '../util/errors.mjs';
 import { isPlainObject, parseJson } from '../util/json.mjs';
+import { loadAllowedSuiteFile } from './suite-file-policy.mjs';
 
 const allowedHandlers = new Set(documentedBattleHandlers);
 
@@ -33,20 +32,21 @@ export const validateSuite = (suite) => {
 };
 
 export class RunService {
-  constructor({ runtimeManager, artifactStore, readFileImpl = readFile } = {}) {
+  constructor({ runtimeManager, artifactStore, allowedSuiteRoots = [], workspaceRootMarker = '.chatgpt-local-mcp-root', loadSuiteFile = loadAllowedSuiteFile } = {}) {
     this.runtimeManager = runtimeManager;
     this.artifactStore = artifactStore;
-    this.readFileImpl = readFileImpl;
+    this.allowedSuiteRoots = allowedSuiteRoots;
+    this.workspaceRootMarker = workspaceRootMarker;
+    this.loadSuiteFile = loadSuiteFile;
     this.runs = new Map();
     this.runtimeManager.onStopping?.(() => this.#markStopped());
   }
 
   async start(suitePath) {
     if (typeof suitePath !== 'string' || !suitePath) throw new RelayError('INVALID_SUITE_PATH', 'suitePath must be a local JSON file path');
-    const resolvedPath = resolve(suitePath);
-    let source;
-    try { source = await this.readFileImpl(resolvedPath, 'utf8'); }
-    catch { throw new RelayError('SUITE_NOT_FOUND', 'Suite file is not readable', { path: resolvedPath }); }
+    const loaded = await this.loadSuiteFile(suitePath, { roots: this.allowedSuiteRoots, marker: this.workspaceRootMarker });
+    const resolvedPath = loaded.path;
+    const source = loaded.text;
     const cases = validateSuite(parseJson(source, 'Suite'));
     const runId = crypto.randomUUID();
     const run = { runId, suitePath: resolvedPath, status: 'queued', createdAt: new Date().toISOString(), cases: [], error: null };

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { buildChildEnvironment } from './child-environment.mjs';
 
 const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
 
@@ -20,7 +21,7 @@ export class StdioMcpChild {
     const { command, args = [], cwd, env = {} } = this.config;
     this.child = spawn(command, args, {
       cwd,
-      env: { ...process.env, ...env },
+      env: buildChildEnvironment(env),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       shell: false
@@ -37,7 +38,7 @@ export class StdioMcpChild {
     await this.request('initialize', {
       protocolVersion: DEFAULT_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'dq9-local-mcp-gateway', version: '0.2.0' }
+      clientInfo: { name: 'dq9-local-mcp-gateway', version: '0.3.0' }
     });
     this.notify('notifications/initialized', {});
     await this.refreshTools();

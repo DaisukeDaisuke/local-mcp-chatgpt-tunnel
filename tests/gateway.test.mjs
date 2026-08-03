@@ -30,7 +30,8 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-config-'));
   const configPath = join(configDirectory, 'gateway.json');
-  await writeFile(configPath, JSON.stringify({ workspaceRoots: [workspace], enabledServers: ['files'] }), 'utf8');
+  await writeFile(join(workspace, '.chatgpt-local-mcp-root'), 'allowed\n', 'utf8');
+  await writeFile(configPath, JSON.stringify({ privateUseOnly: true, workspaceRoots: [workspace], enabledServers: ['files'] }), 'utf8');
   const child = spawn(process.execPath, [resolve('app/gateway.mjs')], {
     cwd: resolve('.'),
     env: { ...process.env, MCP_GATEWAY_CONFIG: configPath },
@@ -46,6 +47,8 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   const listed = await nextLine(child.stdout);
   const names = listed.result.tools.map((tool) => tool.name);
   assert.ok(names.includes('files__apply_patch'));
+  assert.ok(names.includes('files__search_text'));
+  assert.ok(names.includes('files__read_file_chunk'));
   assert.ok(names.includes('files__set_working_directory'));
   assert.ok(names.every((name) => name.startsWith('files__')));
 });

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { RelayError } from '../util/errors.mjs';
 import { isPlainObject, parseJson } from '../util/json.mjs';
+import { buildChildEnvironment } from '../../../../app/child-environment.mjs';
 
 const execFileAsync = promisify(execFile);
 const manifestVersion = 'dq9-test-local-dependencies-v1';
@@ -39,9 +40,10 @@ export const validateManifestShape = (manifest) => {
 
 const gitIdentity = async (repositoryPath) => {
   const common = ['-c', `safe.directory=${repositoryPath}`, '-C', repositoryPath];
+  const options = { env: buildChildEnvironment(), windowsHide: true, shell: false };
   const [{ stdout: revision }, { stdout: status }] = await Promise.all([
-    execFileAsync('git', [...common, 'rev-parse', 'HEAD']),
-    execFileAsync('git', [...common, 'status', '--porcelain'])
+    execFileAsync('git', [...common, 'rev-parse', 'HEAD'], options),
+    execFileAsync('git', [...common, 'status', '--porcelain'], options)
   ]);
   return { revision: revision.trim(), clean: status.trim() === '' };
 };

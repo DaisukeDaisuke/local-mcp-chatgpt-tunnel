@@ -10,7 +10,8 @@ const configPath = new URL('../config/local-runtime.json', import.meta.url);
 const config = await loadConfig(configPath);
 const stderrProgress = ({ stage, event, code }) => process.stderr.write(`[smoke] ${stage} ${event}${code ? ` ${code}` : ''}\n`);
 const runtimeManager = new RuntimeManager({ config, progress: stderrProgress, stageTimeouts: { browserLaunch: 30000, browserEndpoint: 30000, navigation: 60000, romLoad: 60000, stateLoad: 60000, scriptLoad: 30000, handlerPublication: 60000 } });
-const runService = new RunService({ runtimeManager, artifactStore: new ArtifactStore(config.runtimeDirectory) });
+const examplesRoot = fileURLToPath(new URL('../examples', import.meta.url));
+const runService = new RunService({ runtimeManager, artifactStore: new ArtifactStore(config.runtimeDirectory), allowedSuiteRoots: [examplesRoot] });
 const tools = createTools({ runtimeManager, runService });
 const summaryPath = new URL('../../agent_work/20260802-071718-dq9-mcp-foundation/node-cdp-foundation/integration-summary.json', import.meta.url);
 

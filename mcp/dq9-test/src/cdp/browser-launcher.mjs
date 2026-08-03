@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { buildChildEnvironment } from '../../../../app/child-environment.mjs';
 import { RelayError } from '../util/errors.mjs';
 
 export class BrowserLauncher {
@@ -31,7 +32,12 @@ export class BrowserLauncher {
     let child;
     try {
       await this.mkdirImpl(profileDirectory, { recursive: true });
-      child = this.spawnImpl(config.chromePath, args, { stdio: 'ignore', windowsHide: true });
+      child = this.spawnImpl(config.chromePath, args, {
+        env: buildChildEnvironment(),
+        stdio: 'ignore',
+        windowsHide: true,
+        shell: false
+      });
     } catch (error) {
       this.#release(cdpPort, profileDirectory);
       throw new RelayError('CHROME_LAUNCH_FAILED', error.message);

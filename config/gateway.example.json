@@ -1,7 +1,9 @@
 {
+  "privateUseOnly": true,
   "workspaceRoots": [
     "../workspace"
   ],
+  "workspaceRootMarker": ".chatgpt-local-mcp-root",
   "dq9Config": "./dq9-runtime.json",
   "ghidraUrl": "http://127.0.0.1:8089",
   "ghidraDebuggerUrl": "http://127.0.0.1:8099",
