@@ -17,3 +17,4 @@ mcp/dq9-test/config/local-dependencies.json
 mcp/dq9-test/runtime/
 mcp/dq9-test/artifacts/
 profile-*/
+/.idea

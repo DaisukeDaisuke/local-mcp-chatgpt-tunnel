@@ -39,7 +39,7 @@ node mcp\safe-files\server.mjs --help
 例をコピーして、必ず自分のパスへ書き換えます。
 ```powershell
 Copy-Item config\gateway.example.toml config\gateway.toml
-notepad config\gateway.toml
+code config\gateway.toml
 ```
 形式はCodexのMCP設定に近い`[mcp_servers.<name>]`です。
 ```toml
