@@ -99,25 +99,58 @@ https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
    スクリーンショットの状態では`Description`が空です。`Create`が無効のままなら、まずDescriptionを入力し、それでも無効ならダイアログ内を最下部までスクロールして残りの必須項目を確認します。
    作成後、Tunnelの詳細画面に表示される`tunnel_id`を控えます。これは次の起動コマンドで使います。
    runtime主体には`Tunnels Read + Use`だけを与えます。Tunnelの作成や編集には`Tunnels Read + Manage`が必要ですが、普段`tunnel-client`を動かすキーへ管理権限、モデルAPI、Organization管理、Filesなどの不要な権限は与えません。
-## 7. runtime API keyを用意する
-Tunnel画面またはOpenAI Platformの案内に従い、`tunnel-client`用のruntime API keyを作ります。このキーは`tunnel-client`の実行専用です。リポジトリ、`gateway.toml`、`.env`、メモ帳へ保存しません。
-公式仕様では、Tunnelの作成・編集と、`tunnel-client`の実行に必要な権限は別です。個人利用でも、実行用キーには`Tunnels Read + Use`だけを与えます。
-## 8. API keyを引数で渡して検査・起動する
-`tunnel_id`を自分の値へ置き換えます。現在の`tunnel-client`では、`--control-plane.api-key`へAPI keyそのものではなく、`env:変数名`または`file:パス`形式の参照を渡します。次の例はruntime API keyを一時的な環境変数へ入れ、`tunnel-client`の引数ではその変数を参照します。このリポジトリはキーを保存しません。
+## 7. Tunnel実行専用のロールを作る
+Organization Rolesを開きます。
+```text
+https://platform.openai.com/settings/organization/people/roles
+```
+新しいロールを作り、名前を`Local MCP Tunnel Runtime - No Model API`のようにします。権限は`Tunnels Read + Use`だけにし、`Tunnels Manage`、モデルAPI、Files、Organization管理などは付けません。このロールはTunnelの常駐実行専用です。
+ロールを作っただけでは権限は有効になりません。Organization Groupsで自分だけを含むグループへ割り当てます。
+```text
+https://platform.openai.com/settings/organization/people/groups
+```
+Tunnelを作成・編集する人には別途`Tunnels Read + Manage`が必要です。常駐するruntime keyへManage権限は付けません。
+## 8. モデルAPI権限のないruntime API keyを作る
+Runtime API keysを開きます。
+```text
+https://platform.openai.com/settings/organization/api-keys
+```
+`Create new secret key`で次のように設定します。
+1. `Owned by`: `You`
+2. `Name`: `local-mcp-tunnel-runtime-no-model-api`
+3. `Project`: Tunnelを作成したOrganization内のProject
+4. `Permissions`: `Restricted`
+5. `Tunnels`: `Read + Use`だけを有効化
+6. `List models`、`Responses`、`Chat completions`、`Embeddings`、`Images`、`Files`など、Tunnel以外はすべて`None`
+この名前は、モデルAPIに使えないTunnel専用キーであることを後から見ても判別できるようにするためです。`All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。
+## 9. Tunnel IDとruntime API keyをユーザー環境変数へ保存する
+`tunnel-client`は`CONTROL_PLANE_TUNNEL_ID`と`CONTROL_PLANE_API_KEY`を自動で読みます。起動コマンドへ`--control-plane.tunnel-id`や`--control-plane.api-key`を書く必要はありません。
+通常権限のPowerShellで次を実行し、`tunnel_...`を自分のTunnel IDへ置き換えます。runtime API keyは画面に表示されないマスク入力で受け取ります。
 ```powershell
-$secureKey = Read-Host 'Runtime API key' -AsSecureString
-$env:OPENAI_TUNNEL_API_KEY = [System.Net.NetworkCredential]::new('', $secureKey).Password
-$mcp = 'command=node app/gateway.mjs --config config/gateway.toml,channel=local-mcp'
+$secureKey = Read-Host 'Tunnel runtime API key (no model API permissions)' -AsSecureString
+$plainKey = [System.Net.NetworkCredential]::new('', $secureKey).Password
+[Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $plainKey, 'User')
+[Environment]::SetEnvironmentVariable('CONTROL_PLANE_TUNNEL_ID', 'tunnel_0123456789abcdef0123456789abcdef', 'User')
+Remove-Variable plainKey, secureKey
+```
+これはWindowsのユーザー環境変数として永続保存されます。設定後はPowerShellを閉じ、新しいPowerShellを開いてください。Machine環境変数にはせず、管理者PowerShellも使いません。
+同じWindowsユーザーで動く別プロセスからはユーザー環境変数を読めるため、SSH鍵や他サービスの資格情報と強く分離したい場合は、このTunnel専用の標準Windowsユーザーで設定します。
+確認時も値そのものは表示しません。
+```powershell
+if ($env:CONTROL_PLANE_API_KEY) { 'CONTROL_PLANE_API_KEY: set' } else { 'CONTROL_PLANE_API_KEY: missing' }
+$env:CONTROL_PLANE_TUNNEL_ID
+```
+`OPENAI_API_KEY`もfallbackとして読まれますが、モデルAPI権限を持つキーとの取り違えを防ぐため、この手順では必ず`CONTROL_PLANE_API_KEY`を使います。
+## 10. doctorで検査して起動する
+リポジトリ直下の通常PowerShellで実行します。`main`チャンネルは必須です。
+```powershell
+$mcp = 'command=node app/gateway.mjs --config config/gateway.toml,channel=main'
 
-.\.tools\tunnel-client\tunnel-client.exe doctor --control-plane.tunnel-id=tunnel_0123456789abcdef0123456789abcdef --control-plane.api-key=env:OPENAI_TUNNEL_API_KEY --mcp.command="$mcp" --explain
-.\.tools\tunnel-client\tunnel-client.exe run --control-plane.tunnel-id=tunnel_0123456789abcdef0123456789abcdef --control-plane.api-key=env:OPENAI_TUNNEL_API_KEY --mcp.command="$mcp"
+.\.tools\tunnel-client\tunnel-client.exe doctor --mcp.command="$mcp" --explain
+.\.tools\tunnel-client\tunnel-client.exe run --mcp.command="$mcp"
 ```
-`run`を終了した後は、同じPowerShellで次を実行して一時的な環境変数を消します。
-```powershell
-Remove-Item Env:OPENAI_TUNNEL_API_KEY
-```
-`--control-plane.api-key=sk-...`のように生のキーを引数へ直接書く例は使いません。現在のhelpが案内する形式は`env:VARNAME`または`file:/path/to/secret`です。生のキーをコマンド履歴やプロセス引数へ残さず、Node.jsラッパーも追加しません。
-## 9. ChatGPTへ接続する
+キーやTunnel IDは環境変数から自動取得されます。生のキーをコマンド引数、`gateway.toml`、`.env`、リポジトリ内ファイルへ書きません。Node.jsラッパーも追加しません。
+## 11. ChatGPTへ接続する
 最初にDeveloper modeを直接開き、有効にします。
 ```text
 https://chatgpt.com/plugins#settings/Security?section=developer-mode

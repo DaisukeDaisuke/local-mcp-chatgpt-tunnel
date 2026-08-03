@@ -29,13 +29,28 @@ test('installation automation and repository hook mutation are absent', async ()
   assert.doesNotMatch(install, /Expand-Archive|Invoke-WebRequest|enable-git-hooks|init-workspace/);
 });
 
-test('runtime key goes directly to tunnel-client and is not handled by repository scripts', async () => {
+test('runtime key and tunnel id use tunnel-client native environment variables', async () => {
   const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
-  assert.match(install, /--control-plane\.api-key=env:OPENAI_TUNNEL_API_KEY/);
-  assert.match(install, /tunnel-client\.exe doctor/);
-  assert.match(install, /tunnel-client\.exe run/);
+  assert.match(install, /CONTROL_PLANE_API_KEY/);
+  assert.match(install, /CONTROL_PLANE_TUNNEL_ID/);
+  assert.match(install, /SetEnvironmentVariable\('CONTROL_PLANE_API_KEY'/);
+  assert.match(install, /local-mcp-tunnel-runtime-no-model-api/);
+  assert.match(install, /tunnel-client\.exe doctor --mcp\.command=/);
+  assert.match(install, /tunnel-client\.exe run --mcp\.command=/);
+  assert.doesNotMatch(install, /tunnel-client\.exe doctor[^\n]*--control-plane\.(?:api-key|tunnel-id)/);
+  assert.doesNotMatch(install, /tunnel-client\.exe run[^\n]*--control-plane\.(?:api-key|tunnel-id)/);
+  assert.doesNotMatch(install, /OPENAI_TUNNEL_API_KEY/);
   assert.doesNotMatch(install, /--control-plane\.api-key=sk_REPLACE_ME/);
   assert.doesNotMatch(install, /promptMasked|Tunnel runtime API key \(not saved\)/);
+});
+
+test('installation documents tunnel runtime roles and restricted API key creation', async () => {
+  const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
+  assert.match(install, /platform\.openai\.com\/settings\/organization\/people\/roles/);
+  assert.match(install, /platform\.openai\.com\/settings\/organization\/people\/groups/);
+  assert.match(install, /platform\.openai\.com\/settings\/organization\/api-keys/);
+  assert.match(install, /Tunnels Read \+ Use/);
+  assert.match(install, /モデルAPIに使えないTunnel専用キー/);
 });
 
 test('gateway uses Codex-style generic MCP tables and honors enabled entries', async () => {

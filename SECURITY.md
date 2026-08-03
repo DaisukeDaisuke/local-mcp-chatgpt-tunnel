@@ -8,7 +8,8 @@ Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの�
 ## Tunnelの公開範囲
 Secure MCP Tunnelは外向きHTTPSでOpenAIへ接続し、ローカルMCPの受信ポートを公開しません。Tunnelの関連付けは自分のPlatform Organizationと自分のChatGPT Workspaceだけに限定します。他人のOrganization、共有Workspace、公開Pluginへ関連付けません。
 ## Runtime API key
-runtime主体には`Tunnels Read + Use`だけを与えます。INSTALL.mdはruntime API keyを`tunnel-client`の引数で渡す例を示します。このリポジトリはキーを保存しませんが、コマンドライン引数はシェル履歴や同一PC上のプロセス情報から見える場合があります。必要なら公式helpにある環境変数またはファイル参照方式を使います。
+runtime主体には`Tunnels Read + Use`だけを与え、モデルAPI、Files、Organization管理、Tunnel Manage権限を与えません。INSTALL.mdではキー名にも`no-model-api`を含め、`CONTROL_PLANE_API_KEY`と`CONTROL_PLANE_TUNNEL_ID`をWindowsのユーザー環境変数へ保存します。`tunnel-client`はこれらを自動で読むため、キーをコマンドライン引数へ載せません。
+ユーザー環境変数は同じWindowsユーザーで動く別プロセスから読めます。OSレベルの秘密保管庫ではないため、強く分離する場合はTunnel専用の標準Windowsユーザーを使います。`OPENAI_API_KEY`はfallbackとして読まれますが、モデルAPI権限を持つキーとの取り違えを防ぐため使用しません。
 ## ファイル操作
 各MCPの`allowed_directories`と`allowed_files`が、ChatGPTから子MCPへ渡せるファイルパスを決めます。ディレクトリは配下を含み、ファイルは絶対パスの完全一致です。相対パスはMCPの`cwd`から解決し、Windows区切り文字、JSONの二重エスケープ、既存パスのシンボリックリンクを正規化してから比較します。許可リストが空のMCPでパスらしい引数を使うと拒否します。
 safe-filesは`cwd`だけをWorkspaceルートとして使い、その外側とシンボリックリンクによる脱出を拒否します。危険そうなフォルダ名の一般ブラックリストは使いません。高確度の秘密文字列は内容検査で拒否し、`.git`内部へのpatchは操作固有の制約として拒否します。
