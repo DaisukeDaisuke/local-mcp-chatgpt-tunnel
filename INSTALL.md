@@ -271,11 +271,11 @@ Add membersをクリックします。
 <img width="746" height="511" alt="image" src="https://github.com/user-attachments/assets/b2ca166a-0228-4f4c-98ae-40d32d3a2c6c" />
 
 `Add members to ...`の画面で、自身のアカウントを選択し、`Add members`をクリックします。
-<img width="805" height="528" alt="image" src="https://github.com/user-attachments/assets/59ba876c-cf57-4bcb-9e03-f694bb36103a" />
+<img width="805" height="528" alt="image" src="https://github.com/user-attachments/assets/6b2613c6-2823-4d87-8355-27a1fa896818" />
 
 Cancelを押してページを閉じます。
 
-<img width="761" height="521" alt="image" src="https://github.com/user-attachments/assets/fa7b97ff-d367-4b8e-b081-908233c69216" />
+<img width="761" height="521" alt="image" src="https://github.com/user-attachments/assets/a7739708-d619-4cf9-b170-83a9e5c983d9" />
 
 ## 8. モデルAPI権限のないruntime API keyを作成する
 > [!CAUTION]
