@@ -9,7 +9,7 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 
 ![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
 
-# インストール方法
+## インストール方法
 
 > [!IMPORTANT]
 > Windows環境での、始め方は[INSTALL.md](./INSTALL.md)を使用してください。
