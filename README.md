@@ -1,9 +1,7 @@
 # Local MCP ChatGPT Tunnel
-Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tunnel経由でChatGPT Developer Modeへ接続するためのローカルGatewayです。<br>
+ChatGPTから、Windows上で動くstdio形式のMCPサーバーを直接呼び出すためのローカルGatewayです。<br>
+![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
 複数のstdio MCPを1つに集約し、ツール名の名前空間化、公開ツールの除外、パス許可、直列実行、遅延起動を設定ファイルから制御できます。<br>
-> [!WARNING]
-> 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
-> 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
 
 <br>
 
@@ -13,6 +11,12 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 
 > [!IMPORTANT]
 > Windows環境でのセットアップは[INSTALL.md](./INSTALL.md)を使用してください。
+
+## セキュリティ警告
+
+> [!WARNING]
+> 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
+> 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
 
 ## 何ができるか
 - ChatGPTからWindows上のstdio MCPサーバーを呼び出す
@@ -120,11 +124,13 @@ server = "controller"
 tool = "stop_browser"
 ```
 ## セキュリティ上の前提
+
 > [!WARNING]
-> `gateway.toml`の`command`はローカルプログラムを実行します。信頼できるMCPだけを登録してください。<br>
-> コマンドによっては、ネット上のmcpプログラムを直接取得して実行するものもあります。<br>
-> gateway.tomlによるコマンド指定は、サンドボックス上ではなく、実際にパソコン上でユーザー権限のプログラムとして実行されます。<br>
-> 信頼できないmcpを指定しないでください。<br>
+> `gateway.toml`の`command`は、ローカルプログラムを実行します。信頼できるMCPだけを登録してください。<br>
+> コマンドによっては、インターネット上からMCPプログラムを取得して、そのまま実行するものもあります。<br>
+> `gateway.toml`で指定したコマンドは、サンドボックス内ではなく、実際のPC上でWindowsユーザーの権限を使って実行されます。<br>
+> 信頼できないMCPを指定しないでください。<br>
+
 
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。<br>
 Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。<br>
