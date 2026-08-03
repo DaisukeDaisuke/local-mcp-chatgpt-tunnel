@@ -2,8 +2,8 @@
 Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tunnel経由でChatGPT Developer Modeへ接続するためのローカルGatewayです。<br>
 複数のstdio MCPを1つに集約し、ツール名の名前空間化、公開ツールの除外、パス許可、直列実行、遅延起動を設定ファイルから制御できます。<br>
 > [!WARNING]
-> 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。
-> 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。
+> 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
+> 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
 ![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
 ## 何ができるか
 - ChatGPTからWindows上のstdio MCPサーバーを呼び出す
@@ -21,7 +21,7 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 - Ghidra MCP、Chrome DevTools MCP、DQ9 MCPなど第三者MCPの再配布
 Secure MCP Tunnelへの接続は公式`tunnel-client.exe`が担当します。<br>このリポジトリは、その標準入出力へ接続するローカルMCP Gatewayと同梱MCPを提供します。
 ## 対応環境
-現在の導入手順はWindows 11向けです。<br>実行にはNode.js LTSとOpenAI公式`tunnel-client.exe`を使います。同梱のファイル検索機能にはripgrepを使い、診断スクリプトは`node`、`npm`、`git`、`rg`、`py`を確認します。
+現在の導入手順はWindows 11向けです。<br>実行にはNode.js LTSとOpenAI公式`tunnel-client.exe`を使います。<br>同梱のファイル検索機能にはripgrepを使い、診断スクリプトは`node`、`npm`、`git`、`rg`、`py`を確認します。
 macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構成は用意していません。
 ## 使い始めるまで
 使えるようになるまでの手順は、[INSTALL.md](./INSTALL.md)にまとめています。<br>
@@ -111,10 +111,10 @@ tool = "stop_browser"
 ```
 ## セキュリティ上の前提
 > [!WARNING]
-> `gateway.toml`の`command`はローカルプログラムを実行します。信頼できるMCPだけを登録してください。
-> コマンドによっては、ネット上のmcpプログラムを直接取得して実行するものもあります。
-> gateway.tomlによるコマンド指定は、サンドボックス状ではなく、実際にユーザー権限のパソコン上としてプログラムとして実行されます。
-> 信頼できないmcpを指定しないでください。
+> `gateway.toml`の`command`はローカルプログラムを実行します。信頼できるMCPだけを登録してください。<br>
+> コマンドによっては、ネット上のmcpプログラムを直接取得して実行するものもあります。<br>
+> gateway.tomlによるコマンド指定は、サンドボックス状ではなく、実際にユーザー権限のパソコン上としてプログラムとして実行されます。<br>
+> 信頼できないmcpを指定しないでください。<br>
 
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。<br>
 Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。<br>
