@@ -283,7 +283,6 @@ Cancelを押してページを閉じます。
 ### 8.1 Runtime API keysを開く
 [OpenAI PlatformのRuntime API keysを開く](https://platform.openai.com/settings/organization/api-keys)<br>
 `Create new secret key`を押します。<br>
-<img width="2552" height="428" alt="image" src="https://github.com/user-attachments/assets/e0f7ab39-afa1-4441-8613-0e0c0a57dfa3" />
 ### 8.2 Tunnel専用権限を設定する
 作成画面で次のように設定します。<br>
 1. `Name`: `local-mcp-tunnel-runtime-no-model-api`
@@ -291,14 +290,16 @@ Cancelを押してページを閉じます。
 3. `Permissions`: **Restricted**
 4. `Tunnels`: **`Read + Use`だけを有効化**
 5. `List models`、`Responses`、`Chat completions`、`Embeddings`、`Images`、`Files`など、Tunnel以外はすべて`None`
-   <img width="506" height="550" alt="image" src="https://github.com/user-attachments/assets/5dc5f1aa-96c6-4e7a-8a32-9ab4be6c7352" />
-   <img width="656" height="1106" alt="image" src="https://github.com/user-attachments/assets/864a6586-93c4-4578-be00-15e7c729953a" />
-   <img width="465" height="1102" alt="image" src="https://github.com/user-attachments/assets/90732951-56b2-40fa-8e20-360b9708bfc1" />
-   <img width="497" height="1024" alt="image" src="https://github.com/user-attachments/assets/67965ddd-eb9f-4b4b-920c-460e4b050985" />
-   この名前は、モデルAPIに使えないTunnel専用キーであることを後から見ても判別できるようにするためです。<br>
-   `All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。<br>
-   作成直後に表示されるAPI keyを安全な場所へ一時的に控えます。<br>後から同じ値を再表示できない場合があります。<br>
-   `<url: 作成直後に表示されたruntime API keyを控える図>`
+
+<img width="2552" height="428" alt="image" src="https://github.com/user-attachments/assets/e0f7ab39-afa1-4441-8613-0e0c0a57dfa3" /> <br>
+<img width="506" height="550" alt="image" src="https://github.com/user-attachments/assets/5dc5f1aa-96c6-4e7a-8a32-9ab4be6c7352" /> <br>
+<img width="656" height="1106" alt="image" src="https://github.com/user-attachments/assets/864a6586-93c4-4578-be00-15e7c729953a" /> <br>
+<img width="465" height="1102" alt="image" src="https://github.com/user-attachments/assets/90732951-56b2-40fa-8e20-360b9708bfc1" /> <br>
+<img width="497" height="1024" alt="image" src="https://github.com/user-attachments/assets/67965ddd-eb9f-4b4b-920c-460e4b050985" /> <br>
+この名前は、モデルAPIに使えないTunnel専用キーであることを後から見ても判別できるようにするためです。<br>
+`All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。<br>
+作成直後に表示されるAPI keyを安全な場所へ一時的に控えます。<br>後から同じ値を再表示できない場合があります。<br>
+`<url: 作成直後に表示されたruntime API keyを控える図>`
 ## 9. Tunnel IDとruntime API keyをユーザー環境変数へ保存する
 `tunnel-client`は`CONTROL_PLANE_TUNNEL_ID`と`CONTROL_PLANE_API_KEY`を自動で読みます。<br>起動コマンドへ`--control-plane.tunnel-id`や`--control-plane.api-key`を書く必要はありません。<br>
 通常権限のPowerShellで次を実行し、API keyと`tunnel_...`を自分の値へ置き換えます。<br>
@@ -308,10 +309,10 @@ $apiKey = 'ここにTunnel runtime API keyを貼る'
 $tunnelId = 'tunnel_0123456789abcdef0123456789abcdef'
 
 if ([string]::IsNullOrWhiteSpace($apiKey)) {
-    throw 'CONTROL_PLANE_API_KEY is empty.'
+throw 'CONTROL_PLANE_API_KEY is empty.'
 }
 if ([string]::IsNullOrWhiteSpace($tunnelId)) {
-    throw 'CONTROL_PLANE_TUNNEL_ID is empty.'
+throw 'CONTROL_PLANE_TUNNEL_ID is empty.'
 }
 
 # 現在のPowerShellと、ここから起動するtunnel-clientへ即時反映
@@ -325,9 +326,9 @@ $env:CONTROL_PLANE_TUNNEL_ID = $tunnelId
     [EnvironmentVariableTarget]::User
 )
 [Environment]::SetEnvironmentVariable(
-    'CONTROL_PLANE_TUNNEL_ID',
-    $tunnelId,
-    [EnvironmentVariableTarget]::User
+'CONTROL_PLANE_TUNNEL_ID',
+$tunnelId,
+[EnvironmentVariableTarget]::User
 )
 
 Remove-Variable apiKey, tunnelId
