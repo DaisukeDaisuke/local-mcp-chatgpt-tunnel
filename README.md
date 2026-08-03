@@ -69,7 +69,7 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 `safe-download`は読み取り専用で、単一ファイルまたはディレクトリを常にZIPとして返します。`safe-files`とは別の`cwd`と許可リストを設定し、ChatGPTへ渡してよいソースだけを公開します。<br>
 ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。<br>
 ## 任意のstdio MCPを追加する
-接続するMCPは`config/gateway.toml`の`[mcp_servers.<name>]`へ追加します。Gatewayコード内に特定MCPの起動設定はありません。<br>
+接続するMCPの起動コマンドや引数は、Gateway本体ではなく`config/gateway.toml`の`[mcp_servers.<name>]`へ記述します。<br>
 ```toml
 private_use_only = true
 [mcp_servers.example]
