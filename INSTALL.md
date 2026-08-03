@@ -412,7 +412,7 @@ ChatGPTに、作成したカスタムアプリのツールが利用可能にな�
 
 ### 13.1 ローカルサーバー
 
-Gatewayの`http://localhost:8080/`は、次のページから接続状態を確認できます。<br>
+Gatewayの稼働中は、`http://localhost:8080/`からゲートウェイの状態を確認できます。<br>
 ```
 http://localhost:8080/
 ```
