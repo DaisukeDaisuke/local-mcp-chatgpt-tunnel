@@ -299,7 +299,6 @@ Cancelを押してページを閉じます。
 この名前は、モデルAPIに使えないTunnel専用キーであることを後から見ても判別できるようにするためです。<br>
 `All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。<br>
 作成直後に表示されるAPI keyを安全な場所へ一時的に控えます。<br>後から同じ値を再表示できない場合があります。<br>
-`<url: 作成直後に表示されたruntime API keyを控える図>`
 ## 9. Tunnel IDとruntime API keyをユーザー環境変数へ保存する
 `tunnel-client`は`CONTROL_PLANE_TUNNEL_ID`と`CONTROL_PLANE_API_KEY`を自動で読みます。<br>起動コマンドへ`--control-plane.tunnel-id`や`--control-plane.api-key`を書く必要はありません。<br>
 通常権限のPowerShellで次を実行し、API keyと`tunnel_...`を自分の値へ置き換えます。<br>
@@ -391,11 +390,11 @@ ChatGPT側の画面名や接続方式が変更されていないかを確認し�
 > `config/gateway.toml`でMCPや公開ツールを変更した場合も、更新するまでChatGPTには古いツール一覧が表示されることがあります。
 [カスタムアプリの設定を開く](https://chatgpt.com/#settings/Plugins)<br>
 作成したカスタムアプリ（コネクター）をクリックします。<br>
-<img width="745" height="677" alt="image" src="https://github.com/user-attachments/assets/e3332e2d-a854-4f2f-86cd-9c24b8c4227e" />
+<img width="745" height="677" alt="image" src="https://github.com/user-attachments/assets/e3332e2d-a854-4f2f-86cd-9c24b8c4227e" /><br>
 詳細設定が表示されたら、一番下までスクロールします。<br>
-<img width="764" height="631" alt="image" src="https://github.com/user-attachments/assets/76bf233d-d2d9-49cf-8d51-7bab33461c70" />
+<img width="764" height="631" alt="image" src="https://github.com/user-attachments/assets/76bf233d-d2d9-49cf-8d51-7bab33461c70" /><br>
 `更新`をクリックします。<br>
-<img width="675" height="328" alt="image" src="https://github.com/user-attachments/assets/70a0d485-d980-4be4-9d53-f311e51cc1aa" />
+<img width="675" height="328" alt="image" src="https://github.com/user-attachments/assets/70a0d485-d980-4be4-9d53-f311e51cc1aa" /><br>
 更新が完了すると、起動中のGatewayから最新のツール一覧が読み込まれます。<br>
 ### 12.2 公開されたツールを確認する
 ChatGPTで作成したカスタムアプリを有効にし、表示されたツール名を確認します。<br>想定外のMCPやツールが公開されている場合は、`gateway.toml`で対象MCPを`enabled = false`にするか、`blocked_tools`または`blocked_tool_substrings`へ追加し、Tunnelを再起動してカスタムアプリを再度更新します。<br>
