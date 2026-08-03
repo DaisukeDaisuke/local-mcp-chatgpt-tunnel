@@ -197,9 +197,9 @@ npm test
 
 
 > [!WARNING]
-> #### このidはあとで使います
-> #### このトンネルidはパスワードと同じように扱い、絶対に流失しないでください。
-> 流失した場合、第三者によって任意コード実行が行われる可能性があります。
+> #### このIDはあとで使います
+> #### このTunnel IDはパスワードと同じように扱い、絶対に流出させないでください。
+> 流出した場合、第三者によって任意コード実行が行われる可能性があります。
 
 <img width="2559" height="668" alt="image" src="https://github.com/user-attachments/assets/42bb5cf1-3ee2-4d32-8efc-5cf4597e6276" />
 
@@ -224,11 +224,11 @@ Create roleをクリックします。<br>
 
 <img width="2559" height="562" alt="image" src="https://github.com/user-attachments/assets/d88b93b1-4f4f-4128-8c9c-bb05cb0da79c" />
 
-このような画面が表示されますが、Tunnelsの項目を正確に探します。
+このような画面が表示されたら、Tunnelsの項目を探します。
 
 <img width="700" height="1168" alt="image" src="https://github.com/user-attachments/assets/cfeb6a30-b2c4-4a9a-9dca-221c2aa1c827" />
 
-Tunnelsの権限を、Read、Useを設定します。Manageは付与してはいけません。
+Tunnelsの権限にReadとUseを設定します。Manageは付与してはいけません。
 
 <img width="828" height="169" alt="image" src="https://github.com/user-attachments/assets/2411441a-a14c-4191-a2ae-74fd185762e1" />
 
@@ -254,7 +254,7 @@ Rolesをクリックします。
 
 <img width="2559" height="453" alt="image" src="https://github.com/user-attachments/assets/c932d038-6c4a-457e-84b9-54a820f47aeb" />
 
-先ほど追加したロールを対象にし、Saveをクリックします。
+先ほど作成したロールを選択し、Saveをクリックします。
 
 <img width="503" height="348" alt="image" src="https://github.com/user-attachments/assets/6c9b7a66-2eb0-4ab3-be4e-bf30340c854f" />
 
@@ -280,7 +280,7 @@ Cancelを押してページを閉じます。
 1. `Name`: `local-mcp-tunnel-runtime-no-model-api`
 2. `Project`: Tunnelを作成したOrganization内のProject
 3. `Permissions`: **Restricted**
-4. `Tunnels`: **Read + Use`だけを有効化**
+4. `Tunnels`: **`Read + Use`だけを有効化**
 5. `List models`、`Responses`、`Chat completions`、`Embeddings`、`Images`、`Files`など、Tunnel以外はすべて`None`
 
 <img width="506" height="550" alt="image" src="https://github.com/user-attachments/assets/5dc5f1aa-96c6-4e7a-8a32-9ab4be6c7352" />
@@ -302,9 +302,9 @@ Cancelを押してページを閉じます。
 
 > [!CAUTION]
 > このセクションは正確に従ってください。<br>
-> 課金可能なAPIキーを作成した場合、流失時に課金が発生し、高額請求、またはクレジットがマイナス(借金)になる可能性があります。<br>
-> また、誤ってウェブサイトに張り付けたりしないように、PowerShellと、該当ブラウザのアプリケーションは閉じたうえで行うことをお勧めします。
-> また、作業完了後は、クリップボードを上書きして破壊してくさい。
+> 課金可能なAPI keyを作成した場合、流出時に課金が発生し、高額請求、またはクレジットがマイナス（借金）になる可能性があります。<br>
+> また、誤ってWebサイトへ貼り付けないように、PowerShellと該当するブラウザーを閉じたうえで作業することをお勧めします。<br>
+> 作業完了後は、クリップボードを別の内容で上書きしてください。
 
 ### 8.1 Runtime API keysを開く
 [OpenAI PlatformのRuntime API keysを開く](https://platform.openai.com/settings/organization/api-keys)<br>
@@ -357,7 +357,7 @@ $env:CONTROL_PLANE_TUNNEL_ID
 `OPENAI_API_KEY`もfallbackとして読まれますが、モデルAPI権限を持つキーとの取り違えを防ぐため、この手順では必ず`CONTROL_PLANE_API_KEY`を使います。<br>
 ## 10. Tunnelを検査して起動する
 リポジトリ直下の通常PowerShellで実行します。<br>
-exeを直接実行し、大部分がnodejsで書かれているため、Windows以外でも動作すると思われます。<br>
+exeを直接実行し、大部分がNode.jsで書かれているため、Windows以外でも動作すると思われます。<br>
 `main`チャンネルは必須です。<br>
 ```powershell
 $mcp = 'command=node app/gateway.mjs --config config/gateway.toml,channel=main'
@@ -386,11 +386,11 @@ Developer modeを有効にし、カスタムMCPを利用する際の警告を確
 
 <img width="2566" height="1156" alt="image" src="https://github.com/user-attachments/assets/c5636bd8-ad76-45e3-9156-71d9a42a3be7" />
 
-この時点で動作確認が行われます。エラーが発生する場合は、ローカルプロキシの出力をAIに丸投げしてください
+この時点で動作確認が行われます。エラーが発生する場合は、ローカルプロキシの出力をAIに丸投げしてください。
 
 <img width="782" height="1061" alt="image" src="https://github.com/user-attachments/assets/db976858-3d45-48ab-992b-6f557872a101" />
 
-作成後、次に表示された画面で、有効化してください。
+作成後、次に表示される画面で有効化してください。
 
 ### 11.3 ChatGPT接続手順の公式資料を確認する
 [OpenAIのChatGPT接続ガイドを開く](https://developers.openai.com/plugins/deploy/connect-chatgpt)<br>
@@ -399,8 +399,8 @@ ChatGPT側の画面名や接続方式が変更されていないかを確認し�
 ChatGPTで作成したカスタムアプリを有効にし、表示されたツール名を確認します。<br>想定外のMCPやツールが公開されている場合は、`gateway.toml`で対象MCPを`enabled = false`にするか、`blocked_tools`または`blocked_tool_substrings`へ追加してTunnelを再起動します。<br>
 このTunnelは自分専用として扱い、公開申請、第三者共有、共有Workspaceへの追加は行いません。
 
-### 11.4 動作確認する。
-ChatGPTにツールが利用カニになったか聞いてください。
+### 11.4 動作確認する
+ChatGPTにツールが利用可能になったか聞いてください。
 
 > [!IMPORTANT]
-> お疲れさまでした。チャットGPTはローカルmcpを使用できるようになりました。
+> お疲れさまでした。ChatGPTはローカルMCPを使用できるようになりました。
