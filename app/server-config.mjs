@@ -38,8 +38,6 @@ function normalizeServer(name, raw, base) {
   if (raw.enabled === false) return null;
   if (typeof raw.command !== 'string' || !raw.command.trim()) throw new Error(`mcp_servers.${name}.command is required when enabled`);
   if (raw.url !== undefined) throw new Error(`mcp_servers.${name}.url is not supported by this stdio gateway; use command and args`);
-  if (raw.tool_output_token_limit !== undefined) throw new Error(`mcp_servers.${name}.tool_output_token_limit is Codex-specific and is not enforced by this gateway`);
-  if (raw.tools !== undefined) throw new Error(`mcp_servers.${name}.tools approval tables are Codex-specific and are not enforced by this gateway`);
   if (raw.cwd !== undefined && (typeof raw.cwd !== 'string' || !raw.cwd)) throw new Error(`mcp_servers.${name}.cwd must be a non-empty string`);
   if (raw.prefix !== undefined && (typeof raw.prefix !== 'string' || !raw.prefix)) throw new Error(`mcp_servers.${name}.prefix must be a non-empty string`);
   if (raw.serial_group !== undefined && (typeof raw.serial_group !== 'string' || !raw.serial_group)) throw new Error(`mcp_servers.${name}.serial_group must be a non-empty string`);

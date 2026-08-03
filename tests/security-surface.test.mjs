@@ -33,7 +33,10 @@ test('runtime key and tunnel id use tunnel-client native environment variables',
   const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
   assert.match(install, /CONTROL_PLANE_API_KEY/);
   assert.match(install, /CONTROL_PLANE_TUNNEL_ID/);
-  assert.match(install, /SetEnvironmentVariable\('CONTROL_PLANE_API_KEY'/);
+  assert.match(install, /SetEnvironmentVariable\(\s*'CONTROL_PLANE_API_KEY'/);
+  assert.match(install, /\$env:CONTROL_PLANE_API_KEY = \$apiKey/);
+  assert.doesNotMatch(install, /^\s*\$[^\n]*Read-Host/m);
+  assert.doesNotMatch(install, /NetworkCredential\]::new|SecureStringToBSTR/);
   assert.match(install, /local-mcp-tunnel-runtime-no-model-api/);
   assert.match(install, /tunnel-client\.exe doctor --mcp\.command=/);
   assert.match(install, /tunnel-client\.exe run --mcp\.command=/);

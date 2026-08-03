@@ -18,7 +18,7 @@ allowed_files = []
 EXAMPLE = "value"
 ```
 `enabled = false`のMCPは起動しません。Gatewayは有効なstdio MCPだけを子プロセスとして起動し、ツール名を`<prefix>__<tool>`へ名前空間化します。
-Codex固有の`tool_output_token_limit`とツール別`approval_mode`は実装していません。有効MCPに書かれている場合は、効いたように見せず設定エラーにします。
+Codex固有の`tool_output_token_limit`、ツール別`approval_mode`、Gatewayが使わない未知の項目は無視します。Codexの設定をコピーするときに、それらを削除する必要はありません。ただし、このGateway上では効果もありません。
 競合を避けるため同時実行を直列化する場合は`serial_group`、公開したくないツールは`blocked_tools`を指定できます。別MCPのツール成功後だけ起動・停止する構成も設定側へ書けます。
 ```toml
 [mcp_servers.browser]

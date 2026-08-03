@@ -74,7 +74,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 `allowed_directories`は指定ディレクトリとその配下を許可します。`allowed_files`は列挙した絶対パスだけを完全一致で許可します。Chrome DevTools MCPのアップロード元など、Workspace全体を許可する必要がないファイルは`allowed_files`へ一つずつ書きます。Windowsの`\`と`/`、JSONで二重にエスケープされた`\\`は正規化して比較され、相対パスはそのMCPの`cwd`から解決されます。
 Gatewayは全MCPのツール引数を再帰的に検査します。`path`、`filePath`、`files`、`directory`などのパスらしいキー、または絶対パスらしい文字列を検出し、許可リスト外なら子MCPへ渡しません。パス引数を持たないツールは許可リストが空でも動きます。
 `enabled = false`なら起動しません。GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。現在のGatewayが直接集約するのは`command`で起動するstdio MCPです。Ghidra MCPやDQ9 MCPの実装は同梱せず、必要な外部MCPを利用者自身が設定します。
-Codex設定からコピーする場合、`tool_output_token_limit`と`[mcp_servers.<name>.tools.<tool>]`の承認設定は削除してください。Gatewayはトークン数の計測やCodexの承認UIを持たないため、これらが書かれている有効MCPは明示エラーにします。
+Codex設定からコピーした`tool_output_token_limit`、`[mcp_servers.<name>.tools.<tool>]`の承認設定、その他Gatewayが使わない項目は、そのまま残して構いません。Gatewayは認識する項目だけを読み、未対応項目を無視します。トークン数の計測やCodexの承認UIは実装していないため、無視された項目はこのGatewayでは効果を持ちません。
 ## 5. Node.jsで最終検証する
 Node.jsが導入作業を変更することはありません。次のコマンドは`node`、`npm`、`git`、`rg`、`py`を全部確認し、途中の失敗で止まらず、最後に問題のあるコマンドをまとめます。バージョン番号が例と違うだけでは失敗にしません。
 ```powershell
@@ -125,24 +125,37 @@ https://platform.openai.com/settings/organization/api-keys
 この名前は、モデルAPIに使えないTunnel専用キーであることを後から見ても判別できるようにするためです。`All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。
 ## 9. Tunnel IDとruntime API keyをユーザー環境変数へ保存する
 `tunnel-client`は`CONTROL_PLANE_TUNNEL_ID`と`CONTROL_PLANE_API_KEY`を自動で読みます。起動コマンドへ`--control-plane.tunnel-id`や`--control-plane.api-key`を書く必要はありません。
-通常権限のPowerShellで次を実行し、`tunnel_...`を自分のTunnel IDへ置き換えます。runtime API keyは画面に表示されないマスク入力で受け取ります。
+通常権限のPowerShellで次を実行し、API keyと`tunnel_...`を自分の値へ置き換えます。`Read-Host`や`SecureString`変換は使いません。
 ```powershell
-$secureKey = Read-Host 'Tunnel runtime API key (no model API permissions)' -AsSecureString
-$plainKey = [System.Net.NetworkCredential]::new('', $secureKey).Password
-[Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $plainKey, 'User')
-[Environment]::SetEnvironmentVariable('CONTROL_PLANE_TUNNEL_ID', 'tunnel_0123456789abcdef0123456789abcdef', 'User')
-Remove-Variable plainKey, secureKey
+$apiKey = 'ここにTunnel runtime API keyを貼る'
+$tunnelId = 'tunnel_0123456789abcdef0123456789abcdef'
 
-$env:CONTROL_PLANE_API_KEY = [Environment]::GetEnvironmentVariable(
+if ([string]::IsNullOrWhiteSpace($apiKey)) {
+    throw 'CONTROL_PLANE_API_KEY is empty.'
+}
+if ([string]::IsNullOrWhiteSpace($tunnelId)) {
+    throw 'CONTROL_PLANE_TUNNEL_ID is empty.'
+}
+
+# 現在のPowerShellと、ここから起動するtunnel-clientへ即時反映
+$env:CONTROL_PLANE_API_KEY = $apiKey
+$env:CONTROL_PLANE_TUNNEL_ID = $tunnelId
+
+# Windowsのユーザー環境変数へ永続保存
+[Environment]::SetEnvironmentVariable(
     'CONTROL_PLANE_API_KEY',
+    $apiKey,
     [EnvironmentVariableTarget]::User
 )
-$env:CONTROL_PLANE_TUNNEL_ID = [Environment]::GetEnvironmentVariable(
+[Environment]::SetEnvironmentVariable(
     'CONTROL_PLANE_TUNNEL_ID',
+    $tunnelId,
     [EnvironmentVariableTarget]::User
 )
+
+Remove-Variable apiKey, tunnelId
 ```
-これはWindowsのユーザー環境変数として永続保存されます。設定後はPowerShellを閉じ、新しいPowerShellを開いてください。Machine環境変数にはせず、管理者PowerShellも使いません。
+これは現在のPowerShellへ即時反映し、Windowsのユーザー環境変数としても永続保存します。Machine環境変数にはせず、管理者PowerShellも使いません。既に起動している別のPowerShellやアプリへは反映されないため、そちらで使う場合は新しく起動します。
 同じWindowsユーザーで動く別プロセスからはユーザー環境変数を読めるため、SSH鍵や他サービスの資格情報と強く分離したい場合は、このTunnel専用の標準Windowsユーザーで設定します。
 確認時も値そのものは表示しません。
 ```powershell

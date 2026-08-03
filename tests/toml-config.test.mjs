@@ -73,23 +73,19 @@ test('gateway path allowlists require absolute paths', async () => {
   await assert.rejects(loadGatewayConfig(path), /must be absolute paths/);
 });
 
-test('gateway rejects Codex-only token and approval settings instead of silently ignoring them', async () => {
+test('gateway accepts Codex-only token and approval settings and ignores unsupported fields', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-codex-only-'));
-  const tokenPath = join(directory, 'token.toml');
-  await writeFile(tokenPath, [
+  const path = join(directory, 'codex-compatible.toml');
+  await writeFile(path, [
     'private_use_only = true',
     '[mcp_servers.alpha]',
     'command = "node"',
-    'tool_output_token_limit = 1000'
-  ].join('\n'), 'utf8');
-  await assert.rejects(loadGatewayConfig(tokenPath), /tool_output_token_limit is Codex-specific/);
-  const approvalPath = join(directory, 'approval.toml');
-  await writeFile(approvalPath, [
-    'private_use_only = true',
-    '[mcp_servers.alpha]',
-    'command = "node"',
+    'tool_output_token_limit = 1000',
+    'unknown_codex_option = "kept in the source config"',
     '[mcp_servers.alpha.tools.dangerous]',
     'approval_mode = "approve"'
   ].join('\n'), 'utf8');
-  await assert.rejects(loadGatewayConfig(approvalPath), /approval tables are Codex-specific/);
+  const config = await loadGatewayConfig(path);
+  assert.equal(config.servers.length, 1);
+  assert.equal(config.servers[0].name, 'alpha');
 });
