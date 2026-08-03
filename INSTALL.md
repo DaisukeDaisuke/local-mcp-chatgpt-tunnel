@@ -6,9 +6,10 @@
 ## 作業の流れ
 1. Windowsへ必要なコマンドを導入する
 2. OpenAI公式の`tunnel-client.exe`を配置する
-3. `config/gateway.toml`へローカルMCPを登録する
+3. `config/gateway.toml`を完全に記入し、ローカルMCPを登録する
 4. OpenAI Platformで個人用Tunnelと実行用API keyを作る
 5. Tunnelを起動し、ChatGPTへカスタムアプリとして接続する
+6. カスタムアプリを更新し、公開されたツールを確認する
 ## 1. 必要なソフトを導入する
 通常権限のPowerShellで、必要なものだけを一行ずつ実行します。<br>既に導入済みのものは飛ばしてください。<br>
 ```powershell
@@ -27,7 +28,7 @@ Chrome、Ghidra、その他の外部MCPは、実際に使うものだけを各�
 [SHA256SUMS.txtをダウンロード](https://github.com/openai/tunnel-client/releases/latest/download/SHA256SUMS.txt)<br>
 このリンクを開き、ZIPと同じダウンロード先へ`SHA256SUMS.txt`を保存します。<br>
 <img width="1195" height="188" alt="image" src="https://github.com/user-attachments/assets/7bee9d3b-d2cc-4aba-9a4c-a225102c8a61" />
-### 2.3 Releaseページで実際のファイル名を確認する
+### 2.3 最新のReleaseページで実際のファイル名を確認する
 [tunnel-clientの最新Releaseを開く](https://github.com/openai/tunnel-client/releases/latest)<br>
 ZIP名が変わっている場合だけ、ReleaseページのAssetsを開き、Windows amd64用ZIPの実際の名前を確認します。<br>ダウンロードできない場合はこちらを試してください。
 <img width="1209" height="604" alt="image" src="https://github.com/user-attachments/assets/0b33d8dd-db5c-4b1a-a05b-abbc112583da" />
@@ -67,6 +68,10 @@ code config\gateway.toml
 ```
 `gateway.example.toml`内の`C:\ABSOLUTE\PATH\TO`は説明用のダミーです。<br>
 `args`にはこのリポジトリ内のMCPサーバーの絶対パスを、`cwd`と`allowed_directories`には実際に操作するWorkspaceの絶対パスを書きます。<br>
+> [!IMPORTANT]
+> `config/gateway.toml`は途中まで記入した状態で起動しないでください。<br>
+> 使用するすべてのMCPについて、起動コマンド、絶対パス、`cwd`、`prefix`、許可するディレクトリまたはファイルを実際の値で完全に記入してから、手順10へ進みます。<br>
+> 使用しない設定例は、削除するか`enabled = false`にしてください。
 ### 4.2 ダミーパスが残っていないことを確認する
 ```powershell
 rg -n -F 'C:\ABSOLUTE\PATH\TO' config\gateway.toml
@@ -74,8 +79,6 @@ rg -n -F 'C:\ABSOLUTE\PATH\TO' config\gateway.toml
 何も表示されなければ、対象のダミーパスは残っていません。<br>ダミーのまま起動すると、Node.jsは`Cannot find module 'C:\ABSOLUTE\PATH\TO\...'`と`MODULE_NOT_FOUND`を出します。<br>これはnpmパッケージの不足ではなく、`gateway.toml`のパスが未設定であることを示します。<br>
 
 <img width="407" height="416" alt="image" src="https://github.com/user-attachments/assets/62407ca5-152c-4dd5-b21a-859f6759cf97" />
-
-
 ### 4.3 safe-filesを設定する
 設定形式はCodexのMCP設定に近い`[mcp_servers.<name>]`です。<br>
 ```toml
@@ -165,6 +168,10 @@ Gatewayは全MCPのツール引数を再帰的に検査します。<br>
 `enabled = false`のMCPは起動しません。<br>GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。<br>現在直接集約するのは、`command`で起動するstdio MCPです。<br>Ghidra MCPやDQ9 MCPなどの外部MCP本体は同梱していません。<br>
 有効なMCPの一部が起動できなくても、Gatewayは初期化を続行し、起動できたMCPのツールだけを公開します。<br>起動できなかったMCPは標準エラーへ`unavailable and was skipped`として記録されます。<br>すべてを一時的に無効化した設定でもGatewayは起動し、ツール一覧は空になります。<br>
 Codex設定からコピーした`tool_output_token_limit`、`[mcp_servers.<name>.tools.<tool>]`の承認設定、その他Gatewayが使わない項目は残しても読み飛ばされます。<br>トークン数の計測やCodexの承認UIは実装していないため、無視された項目はこのGatewayでは効果を持ちません。<br>
+### 4.7 起動前にgateway.tomlを完成させる
+手順10へ進む前に、`config/gateway.toml`のすべての`enabled = true`のMCPを見直します。<br>
+`command`、`args`、`cwd`、`prefix`、`allowed_directories`、`allowed_files`など、使用するMCPに必要な項目を完全に記入してください。<br>
+説明用のダミーパス、未記入の値、意図していない許可範囲が一つでも残っている場合は、GatewayとTunnelを起動しません。<br>
 ## 5. ローカル設定を検証する
 次の診断は`node`、`npm`、`git`、`rg`、`py`を確認し、途中で止まらず、最後に問題のあるコマンドをまとめます。<br>バージョン番号が例と異なるだけでは失敗にしません。<br>
 ```powershell
@@ -193,9 +200,6 @@ npm test
 
 `Create`が無効のままなら、まず`Description`を入力します。<br>それでも無効なら、ダイアログ内を最下部までスクロールし、残っている必須項目を確認します。<br>
 作成後、Tunnelの詳細画面に表示される`tunnel_id`を**控えます**。<br>後で`CONTROL_PLANE_TUNNEL_ID`へ設定します。<br>
-
-
-
 > [!WARNING]
 > #### このIDはあとで使います
 > #### このTunnel IDはパスワードと同じように扱い、絶対に流出させないでください。
@@ -206,7 +210,6 @@ npm test
 ### 6.3 公式仕様を確認する
 [OpenAI Secure MCP Tunnelsの公式ガイドを開く](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)<br>
 Tunnelの権限名、環境変数、`tunnel-client`の動作条件が変更されていないかを確認します。<br>このページではTunnelを作成せず、仕様確認だけを行います。<br>
-`<url: Tunnels Read + Useとtunnel-clientの起動条件を確認する図>`
 ## 7. Tunnel実行専用ロールを作成する
 ### 7.1 Organization Rolesを開く
 [OpenAI PlatformのOrganization Rolesを開く](https://platform.openai.com/settings/organization/people/roles)<br>
@@ -235,8 +238,6 @@ Tunnelsの権限にReadとUseを設定します。Manageは付与してはいけ
 次のようになりました。
 
 <img width="2559" height="492" alt="image" src="https://github.com/user-attachments/assets/6a81e9f5-c8a9-42e0-b90c-2438cac14f60" />
-
-
 Tunnelの作成や編集には別途`Tunnels Read + Manage`が必要ですが、普段`tunnel-client`を動かすruntime主体にはManage権限を付けません。<br>
 ### 7.2 自分だけのGroupへロールを割り当てる
 [OpenAI PlatformのOrganization Groupsを開く](https://platform.openai.com/settings/organization/people/groups)<br>
@@ -267,53 +268,37 @@ Add membersをクリックします。
 <img width="746" height="511" alt="image" src="https://github.com/user-attachments/assets/b2ca166a-0228-4f4c-98ae-40d32d3a2c6c" />
 
 `Add members to ...`の画面で、自身のアカウントを選択し、`Add members`をクリックします。
-
-
 <img width="805" height="528" alt="image" src="https://github.com/user-attachments/assets/59ba876c-cf57-4bcb-9e03-f694bb36103a" />
 
 Cancelを押してページを閉じます。
 
 <img width="761" height="521" alt="image" src="https://github.com/user-attachments/assets/fa7b97ff-d367-4b8e-b081-908233c69216" />
 
-### 8 Tunnel専用権限を設定する
+## 8. モデルAPI権限のないruntime API keyを作成する
+> [!CAUTION]
+> このセクションは正確に従ってください。<br>
+> 課金可能なAPI keyを作成した場合、流出時に課金が発生し、高額請求、またはクレジットがマイナス（借金）になる可能性があります。<br>
+> また、誤ってWebサイトへ貼り付けないように、PowerShellと該当するブラウザーを閉じたうえで作業することをお勧めします。<br>
+> 作業完了後は、クリップボードを別の内容で上書きしてください。
+### 8.1 Runtime API keysを開く
+[OpenAI PlatformのRuntime API keysを開く](https://platform.openai.com/settings/organization/api-keys)<br>
+`Create new secret key`を押します。<br>
+<img width="2552" height="428" alt="image" src="https://github.com/user-attachments/assets/e0f7ab39-afa1-4441-8613-0e0c0a57dfa3" />
+### 8.2 Tunnel専用権限を設定する
 作成画面で次のように設定します。<br>
 1. `Name`: `local-mcp-tunnel-runtime-no-model-api`
 2. `Project`: Tunnelを作成したOrganization内のProject
 3. `Permissions`: **Restricted**
 4. `Tunnels`: **`Read + Use`だけを有効化**
 5. `List models`、`Responses`、`Chat completions`、`Embeddings`、`Images`、`Files`など、Tunnel以外はすべて`None`
-
-<img width="506" height="550" alt="image" src="https://github.com/user-attachments/assets/5dc5f1aa-96c6-4e7a-8a32-9ab4be6c7352" />
-
-<img width="656" height="1106" alt="image" src="https://github.com/user-attachments/assets/864a6586-93c4-4578-be00-15e7c729953a" />
-
-<img width="465" height="1102" alt="image" src="https://github.com/user-attachments/assets/90732951-56b2-40fa-8e20-360b9708bfc1" />
-
-<img width="497" height="1024" alt="image" src="https://github.com/user-attachments/assets/67965ddd-eb9f-4b4b-920c-460e4b050985" />
-
-
-この名前は、モデルAPIに使えないTunnel専用キーであることを後から見ても判別できるようにするためです。<br>
-`All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。<br>
-作成直後に表示されるAPI keyを安全な場所へ一時的に控えます。<br>後から同じ値を再表示できない場合があります。<br>
-`<url: 作成直後に表示されたruntime API keyを控える図>`
-
-
-## 8.2 モデルAPI権限のないruntime API keyを作成する
-
-> [!CAUTION]
-> このセクションは正確に従ってください。<br>
-> 課金可能なAPI keyを作成した場合、流出時に課金が発生し、高額請求、またはクレジットがマイナス（借金）になる可能性があります。<br>
-> また、誤ってWebサイトへ貼り付けないように、PowerShellと該当するブラウザーを閉じたうえで作業することをお勧めします。<br>
-> 作業完了後は、クリップボードを別の内容で上書きしてください。
-
-### 8.1 Runtime API keysを開く
-[OpenAI PlatformのRuntime API keysを開く](https://platform.openai.com/settings/organization/api-keys)<br>
-`Create new secret key`を押します。<br>
-
-<img width="2552" height="428" alt="image" src="https://github.com/user-attachments/assets/e0f7ab39-afa1-4441-8613-0e0c0a57dfa3" />
-
-
-
+   <img width="506" height="550" alt="image" src="https://github.com/user-attachments/assets/5dc5f1aa-96c6-4e7a-8a32-9ab4be6c7352" />
+   <img width="656" height="1106" alt="image" src="https://github.com/user-attachments/assets/864a6586-93c4-4578-be00-15e7c729953a" />
+   <img width="465" height="1102" alt="image" src="https://github.com/user-attachments/assets/90732951-56b2-40fa-8e20-360b9708bfc1" />
+   <img width="497" height="1024" alt="image" src="https://github.com/user-attachments/assets/67965ddd-eb9f-4b4b-920c-460e4b050985" />
+   この名前は、モデルAPIに使えないTunnel専用キーであることを後から見ても判別できるようにするためです。<br>
+   `All`権限のキー、Admin API key、既存のモデルAPI keyは使い回しません。<br>
+   作成直後に表示されるAPI keyを安全な場所へ一時的に控えます。<br>後から同じ値を再表示できない場合があります。<br>
+   `<url: 作成直後に表示されたruntime API keyを控える図>`
 ## 9. Tunnel IDとruntime API keyをユーザー環境変数へ保存する
 `tunnel-client`は`CONTROL_PLANE_TUNNEL_ID`と`CONTROL_PLANE_API_KEY`を自動で読みます。<br>起動コマンドへ`--control-plane.tunnel-id`や`--control-plane.api-key`を書く必要はありません。<br>
 通常権限のPowerShellで次を実行し、API keyと`tunnel_...`を自分の値へ置き換えます。<br>
@@ -357,7 +342,10 @@ $env:CONTROL_PLANE_TUNNEL_ID
 `OPENAI_API_KEY`もfallbackとして読まれますが、モデルAPI権限を持つキーとの取り違えを防ぐため、この手順では必ず`CONTROL_PLANE_API_KEY`を使います。<br>
 ## 10. Tunnelを検査して起動する
 リポジトリ直下の通常PowerShellで実行します。<br>
-exeを直接実行し、大部分がNode.jsで書かれているため、Windows以外でも動作すると思われます。<br>
+> [!IMPORTANT]
+> 手順4で`config/gateway.toml`を完全に記入し、手順5の検証を終えるまで、GatewayとTunnelを起動しないでください。<br>
+> ダミーパス、未記入の値、不要な`enabled = true`のMCPが残っている場合は、先に設定を修正します。
+この手順ではWindows用の`tunnel-client.exe`を直接実行します。Gatewayの大部分はNode.jsで書かれていますが、この導入手順はWindows 11を対象とします。<br>
 `main`チャンネルは必須です。<br>
 ```powershell
 $mcp = 'command=node app/gateway.mjs --config config/gateway.toml,channel=main'
@@ -395,27 +383,23 @@ Developer modeを有効にし、カスタムMCPを利用する際の警告を確
 ### 11.3 ChatGPT接続手順の公式資料を確認する
 [OpenAIのChatGPT接続ガイドを開く](https://developers.openai.com/plugins/deploy/connect-chatgpt)<br>
 ChatGPT側の画面名や接続方式が変更されていないかを確認します。<br>このページでは新しい接続先を作らず、仕様確認だけを行います。<br>
-## 12. 公開されたツールを確認する
-ChatGPTで作成したカスタムアプリを有効にし、表示されたツール名を確認します。<br>想定外のMCPやツールが公開されている場合は、`gateway.toml`で対象MCPを`enabled = false`にするか、`blocked_tools`または`blocked_tool_substrings`へ追加してTunnelを再起動します。<br>
-このTunnelは自分専用として扱い、公開申請、第三者共有、共有Workspaceへの追加は行いません。
-
-### 11.4 動作確認する
-ChatGPTにツールが利用可能になったか聞いてください。
-
-> [!IMPORTANT]
-> お疲れさまでした。ChatGPTはローカルMCPを使用できるようになりました。
-
+## 12. カスタムアプリを更新して公開ツールを確認する
+### 12.1 カスタムアプリを更新する
 > [!NOTE]
-> # サーバーの再起動後、必ず更新を実施してください
-> サーバーを起動した場合、必ず下記のことをしてください。<br>
-> [プラグインの設定を開きます](https://chatgpt.com/#settings/Plugins)<br>
-> 作成したプラグイン、コネクターをクリックします<br>
-> <img width="745" height="677" alt="image" src="https://github.com/user-attachments/assets/e3332e2d-a854-4f2f-86cd-9c24b8c4227e" /> <br>
-> 次の詳細設定が表示されます。<br>
-> <img width="764" height="631" alt="image" src="https://github.com/user-attachments/assets/76bf233d-d2d9-49cf-8d51-7bab33461c70" /> <br>
-> 一番下までスクロールし、更新をクリックします。<br>
-> <img width="675" height="328" alt="image" src="https://github.com/user-attachments/assets/70a0d485-d980-4be4-9d53-f311e51cc1aa" /> <br>
-> サーバーが起動したことがChatGPTに認識されました。お疲れ様でした。<br>
-
-
-
+> GatewayまたはTunnelを起動・再起動した後は、ChatGPT側でカスタムアプリを更新してください。<br>
+> `config/gateway.toml`でMCPや公開ツールを変更した場合も、更新するまでChatGPTには古いツール一覧が表示されることがあります。
+[カスタムアプリの設定を開く](https://chatgpt.com/#settings/Plugins)<br>
+作成したカスタムアプリ（コネクター）をクリックします。<br>
+<img width="745" height="677" alt="image" src="https://github.com/user-attachments/assets/e3332e2d-a854-4f2f-86cd-9c24b8c4227e" />
+詳細設定が表示されたら、一番下までスクロールします。<br>
+<img width="764" height="631" alt="image" src="https://github.com/user-attachments/assets/76bf233d-d2d9-49cf-8d51-7bab33461c70" />
+`更新`をクリックします。<br>
+<img width="675" height="328" alt="image" src="https://github.com/user-attachments/assets/70a0d485-d980-4be4-9d53-f311e51cc1aa" />
+更新が完了すると、起動中のGatewayから最新のツール一覧が読み込まれます。<br>
+### 12.2 公開されたツールを確認する
+ChatGPTで作成したカスタムアプリを有効にし、表示されたツール名を確認します。<br>想定外のMCPやツールが公開されている場合は、`gateway.toml`で対象MCPを`enabled = false`にするか、`blocked_tools`または`blocked_tool_substrings`へ追加し、Tunnelを再起動してカスタムアプリを再度更新します。<br>
+このTunnelは自分専用として扱い、公開申請、第三者共有、共有Workspaceへの追加は行いません。
+### 12.3 動作確認する
+ChatGPTに、作成したカスタムアプリのツールが利用可能になったか確認させてください。
+> [!IMPORTANT]
+> お疲れさまでした。ChatGPTからローカルMCPを使用できるようになりました。
