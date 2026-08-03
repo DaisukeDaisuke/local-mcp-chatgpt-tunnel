@@ -50,6 +50,13 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # Path-looking tool arguments are denied unless they match allowed_directories
 # or allowed_files. Directory entries include descendants. File entries are exact.
 # `enabled = false` keeps an entry without starting it.
+# Tool exclusion is per MCP server. `blocked_tools` is an exact-name list.
+# `blocked_tool_substrings` is a case-insensitive literal substring list; it is
+# not glob or regular-expression syntax. Multiple values are allowed. Setting
+# `blocked_tool_substrings = ["script"]` hides every original tool name that
+# contains script, including evaluate_script, runScript, and SCRIPT_debug.
+# On every gateway initialize, INFO logs list each disabled tool on its own line,
+# then report the discovered, disabled, and actually published totals.
 #
 # [mcp_servers.my_server]
 # command = "py"
@@ -60,6 +67,7 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # startup_timeout_sec = 30
 # tool_timeout_sec = 1800
 # blocked_tools = ["dangerous_tool"]
+# blocked_tool_substrings = ["script", "shell", "execute"]
 # allowed_directories = ['C:\work\project']
 # allowed_files = ['C:\Users\owner\Downloads\one-upload-file.png']
 #

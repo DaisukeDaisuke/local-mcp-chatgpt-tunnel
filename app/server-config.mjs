@@ -14,6 +14,22 @@ function stringArray(value, name) {
   return value;
 }
 
+function blockedToolSubstringArray(value, name) {
+  const values = stringArray(value, name);
+  const normalized = [];
+  const seen = new Set();
+  for (const item of values) {
+    if (item.trim().length === 0) throw new Error(`${name} entries must be non-empty`);
+    if (/[\u0000-\u001f\u007f]/.test(item)) throw new Error(`${name} entries may not contain control characters`);
+    const lowered = item.toLowerCase();
+    if (!seen.has(lowered)) {
+      seen.add(lowered);
+      normalized.push(lowered);
+    }
+  }
+  return normalized;
+}
+
 function absolutePathArray(value, name) {
   const values = stringArray(value, name);
   for (const item of values) {
@@ -65,6 +81,7 @@ function normalizeServer(name, raw, base) {
     startAfter: normalizeLifecycle(raw, 'start_after', name),
     stopAfter: normalizeLifecycle(raw, 'stop_after', name),
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
+    blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
     allowedDirectories: absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`),
     allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`)
   };

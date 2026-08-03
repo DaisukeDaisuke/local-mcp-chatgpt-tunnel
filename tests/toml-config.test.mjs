@@ -36,6 +36,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     'deferred = true',
     'serial_group = "browser"',
     'blocked_tools = ["dangerous"]',
+    'blocked_tool_substrings = ["script", "shell"]',
     "allowed_directories = ['C:\\work\\project']",
     "allowed_files = ['C:\\Users\\owner\\Downloads\\upload.png']",
     '[mcp_servers.alpha.env]',
@@ -57,8 +58,30 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.equal(config.servers[0].serialGroup, 'browser');
   assert.deepEqual(config.servers[0].startAfter, { server: 'controller', tool: 'prepare' });
   assert.equal(config.servers[0].blockedTools.has('dangerous'), true);
+  assert.deepEqual(config.servers[0].blockedToolSubstrings, ['script', 'shell']);
   assert.deepEqual(config.servers[0].allowedDirectories, ['C:\\work\\project']);
   assert.deepEqual(config.servers[0].allowedFiles, ['C:\\Users\\owner\\Downloads\\upload.png']);
+});
+
+test('gateway config rejects empty or control-character blocked tool substrings', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-invalid-tool-filter-'));
+  const emptyPath = join(directory, 'empty.toml');
+  await writeFile(emptyPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'blocked_tool_substrings = [""]'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(emptyPath), /blocked_tool_substrings entries must be non-empty/);
+
+  const newlinePath = join(directory, 'newline.toml');
+  await writeFile(newlinePath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'blocked_tool_substrings = ["script\\nother"]'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(newlinePath), /blocked_tool_substrings entries may not contain control characters/);
 });
 
 test('gateway config permits every MCP entry to be disabled', async () => {

@@ -13,6 +13,7 @@ const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const warn = (message) => process.stderr.write(`[gateway] ${message}\n`);
+const info = (message) => process.stderr.write(`[gateway] INFO ${message}\n`);
 
 const namespacedName = (prefix, name) => {
   const normalized = `${prefix}__${name}`.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -45,16 +46,52 @@ let started = false;
 let upstreamInitialized = false;
 let initializationPromise = null;
 
+function blockedToolReason(childConfig, toolName) {
+  if (childConfig.blockedTools?.has(toolName)) return { type: 'exact', value: toolName };
+  const lowered = toolName.toLowerCase();
+  const substring = childConfig.blockedToolSubstrings?.find((candidate) => lowered.includes(candidate));
+  return substring ? { type: 'substring', value: substring } : null;
+}
+
 function rebuildRoutes() {
   toolRoutes.clear();
   for (const child of children) {
     for (const tool of child.tools) {
-      if (child.config.blockedTools?.has(tool.name)) continue;
+      if (blockedToolReason(child.config, tool.name)) continue;
       const publicName = namespacedName(child.config.prefix, tool.name);
       if (toolRoutes.has(publicName)) throw new Error(`Tool name collision: ${publicName}`);
       toolRoutes.set(publicName, { child, originalName: tool.name, tool: { ...tool, name: publicName } });
     }
   }
+}
+
+function toolExposureReport() {
+  const disabled = [];
+  let found = 0;
+  for (const child of children) {
+    for (const tool of child.tools) {
+      found += 1;
+      const reason = blockedToolReason(child.config, tool.name);
+      if (!reason) continue;
+      disabled.push({
+        server: child.config.name,
+        tool: tool.name,
+        publicName: namespacedName(child.config.prefix, tool.name),
+        reason
+      });
+    }
+  }
+  return { found, disabled, published: toolRoutes.size };
+}
+
+function logToolExposureReport() {
+  const report = toolExposureReport();
+  for (const item of report.disabled) {
+    const identity = `server=${JSON.stringify(item.server)} tool=${JSON.stringify(item.tool)} public_name=${JSON.stringify(item.publicName)}`;
+    if (item.reason.type === 'exact') info(`tool disabled: ${identity} reason="blocked_tools exact match"`);
+    else info(`tool disabled: ${identity} blocked_tool_substrings=${JSON.stringify(item.reason.value)}`);
+  }
+  info(`tool exposure: found=${report.found} disabled=${report.disabled.length} published=${report.published}`);
 }
 
 async function startChildren() {
@@ -148,6 +185,7 @@ async function handle(request) {
   if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') return errorResponse(request?.id, -32600, 'Invalid Request');
   if (request.method === 'initialize') {
     await ensureChildrenStarted();
+    logToolExposureReport();
     return response(request.id, {
       protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
       capabilities: { tools: { listChanged: true } },

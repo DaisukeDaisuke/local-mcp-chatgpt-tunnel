@@ -53,6 +53,106 @@ function nextLines(stream, count, timeoutMs = 5000) {
   });
 }
 
+function collectText(stream) {
+  let text = '';
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk) => { text += chunk; });
+  return {
+    get value() { return text; },
+    async waitFor(predicate, timeoutMs = 5000) {
+      const deadline = Date.now() + timeoutMs;
+      while (!predicate(text)) {
+        if (Date.now() >= deadline) throw new Error(`Timed out waiting for gateway stderr:\n${text}`);
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+      }
+      return text;
+    }
+  };
+}
+
+test('gateway excludes exact and substring-matched tools and logs every initialization', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-tool-filter-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-tool-filter-config-'));
+  const serverPath = join(workspace, 'server.mjs');
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(serverPath, `
+const tools = [
+  { name: 'plain', description: 'allowed', inputSchema: { type: 'object' } },
+  { name: 'runScript', description: 'blocked by script', inputSchema: { type: 'object' } },
+  { name: 'SCRIPT_debug', description: 'blocked case-insensitively', inputSchema: { type: 'object' } },
+  { name: 'shell_exec', description: 'blocked by shell', inputSchema: { type: 'object' } },
+  { name: 'dangerous', description: 'blocked exactly', inputSchema: { type: 'object' } }
+];
+let initialized = false;
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).replace(/\\r$/, '');
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    let reply = null;
+    if (request.method === 'initialize') {
+      initialized = true;
+      reply = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'filter-fixture', version: '1.0.0' } } };
+    } else if (request.method === 'tools/list' && initialized) {
+      reply = { jsonrpc: '2.0', id: request.id, result: { tools } };
+    } else if (request.method === 'tools/call' && initialized) {
+      reply = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], isError: false } };
+    }
+    if (reply) process.stdout.write(JSON.stringify(reply) + '\\n');
+  }
+});
+`, 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.demo]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "demo"',
+    'blocked_tools = ["dangerous"]',
+    'blocked_tool_substrings = ["script", "shell"]'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const stderr = collectText(child.stderr);
+  t.after(() => child.kill());
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=1/g) ?? []).length >= 1);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=1/g) ?? []).length >= 2);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })}\n`);
+  const listed = await nextLine(child.stdout);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['demo__plain']);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'demo__runScript', arguments: {} } })}\n`);
+  const blockedCall = await nextLine(child.stdout);
+  assert.equal(blockedCall.error.code, -32602);
+  assert.match(blockedCall.error.message, /Unknown tool/);
+
+  const log = stderr.value;
+  assert.equal((log.match(/INFO tool disabled:/g) ?? []).length, 8);
+  assert.match(log, /tool="runScript".*blocked_tool_substrings="script"/);
+  assert.match(log, /tool="SCRIPT_debug".*blocked_tool_substrings="script"/);
+  assert.match(log, /tool="shell_exec".*blocked_tool_substrings="shell"/);
+  assert.match(log, /tool="dangerous".*blocked_tools exact match/);
+});
+
 test('gateway aggregates a selected local stdio MCP without model API or HTTP', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-config-'));
