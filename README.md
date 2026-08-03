@@ -41,7 +41,8 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
 同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。<br>
 ### safe-files
-`safe-files`はプロセスの`cwd`をWorkspaceルートとして使います。主な機能は次のとおりです。<br>
+`safe-files`はプロセスの`cwd`、つまりを`gateway.toml`で指定されたcwdをWorkspaceルートとして使います。
+主な機能は次のとおりです。<br>
 - 固定された`rg --files --hidden`による再帰一覧
 - 固定された`rg`によるUTF-8テキスト検索
 - UTF-8テキストの読み書きと完全一致置換
