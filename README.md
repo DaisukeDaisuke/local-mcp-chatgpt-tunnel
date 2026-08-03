@@ -1,18 +1,17 @@
 # Local MCP ChatGPT Tunnel
-ChatGPTから、Windows上で動くstdio形式のMCPサーバーを直接呼び出すためのローカルGatewayです。<br>
-![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
+Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tunnel経由でChatGPT Developer Modeへ接続するためのローカルGatewayです。<br>
 複数のstdio MCPを1つに集約し、ツール名の名前空間化、公開ツールの除外、パス許可、直列実行、遅延起動を設定ファイルから制御できます。<br>
-
-## インストール方法
-
-> [!IMPORTANT]
-> Windows環境でのセットアップは[INSTALL.md](./INSTALL.md)を使用してください。
-
-## セキュリティ警告
-
 > [!WARNING]
 > 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
 > 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
+
+<br>
+![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
+
+# インストール方法
+
+> [!IMPORTANT]
+> Windows環境での導入手順は[INSTALL.md](./INSTALL.md)を参照してください。
 
 ## 何ができるか
 - ChatGPTからWindows上のstdio MCPサーバーを呼び出す
@@ -21,7 +20,7 @@ ChatGPTから、Windows上で動くstdio形式のMCPサーバーを直接呼び�
 - MCPごとに許可するディレクトリとファイルを制限する
 - 危険なツールを名前または部分文字列で非公開にする
 - 同時実行させたくないMCPを`serial_group`で直列化する
-- 必要に応じて、特定のmcp全体を無効化する。
+- 必要に応じて、特定のMCP全体を無効化する
 ## このリポジトリが行わないこと
 - OpenAI Responses APIやChat Completions APIの呼び出し
 - 独自AIエージェント、独自ハーネス、モデル課金処理の実装
@@ -50,7 +49,7 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
 同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。<br>
 ### safe-files
-`safe-files`はプロセスの`cwd`、つまりを`gateway.toml`で指定されたcwdをWorkspaceルートとして使います。<br>
+`safe-files`は、`gateway.toml`で指定された`cwd`をプロセスの作業ディレクトリ兼Workspaceルートとして使います。<br>
 主な機能は次のとおりです。<br>
 - 固定された`rg --files --hidden`による再帰一覧
 - 固定された`rg`によるUTF-8テキスト検索
@@ -120,13 +119,11 @@ server = "controller"
 tool = "stop_browser"
 ```
 ## セキュリティ上の前提
-
 > [!WARNING]
-> `gateway.toml`の`command`は、ローカルプログラムを実行します。信頼できるMCPだけを登録してください。<br>
-> コマンドによっては、インターネット上からMCPプログラムを取得して、そのまま実行するものもあります。<br>
+> `gateway.toml`の`command`はローカルプログラムを実行します。信頼できるMCPだけを登録してください。<br>
+> コマンドによっては、インターネット上のMCPプログラムを直接取得して実行するものもあります。<br>
 > `gateway.toml`で指定したコマンドは、サンドボックス内ではなく、実際のPC上でWindowsユーザーの権限を使って実行されます。<br>
 > 信頼できないMCPを指定しないでください。<br>
-
 
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。<br>
 Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。<br>
