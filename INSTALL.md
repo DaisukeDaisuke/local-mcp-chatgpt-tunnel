@@ -78,7 +78,8 @@ rg -n -F 'C:\ABSOLUTE\PATH\TO' config\gateway.toml
 ```
 何も表示されなければ、対象のダミーパスは残っていません。<br>ダミーのまま起動すると、Node.jsは`Cannot find module 'C:\ABSOLUTE\PATH\TO\...'`と`MODULE_NOT_FOUND`を出します。<br>これはnpmパッケージの不足ではなく、`gateway.toml`のパスが未設定であることを示します。<br>
 
-<img width="407" height="416" alt="image" src="https://github.com/user-attachments/assets/62407ca5-152c-4dd5-b21a-859f6759cf97" />
+<img width="407" height="416" alt="image" src="https://github.com/user-attachments/assets/62407ca5-152c-4dd5-b21a-859f6759cf97" /><br>
+
 ### 4.3 safe-filesを設定する
 設定形式はCodexのMCP設定に近い`[mcp_servers.<name>]`です。<br>
 ```toml
