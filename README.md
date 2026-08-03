@@ -3,10 +3,6 @@ ChatGPTから、Windows上で動くstdio形式のMCPサーバーを直接呼び�
 ![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
 複数のstdio MCPを1つに集約し、ツール名の名前空間化、公開ツールの除外、パス許可、直列実行、遅延起動を設定ファイルから制御できます。<br>
 
-<br>
-
-![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
-
 ## インストール方法
 
 > [!IMPORTANT]
