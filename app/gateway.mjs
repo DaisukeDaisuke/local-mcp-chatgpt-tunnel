@@ -43,6 +43,7 @@ const childStarts = new Map();
 const toolRoutes = new Map();
 let started = false;
 let upstreamInitialized = false;
+let initializationPromise = null;
 
 function rebuildRoutes() {
   toolRoutes.clear();
@@ -68,6 +69,12 @@ async function startChildren() {
   }
   rebuildRoutes();
   started = true;
+}
+
+function ensureChildrenStarted() {
+  if (started) return Promise.resolve();
+  initializationPromise ??= startChildren();
+  return initializationPromise;
 }
 
 function notifyToolsChanged() {
@@ -140,7 +147,7 @@ async function applyLifecycle(route, result) {
 async function handle(request) {
   if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') return errorResponse(request?.id, -32600, 'Invalid Request');
   if (request.method === 'initialize') {
-    await startChildren();
+    await ensureChildrenStarted();
     return response(request.id, {
       protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
       capabilities: { tools: { listChanged: true } },
@@ -152,6 +159,7 @@ async function handle(request) {
     upstreamInitialized = true;
     return null;
   }
+  if (!started && initializationPromise) await initializationPromise;
   if (!started) return errorResponse(request.id, -32002, 'Server not initialized');
   if (request.method === 'ping') return response(request.id, {});
   if (request.method === 'tools/list') return response(request.id, { tools: [...toolRoutes.values()].map((route) => route.tool) });

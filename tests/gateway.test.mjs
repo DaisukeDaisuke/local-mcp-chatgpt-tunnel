@@ -26,6 +26,33 @@ function nextLine(stream, timeoutMs = 5000) {
   });
 }
 
+function nextLines(stream, count, timeoutMs = 5000) {
+  return new Promise((resolvePromise, reject) => {
+    let buffer = '';
+    const lines = [];
+    const timeout = setTimeout(() => cleanup(new Error('Timed out waiting for gateway output')), timeoutMs);
+    const onData = (chunk) => {
+      buffer += chunk;
+      while (true) {
+        const newline = buffer.indexOf('\n');
+        if (newline < 0) return;
+        const line = buffer.slice(0, newline).replace(/\r$/, '');
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        lines.push(JSON.parse(line));
+        if (lines.length === count) cleanup(null, lines);
+      }
+    };
+    const cleanup = (error, value) => {
+      clearTimeout(timeout);
+      stream.off('data', onData);
+      if (error) reject(error); else resolvePromise(value);
+    };
+    stream.setEncoding('utf8');
+    stream.on('data', onData);
+  });
+}
+
 test('gateway aggregates a selected local stdio MCP without model API or HTTP', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-config-'));
@@ -102,5 +129,34 @@ test('gateway initialization survives an unavailable child MCP', async (t) => {
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
+  assert.deepEqual(listed.result.tools, []);
+});
+
+test('tools/list waits for concurrent initialization when a child MCP is unavailable', async (t) => {
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-concurrent-init-'));
+  const configPath = join(configDirectory, 'gateway.toml');
+  const missingScript = join(configDirectory, 'missing-server.mjs');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.missing]',
+    `command = '${process.execPath}'`,
+    `args = ['${missingScript}']`,
+    `cwd = '${configDirectory}'`,
+    'enabled = true',
+    'prefix = "missing"',
+    'startup_timeout_sec = 2'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
+  const [initialized, listed] = await nextLines(child.stdout, 2);
+  assert.equal(initialized.id, 1);
+  assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
+  assert.equal(listed.id, 2);
   assert.deepEqual(listed.result.tools, []);
 });
