@@ -4,6 +4,8 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 > [!WARNING]
 > 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
 > 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
+
+<br>
 ![ChatGPTからローカルstdio MCPへ接続する構成](./docs/images/architecture.svg)
 
 # インストール方法
