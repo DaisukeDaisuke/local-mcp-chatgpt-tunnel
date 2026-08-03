@@ -15,6 +15,7 @@
 ```powershell
 winget install -e --id OpenJS.NodeJS.LTS
 winget install -e --id Git.Git
+winget install -e --id GitHub.cli
 winget install -e --id BurntSushi.ripgrep.MSVC
 winget install -e --id Python.Python.3.12
 ```
@@ -57,6 +58,7 @@ Select-String -Path $sums -Pattern 'tunnel-client-v0\.0\.10-windows-amd64\.zip'
 node mcp\safe-files\server.mjs --help
 node mcp\safe-images\server.mjs --help
 node mcp\safe-download\server.mjs --help
+node mcp\gh-workflow\server.mjs --help
 ```
 これらの出力、リポジトリとWorkspaceの絶対パス、追加したいstdio MCPの起動コマンドがあれば、`gateway.toml`を組み立てるための情報が揃います。<br>
 `.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。<br>
@@ -144,7 +146,28 @@ SAFE_DOWNLOAD_MAX_ZIP_BYTES = "20971520"
 SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 ```
 ChatGPTからは`downloads__download_zip`へ`path`を渡します。<br>単一の`.js`や`.mjs`を指定してもZIPで返します。<br>ディレクトリでは固定された`rg --files`で列挙し、`globs`、`excludePaths`、`includeIgnored`を使用できます。<br>`disallowed_path_globs`へ一致するファイルまたはフォルダが対象ディレクトリ内に1件でもある場合、これらの絞り込みや除外より前にダウンロード全体を拒否し、エラーへ一致したglobと対象パスを表示します。<br>ROM、Save、State、秘密鍵形式、資格情報らしい内容、シンボリックリンク、許可ルート外は拒否します。<br>
-### 4.6 任意のstdio MCPを追加する
+### 4.6 gh-workflowを必要な場合だけ有効にする
+GitHub Actionsの実行状況をChatGPTから確認する場合は、読み取り専用の`gh-workflow`を追加または有効化します。<br>
+事前に通常権限のPowerShellで`gh auth login`を済ませ、対象リポジトリを読めるGitHubアカウントで認証してください。<br>
+```toml
+[mcp_servers.gh_workflow]
+command = "node"
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs', '--repository=DaisukeDaisuke/desmume_webassembly']
+cwd = 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel'
+enabled = false
+prefix = "gh_workflow"
+startup_timeout_sec = 30
+tool_timeout_sec = 1800
+serial_group = "gh_workflow"
+allowed_directories = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel']
+allowed_files = []
+disallowed_path_globs = ['**.ssh**']
+```
+`--repository=OWNER/REPO`は複数回指定できます。指定したリポジトリだけがツールの選択肢になり、許可リスト外のリポジトリ名は子プロセスへ渡りません。<br>
+許可リポジトリが1件の場合は各ツールの`repository`を省略できます。複数の場合は、呼び出すたびに許可リスト内の`repository`を指定します。<br>
+`cwd`は省略せず、実在する安全な作業ディレクトリを必ず明示します。設定例は`enabled = false`であり、内容を確認してから有効化します。<br>
+公開するのはrun一覧、run待機、run概要、job一覧、ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLだけです。workflow実行、再実行、cancel、delete、artifact download、`gh api`は公開しません。<br>
+### 4.7 任意のstdio MCPを追加する
 任意のstdio MCPも同じ形式で追加できます。<br>
 ```toml
 [mcp_servers.example]
@@ -176,12 +199,12 @@ Gatewayは全MCPのツール引数を再帰的に検査します。<br>
 `enabled = false`のMCPは起動しません。<br>GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。<br>現在直接集約するのは、`command`で起動するstdio MCPです。<br>Ghidra MCPやDQ9 MCPなどの外部MCP本体は同梱していません。<br>
 有効なMCPの一部が起動できなくても、Gatewayは初期化を続行し、起動できたMCPのツールだけを公開します。<br>起動できなかったMCPは標準エラーへ`unavailable and was skipped`として記録されます。<br>すべてを一時的に無効化した設定でもGatewayは起動し、ツール一覧は空になります。<br>
 Codex設定からコピーした`tool_output_token_limit`、`[mcp_servers.<name>.tools.<tool>]`の承認設定、その他Gatewayが使わない項目は残しても読み飛ばされます。<br>トークン数の計測やCodexの承認UIは実装していないため、無視された項目はこのGatewayでは効果を持ちません。<br>
-### 4.7 起動前にgateway.tomlを完成させる
+### 4.8 起動前にgateway.tomlを完成させる
 手順10へ進む前に、`config/gateway.toml`のすべての`enabled = true`のMCPを見直します。<br>
 `command`、`args`、`cwd`、`prefix`、`allowed_directories`、`allowed_files`など、使用するMCPに必要な項目を完全に記入してください。<br>
 説明用のダミーパス、未記入の値、意図していない許可範囲が一つでも残っている場合は、GatewayとTunnelを起動しません。<br>
 ## 5. ローカル設定を検証する
-次の診断は`node`、`npm`、`git`、`rg`、`py`を確認し、途中で止まらず、最後に問題のあるコマンドをまとめます。<br>バージョン番号が例と異なるだけでは失敗にしません。<br>
+次の診断は`node`、`npm`、`git`、`gh`、`rg`、`py`を確認し、途中で止まらず、最後に問題のあるコマンドをまとめます。<br>バージョン番号が例と異なるだけでは失敗にしません。<br>
 ```powershell
 node app\doctor.mjs
 ```

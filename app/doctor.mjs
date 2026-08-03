@@ -14,6 +14,7 @@ export function createDefaultCommands({ platform = process.platform, env = proce
     { name: 'node', command: 'node', args: ['--version'] },
     npm,
     { name: 'git', command: 'git', args: ['--version'] },
+    { name: 'gh', command: 'gh', args: ['--version'] },
     { name: 'rg', command: 'rg', args: ['--version'] },
     { name: 'py', command: 'py', args: ['--version'] }
   ];

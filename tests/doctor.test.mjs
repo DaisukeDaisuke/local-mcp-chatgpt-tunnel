@@ -26,13 +26,13 @@ function fakeSpawn(results, calls) {
 test('doctor checks every command and reports all failures at the end', async () => {
   const calls = [];
   let text = '';
-  const commands = ['node', 'npm', 'git', 'rg', 'py'].map((name) => ({ name, command: name, args: ['--version'] }));
+  const commands = ['node', 'npm', 'git', 'gh', 'rg', 'py'].map((name) => ({ name, command: name, args: ['--version'] }));
   const results = await runDoctor({
     commands,
     spawnImpl: fakeSpawn({ rg: { error: 'missing', code: 'ENOENT' }, py: { exitCode: 1, output: 'bad python\n' } }, calls),
     output: { write: (chunk) => { text += chunk; } }
   });
-  assert.deepEqual(calls.map(({ command }) => command), ['node', 'npm', 'git', 'rg', 'py']);
+  assert.deepEqual(calls.map(({ command }) => command), ['node', 'npm', 'git', 'gh', 'rg', 'py']);
   assert.equal(results.filter((result) => !result.ok).length, 2);
   assert.match(text, /FAIL  rg: not found in PATH/);
   assert.match(text, /FAIL  py: bad python/);

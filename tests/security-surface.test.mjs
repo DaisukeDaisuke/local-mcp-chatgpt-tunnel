@@ -27,6 +27,7 @@ test('installation automation and repository hook mutation are absent', async ()
   assert.match(install, /node app\\doctor\.mjs/);
   assert.match(install, /node mcp\\safe-files\\server\.mjs --help/);
   assert.match(install, /node mcp\\safe-download\\server\.mjs --help/);
+  assert.match(install, /node mcp\\gh-workflow\\server\.mjs --help/);
   assert.doesNotMatch(install, /Expand-Archive|Invoke-WebRequest|enable-git-hooks|init-workspace/);
 });
 
@@ -112,7 +113,7 @@ test('safe-files uses cwd while the gateway applies generic path allowlists', as
 });
 
 test('bundled MCP tools declare structured output schemas and safe-download is independently rooted', async () => {
-  for (const path of ['../mcp/safe-files/server.mjs', '../mcp/safe-images/server.mjs', '../mcp/safe-download/server.mjs']) {
+  for (const path of ['../mcp/safe-files/server.mjs', '../mcp/safe-images/server.mjs', '../mcp/safe-download/server.mjs', '../mcp/gh-workflow/server.mjs']) {
     const source = await readFile(new URL(path, import.meta.url), 'utf8');
     assert.match(source, /outputSchema/);
   }
@@ -120,6 +121,20 @@ test('bundled MCP tools declare structured output schemas and safe-download is i
   assert.match(download, /SAFE_DOWNLOAD_ROOTS/);
   assert.match(download, /spawn\('rg', args, \{[^}]*shell:\s*false/s);
   assert.doesNotMatch(download, /rgArgs|exec\(|execFile\(|shell:\s*true/);
+});
+
+test('bundled gh-workflow MCP is read-only and never invokes a shell', async () => {
+  const source = await readFile(new URL('../mcp/gh-workflow/server.mjs', import.meta.url), 'utf8');
+  assert.match(source, /spawn\('gh', args, \{[^}]*cwd,[^}]*shell:\s*false/s);
+  assert.match(source, /At least one --repository=OWNER\/REPO is required/);
+  assert.match(source, /'--exit-status'/);
+  assert.doesNotMatch(source, /exec\(|execFile\(|shell:\s*true/);
+  assert.doesNotMatch(source, /'cancel'|'delete'|'rerun'|'download'|'workflow',\s*'run'|'api'/);
+  const config = await readFile(new URL('../config/gateway.example.toml', import.meta.url), 'utf8');
+  assert.match(config, /\[mcp_servers\.gh_workflow\]/);
+  assert.match(config, /mcp\\gh-workflow\\server\.mjs/);
+  assert.match(config, /--repository=DaisukeDaisuke\/desmume_webassembly/);
+  assert.match(config, /\[mcp_servers\.gh_workflow\][\s\S]*?cwd = '[^']+'[\s\S]*?enabled = false/);
 });
 
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {
