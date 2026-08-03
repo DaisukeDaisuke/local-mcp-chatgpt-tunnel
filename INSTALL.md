@@ -132,6 +132,15 @@ $plainKey = [System.Net.NetworkCredential]::new('', $secureKey).Password
 [Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $plainKey, 'User')
 [Environment]::SetEnvironmentVariable('CONTROL_PLANE_TUNNEL_ID', 'tunnel_0123456789abcdef0123456789abcdef', 'User')
 Remove-Variable plainKey, secureKey
+
+$env:CONTROL_PLANE_API_KEY = [Environment]::GetEnvironmentVariable(
+    'CONTROL_PLANE_API_KEY',
+    [EnvironmentVariableTarget]::User
+)
+$env:CONTROL_PLANE_TUNNEL_ID = [Environment]::GetEnvironmentVariable(
+    'CONTROL_PLANE_TUNNEL_ID',
+    [EnvironmentVariableTarget]::User
+)
 ```
 これはWindowsのユーザー環境変数として永続保存されます。設定後はPowerShellを閉じ、新しいPowerShellを開いてください。Machine環境変数にはせず、管理者PowerShellも使いません。
 同じWindowsユーザーで動く別プロセスからはユーザー環境変数を読めるため、SSH鍵や他サービスの資格情報と強く分離したい場合は、このTunnel専用の標準Windowsユーザーで設定します。
