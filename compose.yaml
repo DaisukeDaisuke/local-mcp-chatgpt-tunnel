@@ -1,0 +1,75 @@
+services:
+  app:
+    build:
+      context: .
+    init: true
+    shm_size: "2gb"
+    read_only: true
+    environment:
+      DQ9_TEST_CONFIG: /config/dq9-runtime.json
+      SAFE_FILES_ROOTS: '["/workspace"]'
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_MAX_TURNS: ${OPENAI_MAX_TURNS:-8}
+      OPENAI_BILLING_ACK: ${OPENAI_BILLING_ACK:-}
+      OPENAI_MTLS_ENABLED: ${OPENAI_MTLS_ENABLED:-false}
+      OPENAI_MTLS_CERT_FILE: /run/secrets/openai_mtls_client_cert
+      OPENAI_MTLS_KEY_FILE: /run/secrets/openai_mtls_client_key
+      GHIDRA_TUNNEL_ENABLED: ${GHIDRA_TUNNEL_ENABLED:-false}
+      GHIDRA_SSH_HOST: ${GHIDRA_SSH_HOST:-host.docker.internal}
+      GHIDRA_SSH_PORT: ${GHIDRA_SSH_PORT:-22}
+      GHIDRA_SSH_USER: ${GHIDRA_SSH_USER:-mcp-tunnel}
+      GHIDRA_SSH_KEY_FILE: /run/secrets/ghidra_ssh_key
+      GHIDRA_KNOWN_HOSTS_FILE: /run/secrets/ghidra_known_hosts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_PATH:-./workspace}
+        target: /workspace
+      - type: bind
+        source: ${DQ9_CONFIG_PATH:-./config/dq9-runtime.example.json}
+        target: /config/dq9-runtime.json
+        read_only: true
+      - type: bind
+        source: ${OPENAI_API_KEY_PATH:-./config/empty-secret}
+        target: /run/secrets/openai_api_key
+        read_only: true
+      - type: bind
+        source: ${OPENAI_MTLS_CERT_PATH:-./config/empty-secret}
+        target: /run/secrets/openai_mtls_client_cert
+        read_only: true
+      - type: bind
+        source: ${OPENAI_MTLS_KEY_PATH:-./config/empty-secret}
+        target: /run/secrets/openai_mtls_client_key
+        read_only: true
+      - type: bind
+        source: ${GHIDRA_SSH_KEY_PATH:-./config/empty-secret}
+        target: /run/secrets/ghidra_ssh_key
+        read_only: true
+      - type: bind
+        source: ${GHIDRA_KNOWN_HOSTS_PATH:-./config/empty-secret}
+        target: /run/secrets/ghidra_known_hosts
+        read_only: true
+      - dq9-runtime:/runtime/dq9-test
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /runtime/ssh:size=4m,mode=0700,uid=10001,gid=10001
+      - /home/app/.cache:size=256m,mode=0700,uid=10001,gid=10001
+      - /home/app/.config:size=64m,mode=0700,uid=10001,gid=10001
+    network_mode: bridge
+
+  certgen:
+    build:
+      context: .
+    profiles: ["tools"]
+    entrypoint: ["/app/scripts/new-openai-mtls-certificates.sh"]
+    command: ["/out"]
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ${SECRETS_DIR:-./.secrets}
+        target: /out
+
+volumes:
+  dq9-runtime:

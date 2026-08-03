@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+blocked='(\.(nds|dst|pem|key|pub|p12|pfx)$|(^|/)openai_api_key$|known_hosts$)'
+names=$(git diff --cached --name-only --diff-filter=ACMR)
+if printf '%s\n' "$names" | grep -Eiq "$blocked"; then
+  echo "Refusing to commit ROM, State, certificate, or private-key files." >&2
+  exit 1
+fi
+
+if git diff --cached --no-ext-diff --unified=0 | grep -Eiq '^\+.*(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|sk-[A-Za-z0-9_-]{20,})'; then
+  echo "Refusing to commit content that resembles a private key or OpenAI API key." >&2
+  exit 1
+fi

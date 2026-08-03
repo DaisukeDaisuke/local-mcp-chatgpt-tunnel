@@ -1,0 +1,75 @@
+{
+  "schema": "dq9.battle-runtime-profile",
+  "version": 1,
+  "profileId": "dq9-new2-stage1-runtime-v1",
+  "game": {
+    "title": "Dragon Quest IX",
+    "romName": "dq9_new2.nds",
+    "romSize": 268435456,
+    "architecture": "ARM:LE:32:v5t",
+    "imageBase": "0x00000000"
+  },
+  "provenance": {
+    "source": "Stage 1 battle-runtime-hook-profile.json",
+    "sourceSchemaVersion": 1,
+    "stage1Artifact": "20260802-112549-stage1-runtime-semantics/sol-high-stage1/battle-runtime-hook-profile.json",
+    "frozenMeaning": true
+  },
+  "rng": {
+    "seedLowAddress": "0x02385f0c",
+    "multiplier": "0x5d588b656c078965",
+    "increment": "0x0000000000269ec3",
+    "modulusBits": 64,
+    "inverseMultiplier": "0xdedcedae9638806d",
+    "initialSeedBits": 48,
+    "initialSeedUpperZeroBits": 16,
+    "longJump": {
+      "representation": "affine-pair",
+      "action": "x -> mul*x+add mod 2^64",
+      "composition": "Q_after_P=(Q.mul*P.mul,Q.mul*P.add+Q.add) mod 2^64",
+      "algorithm": "binary-exponentiation-from-identity-(1,0)",
+      "inverseTransform": "(inverseMultiplier,-increment*inverseMultiplier mod 2^64)",
+      "positionRecovery": "64 low-bit decisions using T^(2^i)"
+    },
+    "recovery": {
+      "maxBackwardSteps": 8192,
+      "battleMaxSteps": 8192,
+      "coverageBasis": "Stage 2 single-action oracle contract: every accepted action begins from its exact recoverable turn checkpoint and is rejected before 8192 mathematical LCG steps; recovery scans that complete supported action span."
+    }
+  },
+  "memory": {
+    "actorTableAddress": "0x020f33d8",
+    "battleScreen": { "address": "0x0238fbe4", "length": 8, "provenance": "Frozen battle_command_mcp.js seeUi interpretation" },
+    "partyStatusOffsets": { "hp": 28, "mp": 30, "baseDefense": 114, "defenseStageWord": 88, "defenseTurns": 111 },
+    "enemyRecordDefaults": { "stride": 164, "hp": 0, "mp": 2, "baseDefense": 10, "defenseStageWord": 88, "defenseTurns": 111 },
+    "cameraObservable": {
+      "address": "0x0238fbb0",
+      "length": 4,
+      "provenance": "Human-confirmed Stage 3 free-camera observable contract",
+      "entryParameter": { "register": "r3", "width": 4, "signedness": "unsigned", "provenance": "Human-confirmed camera entry register contract" }
+    }
+  },
+  "hooks": [
+    { "id": "marker_group_start", "address": "0x02158dfc", "kind": "exec", "mode": "blocking", "role": "incident.group.start", "capture": ["seed-before", "caller-lr"] },
+    { "id": "primary_handler_start", "address": "0x021ebd9c", "kind": "exec", "mode": "blocking", "role": "observer.action.start", "capture": ["action-context", "seed", "bounded-entity-snapshot"] },
+    { "id": "calculated_damage_return", "address": "0x021ecd04", "kind": "exec", "mode": "blocking", "role": "observer.result.calculated-damage", "capture": ["r0-calculated-value", "seed"] },
+    { "id": "ctable_processing_damage", "address": "0x021ecf78", "kind": "exec", "mode": "blocking", "role": "incident.ctable.damage", "capture": ["r0-damage-value", "seed"] },
+    { "id": "result_apply_dispatch_before", "address": "0x021ed0f8", "kind": "exec", "mode": "blocking", "role": "observer.result.selector", "capture": ["callback-address", "action-pointer", "calculated-argument", "target-arguments"] },
+    { "id": "current_hp_store_before", "address": "0x0215b894", "kind": "exec", "mode": "blocking", "role": "observer.mutation.hp.before", "capture": ["actor", "status", "hp-before", "damage", "next-hp"] },
+    { "id": "current_hp_store_after", "address": "0x0215b898", "kind": "exec", "mode": "blocking", "role": "observer.mutation.hp.after", "capture": ["stored-hp"] },
+    { "id": "primary_handler_epilogue", "address": "0x021ee050", "kind": "exec", "mode": "blocking", "role": "observer.action.epilogue", "capture": ["bounded-target-status"] },
+    { "id": "primary_handler_after", "address": "0x0215f950", "kind": "exec", "mode": "blocking", "role": "observer.action.complete", "capture": ["seed", "bounded-entity-snapshot"] },
+    { "id": "defense_stage_store_before", "address": "0x020881f8", "kind": "exec", "mode": "blocking", "role": "observer.mutation.defense.before", "capture": ["actor", "status", "signed-stage", "base-defense", "derived-defense"] },
+    { "id": "defense_stage_store_after", "address": "0x020881fc", "kind": "exec", "mode": "blocking", "role": "observer.mutation.defense.after", "capture": ["signed-defense-stage"] },
+    { "id": "defense_turn_init", "address": "0x02088200", "kind": "exec", "mode": "blocking", "role": "observer.mutation.defense-turn.init", "capture": ["turns-before", "proposed-turns"] },
+    { "id": "defense_turn_tick", "address": "0x0215b398", "kind": "exec", "mode": "blocking", "role": "observer.mutation.defense-turn.tick", "capture": ["duration-address", "turns-before", "next-turns"] },
+    { "id": "camera_rng_region_start", "address": "0x0216fda4", "kind": "exec", "mode": "blocking", "role": "observer.camera.start", "capture": ["camera-observable-u32-start", "r3-u32", "full-lcg-seed-position-start"] },
+    { "id": "camera_rng_region_end", "address": "0x02170120", "kind": "exec", "mode": "blocking", "role": "observer.camera.end", "capture": ["camera-observable-u32-end", "full-lcg-seed-position-end", "mathematical-consumed-steps"] },
+    { "id": "marker_group_end", "address": "0x0215f980", "kind": "exec", "mode": "blocking", "role": "incident.group.end", "capture": ["seed-after", "caller-lr"] }
+  ],
+  "diagnosticRngApis": [
+    { "id": "RandInt", "entry": "0x02075488", "exit": "0x020754d4", "inputs": ["seed-pointer", "max"], "output": "r0", "nestedFilter": "exclude LR 0x02075628 inside RandIntRange" },
+    { "id": "RandFloatBetween", "entry": "0x02075514", "exit": "0x0207555c", "inputs": ["seed-pointer", "min-float-bits", "max-float-bits"], "output": "r0" },
+    { "id": "RandIntRange", "entry": "0x02075604", "exit": "0x02075630", "inputs": ["seed-pointer", "inclusive-min", "inclusive-max"], "output": "r0" }
+  ]
+}

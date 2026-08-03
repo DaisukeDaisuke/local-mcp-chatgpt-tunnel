@@ -1,0 +1,15 @@
+.git
+.env
+.secrets
+workspace
+config/dq9-runtime.json
+node_modules
+*.log
+*.pid
+*.key
+*.pem
+*.nds
+*.dst
+profile-*
+mcp/dq9-test/runtime
+mcp/dq9-test/artifacts
