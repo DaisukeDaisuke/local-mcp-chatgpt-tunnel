@@ -455,6 +455,7 @@ https://x.com/nakasyou0/status/2083740389471904012 <br>
 
 https://azukiazusa.dev/blog/openai-secure-mcp-tunnel/ <br>
 
+https://azukiazusa.dev/blog/mcp-tool-annotations/ <br>
 
 ### 14 トラブルシューティング
 
