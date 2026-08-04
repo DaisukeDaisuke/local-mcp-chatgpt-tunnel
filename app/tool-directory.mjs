@@ -3,6 +3,12 @@ export const TOOL_DIRECTORY_NAME = 'gateway__list_available_tools';
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
   description: 'List currently available tools by full namespaced identifier and brief description. A prefix with zero matches returns the complete list.',
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  },
   inputSchema: {
     type: 'object',
     properties: {

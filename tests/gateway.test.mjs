@@ -361,6 +361,12 @@ process.stdin.on('data', (chunk) => {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['gateway__list_available_tools', 'demo__plain']);
+  assert.deepEqual(listed.result.tools[0].annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  });
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
     name: 'gateway__list_available_tools', arguments: { prefix: 'DEMO__PL' }
