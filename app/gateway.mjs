@@ -3,7 +3,11 @@ import { scrubSecretEnvironment } from './child-environment.mjs';
 import { ToolPathPolicy } from './path-policy.mjs';
 import { StdioMcpChild } from './stdio-child.mjs';
 import { loadGatewayConfig } from './server-config.mjs';
-import { applyConfiguredAnnotations, loadToolAnnotationConfig } from './tool-annotations.mjs';
+import {
+  applyConfiguredAnnotations,
+  loadToolAnnotationConfig,
+  syncDiscoveredToolAnnotations
+} from './tool-annotations.mjs';
 import {
   TOOL_DIRECTORY_NAME,
   createToolDirectoryPayload,
@@ -146,7 +150,10 @@ async function startChild(childConfig) {
   if (inProgress) return inProgress;
   const start = (async () => {
     const child = new StdioMcpChild(childConfig, {
-      onToolsChanged: () => {
+      onToolsChanged: async (changedChild) => {
+        if (changedChild.config.manageAnnotations) {
+          await syncDiscoveredToolAnnotations(toolAnnotationConfig, changedChild.config.prefix, changedChild.tools.map((tool) => tool.name));
+        }
         rebuildRoutes();
         notifyToolsChanged();
       }
@@ -163,6 +170,9 @@ async function startChild(childConfig) {
     try {
       await child.pathPolicy.allowed();
       await child.start();
+      if (childConfig.manageAnnotations) {
+        await syncDiscoveredToolAnnotations(toolAnnotationConfig, childConfig.prefix, child.tools.map((tool) => tool.name));
+      }
     } catch (error) {
       await child.close().catch(() => {});
       throw error;

@@ -111,7 +111,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 Codex設定からコピーした`tool_output_token_limit`、ツール別の承認設定、Gatewayが認識しない項目は無視されます。このGateway上では効果を持ちません。<br>
 ### 外部MCPのツールannotations
 外部MCPは、子MCPが返した`annotations`を基準にしつつ、欠けている`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`を明示値へ補完して公開します。子MCPが`readOnlyHint = true`だけを返した場合は、明示指定がない限り`destructiveHint = false`、`idempotentHint = true`として補完します。<br>
-Gateway起動時、`tool_annotations_path`で指定したTOMLがなければ作成し、有効な外部MCPのprefixに対応する`[tool_annotations.<prefix>]`が存在しない場合だけ末尾へ追加します。既存のprefix設定やツール割り当ては上書きしません。<br>
+Gateway起動時、`tool_annotations_path`で指定したTOMLがなければ作成し、有効な外部MCPのprefixに対応する`[tool_annotations.<prefix>]`が存在しない場合は末尾へ追加します。子MCPから取得したツール識別名も`[tool_annotations.<prefix>.tools]`へ`UNCLASSIFIED`として追記します。既存のprefix設定やツール割り当ては上書きせず、消えたツールも自動削除しません。<br>
 同梱MCPは各`server.mjs`でannotationsを定義しているため、`gateway.toml`で`annotation_config = false`にします。外部MCPは省略時に`true`として扱います。<br>
 自動生成されるTOML内には、次の省略名と4つのhintの意味がコメントで記載されます。`open_world_hint`はprefix全体、`open_world_tools`は個別ツールの`openWorldHint`を上書きします。<br>
 ```toml
@@ -120,16 +120,16 @@ default = "LOCAL_STATE_ANNOTATIONS"
 open_world_hint = true
 [tool_annotations.chrome-devtools.tools]
 take_snapshot = "READ_ONLY_ANNOTATIONS"
-click = "LOCAL_STATE_ANNOTATIONS"
+click = "UNCLASSIFIED"
 [tool_annotations.chrome-devtools.open_world_tools]
 take_snapshot = false
 click = true
 ```
-利用できる省略名は`READ_ONLY_ANNOTATIONS`、`LOCAL_STATE_ANNOTATIONS`、`LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS`、`LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS`、`LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS`です。省略名を設定しないツールは、子MCPが返したannotationsの既存値を保持し、欠けているhintだけを補完します。<br>
+`UNCLASSIFIED`は子MCPが返したannotationsの既存値を保持し、欠けているhintだけを補完する未分類マーカーです。分類時は各ツール識別名の値を`READ_ONLY_ANNOTATIONS`、`LOCAL_STATE_ANNOTATIONS`、`LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS`、`LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS`、`LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS`のいずれかへ変更します。<br>
 ## Gateway設定
 ### ユーザーの決定は尊重されます
 Gatewayの動作は、利用者が`config/gateway.toml`へ明示した設定によって決まります。MCPを自動検出して勝手に登録することや、設定ファイルを自動的に書き換えることはありません。<br>
-例外として、外部MCPのツールannotationsだけは、`tool_annotations_path`で指定された独立TOMLへ未登録prefixの空テンプレートを追記します。`gateway.toml`、既存prefix、既存ツール設定は変更しません。<br>
+例外として、外部MCPのツールannotationsだけは、`tool_annotations_path`で指定された独立TOMLへ未登録prefixと新しく発見したツール識別名を追記します。新規ツールは`UNCLASSIFIED`になり、`gateway.toml`、既存prefix、既存ツール設定は変更しません。<br>
 接続するMCP、その起動コマンド、引数、作業ディレクトリ、環境変数、有効・無効、公開しないツール、パスの許可・拒否範囲、直列実行、遅延起動は、すべて利用者が選択します。<br>
 Gatewayはその設定を読み取り、検証して適用しますが、利用者の代わりに安全性や用途を推測して設定を追加したり、許可範囲を広げたりしません。<br>
 `config/gateway.example.toml`は設定例であり、そのまま適用される「魔法のスクリプト」ではありません。必要な項目だけを確認して`config/gateway.toml`へ記述し、実際に起動するプログラムと公開する機能を利用者自身が把握できる構成にしています。<br>

@@ -14,3 +14,4 @@ node_modules/
 tunnel-runtime-key
 profile-*/
 /.idea
+/config/tool-annotations.toml
