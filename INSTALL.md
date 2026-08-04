@@ -506,7 +506,7 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
 任意コード、コマンド、シェル、スクリプト、プロセスを実行できるMCPは、このチャット履歴に今回の目的と対象への明示的な許可がある場合だけ呼ぶこと。許可がなければそのターンは許可を求めて終了し、許可前に別の任意コード実行ツールへ切り替えず、過去の許可を別目的や対象へ流用しないこと。
 `files__roots`が見えなくても、`gateway__list_available_tools`で確認する前に`files__`が無効、利用不能、不存在と断定しないこと。確認後も`files__`がなく、他の公開ツールにもファイル編集機能がない場合だけ編集不能と判断し、推測で代替せず理由を説明すること。
 MCPの有効状態、公開ツール、`allowed_directories`、`allowed_files`などの許可設定は、ユーザーの明示的な指示なく変更、回避、緩和しないこと。変更方法を尋ねられた場合は`config/gateway.example.toml`を参照し、`config/gateway.toml`の該当設定、GatewayとTunnelの再起動、ChatGPT側のカスタムアプリ更新が必要と説明すること。明示的に変更を指示された場合だけ、安全なファイル編集手段で`config/gateway.toml`を編集すること。
-`files__`の代表例は`roots`、`get_working_directory`、`set_working_directory`、`list_files`、`search_text`、`file_info`、`read_text_file`、`read_text_lines`、`apply_patch`である。
+`files__`の代表例は`roots`、`get_working_directory`、`set_working_directory`、`list_files`、`search_text`、`file_info`、`read_text`、`apply_patch`である。`read_text`は単一または複数ファイルの全体・行範囲読み取りに対応する。
 ===終了ローカルmcpプラグイン指示===
 ```
 この指示では、Git、画像、ブラウザー、デバッガー、GitHub ActionsなどのMCP名を固定列挙しません。<br>追加または削除されたMCPをカスタム指示へ毎回反映せず、実際に公開されているツールをGatewayから確認します。<br>

@@ -37,7 +37,7 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   const names = listed.result.tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
     'apply_patch', 'create_directory', 'file_info', 'get_working_directory', 'list_directory',
-    'list_files', 'read_file_chunk', 'read_text_file', 'read_text_lines', 'replace_text', 'roots', 'search_text',
+    'list_files', 'read_file_chunk', 'read_text', 'replace_text', 'roots', 'search_text',
     'set_working_directory', 'write_file', 'write_text_file'
   ]);
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
@@ -54,7 +54,7 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   };
   expectAnnotations([
     'roots', 'get_working_directory', 'list_directory', 'list_files', 'search_text',
-    'read_text_file', 'read_text_lines', 'file_info', 'read_file_chunk'
+    'read_text', 'file_info', 'read_file_chunk'
   ], { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
   expectAnnotations([
     'set_working_directory', 'create_directory'
@@ -69,13 +69,18 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   const applyPatch = listed.result.tools.find((tool) => tool.name === 'apply_patch');
   assert.match(applyPatch.description, /workspace-relative/);
   assert.match(applyPatch.inputSchema.properties.patch.description, /Do not use absolute paths/);
+  const readText = listed.result.tools.find((tool) => tool.name === 'read_text');
+  assert.match(readText.description, /absolute or relative to the current MCP root/);
+  assert.match(readText.description, /current working directory/);
+  assert.match(readText.inputSchema.properties.path.description, /Absolute path or path relative to the current MCP root/);
   await writeFile(join(root, 'utf16.txt'), Buffer.from([0xff, 0xfe, 0x41, 0x00]));
-  const result = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'utf16.txt' } }));
-  assert.equal(result.result.isError, true);
-  assert.match(result.result.structuredContent.error, /UTF-16/);
+  const result = await server(request(3, 'tools/call', { name: 'read_text', arguments: { path: 'utf16.txt' } }));
+  assert.equal(result.result.isError, false);
+  assert.equal(result.result.structuredContent.result.failed, 1);
+  assert.match(result.result.structuredContent.result.results[0].error, /UTF-16/);
 });
 
-test('read_text_lines returns an inclusive range, clamps the end line, and rejects an impossible start line precisely', async () => {
+test('read_text supports single and batched whole-file or ranged reads with optional annotated output', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safe-files-lines-'));
   const path = join(root, 'lines.txt');
   await writeFile(path, 'first\r\nsecond\nthird\n', 'utf8');
@@ -83,43 +88,121 @@ test('read_text_lines returns an inclusive range, clamps the end line, and rejec
   const server = await serverFor(root, 'read-lines');
 
   const clamped = await server(request(2, 'tools/call', {
-    name: 'read_text_lines', arguments: { path: 'lines.txt', startLine: 2, endLine: 999 }
+    name: 'read_text', arguments: { path: 'lines.txt', startLine: 2, endLine: 999 }
   }));
   assert.equal(clamped.result.isError, false);
-  assert.deepEqual(clamped.result.structuredContent.result, {
+  assert.deepEqual(clamped.result.structuredContent.result.results[0], {
+    ok: true,
+    inputPath: 'lines.txt',
     path,
     startLine: 2,
     endLine: 3,
     requestedEndLine: 999,
     lineCount: 3,
+    contentBytes: 12,
     content: 'second\nthird'
   });
 
   const impossible = await server(request(3, 'tools/call', {
-    name: 'read_text_lines', arguments: { path: 'lines.txt', startLine: 4, endLine: 8 }
+    name: 'read_text', arguments: { path: 'lines.txt', startLine: 4, endLine: 8 }
   }));
-  assert.equal(impossible.result.isError, true);
+  assert.equal(impossible.result.isError, false);
   assert.equal(
-    impossible.result.structuredContent.error,
+    impossible.result.structuredContent.result.results[0].error,
     `Start line is out of range for ${path}: got 4, expected a maximum of 3`
   );
 
   const empty = await server(request(4, 'tools/call', {
-    name: 'read_text_lines', arguments: { path: 'empty.txt', startLine: 1, endLine: 1 }
+    name: 'read_text', arguments: { path: 'empty.txt', startLine: 1, endLine: 1 }
   }));
-  assert.equal(empty.result.isError, true);
+  assert.equal(empty.result.isError, false);
   assert.equal(
-    empty.result.structuredContent.error,
+    empty.result.structuredContent.result.results[0].error,
     `Start line is out of range for ${join(root, 'empty.txt')}: got 1, expected a maximum of 0`
   );
 
   const fakeRuntimeKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-');
   await writeFile(join(root, 'credential.txt'), `safe\n${fakeRuntimeKey}\n`, 'utf8');
   const credential = await server(request(5, 'tools/call', {
-    name: 'read_text_lines', arguments: { path: 'credential.txt', startLine: 1, endLine: 1 }
+    name: 'read_text', arguments: { path: 'credential.txt', startLine: 1, endLine: 1 }
   }));
-  assert.equal(credential.result.isError, true);
-  assert.match(credential.result.structuredContent.error, /credential/i);
+  assert.equal(credential.result.isError, false);
+  assert.match(credential.result.structuredContent.result.results[0].error, /credential/i);
+
+  const batch = await server(request(6, 'tools/call', {
+    name: 'read_text',
+    arguments: {
+      reads: [
+        { path: 'lines.txt' },
+        { path: 'lines.txt', startLine: 2, endLine: 2 },
+        { path: 'missing.txt' }
+      ],
+      format: 'annotated'
+    }
+  }));
+  assert.equal(batch.result.isError, false);
+  assert.equal(batch.result.structuredContent.result.requested, 3);
+  assert.equal(batch.result.structuredContent.result.succeeded, 2);
+  assert.equal(batch.result.structuredContent.result.failed, 1);
+  assert.equal(batch.result.structuredContent.result.results[0].content, 'first\r\nsecond\nthird\n');
+  assert.equal(batch.result.structuredContent.result.results[1].content, 'second');
+  assert.match(batch.result.content[0].text, new RegExp(`----- ${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} -----`));
+  assert.match(batch.result.content[0].text, /1: first/);
+  assert.match(batch.result.content[0].text, /2: second/);
+  assert.match(batch.result.content[0].text, /ERROR:/);
+});
+
+test('read_text accepts relative and absolute paths from the current MCP root and rejects punctuation-based escapes outside allowed directories', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'safe-files-read-boundary-'));
+  const root = join(parent, 'root');
+  const insidePath = join(root, 'inside.txt');
+  const outsidePath = join(parent, 'outside.txt');
+  await mkdir(root);
+  await mkdir(join(root, 'nested'));
+  await writeFile(insidePath, 'inside\n', 'utf8');
+  await writeFile(outsidePath, 'outside\n', 'utf8');
+  const server = await serverFor(root, 'read-boundary');
+
+  const accepted = await server(request(2, 'tools/call', {
+    name: 'read_text',
+    arguments: {
+      reads: [
+        { path: 'inside.txt' },
+        { path: insidePath }
+      ],
+      format: 'annotated'
+    }
+  }));
+  assert.equal(accepted.result.isError, false);
+  assert.equal(accepted.result.structuredContent.result.succeeded, 2);
+  assert.equal(accepted.result.structuredContent.result.failed, 0);
+  assert.equal(accepted.result.structuredContent.result.results[0].path, insidePath);
+  assert.equal(accepted.result.structuredContent.result.results[1].path, insidePath);
+
+  const colonEscape = process.platform === 'win32' ? outsidePath : `${outsidePath}:alternate`;
+  const escapePaths = [
+    '../outside.txt',
+    './../outside.txt',
+    'nested/../../outside.txt',
+    '../outside.txt;ignored',
+    colonEscape
+  ];
+  const escaped = await server(request(3, 'tools/call', {
+    name: 'read_text',
+    arguments: { reads: escapePaths.map((path) => ({ path })) }
+  }));
+  assert.equal(escaped.result.isError, false);
+  assert.equal(escaped.result.structuredContent.result.succeeded, 0);
+  assert.equal(escaped.result.structuredContent.result.failed, escapePaths.length);
+  assert.ok(escapePaths.some((path) => path.includes('../')));
+  assert.ok(escapePaths.some((path) => path.includes(';')));
+  assert.ok(escapePaths.some((path) => path.includes(':')));
+  assert.ok(escapePaths.some((path) => path.includes('./')));
+  for (const [index, item] of escaped.result.structuredContent.result.results.entries()) {
+    assert.equal(item.ok, false, `escape item ${index} should fail`);
+    assert.equal(item.inputPath, escapePaths[index]);
+    assert.match(item.error, /outside all allowed workspace roots/);
+  }
 });
 
 test('file_info batches paths and reports type, bytes, line availability, censorship, prohibition, and binary likelihood without returning content', async () => {
@@ -187,8 +270,9 @@ test('file_info batches paths and reports type, bytes, line availability, censor
   assert.equal(denied.ok, true);
   assert.equal(denied.prohibited, true);
   assert.ok(denied.prohibitedReasons.includes('disallowed_files'));
-  const deniedRead = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'denied.txt' } }));
-  assert.equal(deniedRead.result.isError, true);
+  const deniedRead = await server(request(3, 'tools/call', { name: 'read_text', arguments: { path: 'denied.txt' } }));
+  assert.equal(deniedRead.result.isError, false);
+  assert.equal(deniedRead.result.structuredContent.result.failed, 1);
 
   const directory = items.directory;
   assert.equal(directory.ok, true);
@@ -308,12 +392,12 @@ test('safe-files rejects direct access and listings when a configured path glob 
   const server = await serverFor(root, 'path-glob', { disallowedPathGlobs: ['**.ssh**'] });
 
   const direct = await server(request(2, 'tools/call', {
-    name: 'read_text_file', arguments: { path: '.ssh/id_ed25519.txt' }
+    name: 'read_text', arguments: { path: '.ssh/id_ed25519.txt' }
   }));
-  assert.equal(direct.result.isError, true);
-  assert.match(direct.result.structuredContent.error, /glob filter disallowed_path_globs/);
-  assert.match(direct.result.structuredContent.error, /\*\*\.ssh\*\*/);
-  assert.match(direct.result.structuredContent.error, /\.ssh/);
+  assert.equal(direct.result.isError, false);
+  assert.match(direct.result.structuredContent.result.results[0].error, /glob filter disallowed_path_globs/);
+  assert.match(direct.result.structuredContent.result.results[0].error, /\*\*\.ssh\*\*/);
+  assert.match(direct.result.structuredContent.result.results[0].error, /\.ssh/);
 
   const info = await server(request(3, 'tools/call', {
     name: 'file_info', arguments: { paths: ['.ssh/id_ed25519.txt'] }
@@ -366,12 +450,12 @@ test('the explicit workspace is not name-blacklisted, while detected credential 
   await writeFile(join(root, '.ssh', 'ordinary.txt'), 'public information', 'utf8');
   await writeFile(join(root, 'notes.txt'), fakeRuntimeKey, 'utf8');
   const server = await serverFor(root, 'credentials');
-  const ordinary = await server(request(2, 'tools/call', { name: 'read_text_file', arguments: { path: '.ssh/ordinary.txt' } }));
+  const ordinary = await server(request(2, 'tools/call', { name: 'read_text', arguments: { path: '.ssh/ordinary.txt' } }));
   assert.equal(ordinary.result.isError, false);
-  assert.equal(ordinary.result.structuredContent.result.content, 'public information');
-  const contentRefused = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'notes.txt' } }));
-  assert.equal(contentRefused.result.isError, true);
-  assert.match(contentRefused.result.structuredContent.error, /credential/i);
+  assert.equal(ordinary.result.structuredContent.result.results[0].content, 'public information');
+  const contentRefused = await server(request(3, 'tools/call', { name: 'read_text', arguments: { path: 'notes.txt' } }));
+  assert.equal(contentRefused.result.isError, false);
+  assert.match(contentRefused.result.structuredContent.result.results[0].error, /credential/i);
   const outsideRefused = await server(request(4, 'tools/call', { name: 'search_text', arguments: { query: 'anything', path: join(tmpdir(), 'outside.txt') } }));
   assert.equal(outsideRefused.result.isError, true);
   assert.match(outsideRefused.result.structuredContent.error, /outside/);
@@ -384,8 +468,8 @@ test('working directory changes relative path resolution', async () => {
   const server = await serverFor(root, 'cwd');
   const changed = await server(request(2, 'tools/call', { name: 'set_working_directory', arguments: { path: 'project' } }));
   assert.equal(changed.result.isError, false);
-  const read = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'a.txt' } }));
-  assert.equal(read.result.structuredContent.result.content, 'alpha');
+  const read = await server(request(3, 'tools/call', { name: 'read_text', arguments: { path: 'a.txt' } }));
+  assert.equal(read.result.structuredContent.result.results[0].content, 'alpha');
 });
 
 test('structured apply_patch updates and adds UTF-8 files', async () => {
@@ -453,8 +537,9 @@ test('safe-files refuses symlink escape and performs exact replacement', async (
   await writeFile(join(outside, 'secret.txt'), 'secret', 'utf8');
   if (!await createSymlinkOrSkip(t, join(outside, 'secret.txt'), join(root, 'escape.txt'))) return;
   const server = await serverFor(root, 'symlink');
-  const escaped = await server(request(2, 'tools/call', { name: 'read_text_file', arguments: { path: 'escape.txt' } }));
-  assert.equal(escaped.result.isError, true);
+  const escaped = await server(request(2, 'tools/call', { name: 'read_text', arguments: { path: 'escape.txt' } }));
+  assert.equal(escaped.result.isError, false);
+  assert.equal(escaped.result.structuredContent.result.failed, 1);
   const replaced = await server(request(3, 'tools/call', { name: 'replace_text', arguments: { path: 'src/a.txt', oldText: 'alpha', newText: 'beta', expectedOccurrences: 2 } }));
   assert.equal(replaced.result.isError, false);
   assert.equal(await readFile(join(root, 'src', 'a.txt'), 'utf8'), 'beta beta');

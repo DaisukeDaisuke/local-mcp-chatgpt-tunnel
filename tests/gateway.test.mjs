@@ -192,17 +192,109 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   assert.ok(names.every((name) => name.startsWith('files__')));
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
-    name: 'files__read_text_file', arguments: { path: 'inside.txt' }
+    name: 'files__read_text', arguments: { path: 'inside.txt' }
   } })}\n`);
   const inside = await nextLine(child.stdout);
   assert.equal(inside.result.isError, false);
-  assert.equal(inside.result.structuredContent.result.content, 'inside');
+  assert.equal(inside.result.structuredContent.result.results[0].content, 'inside');
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
-    name: 'files__read_text_file', arguments: { path: join(tmpdir(), 'outside.txt') }
+    name: 'files__read_text', arguments: { path: join(tmpdir(), 'outside.txt') }
   } })}\n`);
   const outside = await nextLine(child.stdout);
   assert.equal(outside.result.isError, true);
   assert.match(outside.result.content[0].text, /outside allowed_directories/);
+
+  const colonEscape = process.platform === 'win32'
+    ? join(tmpdir(), 'outside-colon.txt')
+    : `${join(tmpdir(), 'outside-colon.txt')}:alternate`;
+  const escapePaths = [
+    '../outside.txt',
+    './../outside.txt',
+    'nested/../../outside.txt',
+    '../outside.txt;ignored',
+    colonEscape
+  ];
+  for (const [index, path] of escapePaths.entries()) {
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5 + index, method: 'tools/call', params: {
+      name: 'files__read_text',
+      arguments: {
+        reads: [
+          { path, startLine: 1, endLine: 10 },
+          { path: 'inside.txt' }
+        ],
+        format: 'annotated'
+      }
+    } })}\n`);
+    const escaped = await nextLine(child.stdout);
+    assert.equal(escaped.result.isError, true, `escape path should be rejected: ${path}`);
+    assert.match(escaped.result.content[0].text, /files\.read_text path argument reads\[0\]\.path/);
+    assert.match(escaped.result.content[0].text, /outside allowed_directories and allowed_files/);
+  }
+});
+
+test('gateway applies empty allowlists and disallowed path globs to nested read_text batches', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-config-'));
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(join(workspace, 'public.txt'), 'alpha\nbeta\n', 'utf8');
+  const config = [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/safe-files/server.mjs')}']`,
+    `cwd = '${workspace}'`,
+    'allowed_directories = []',
+    'allowed_files = []',
+    'disallowed_directories = []',
+    'disallowed_files = []',
+    "disallowed_path_globs = ['**.ssh**']",
+    'enabled = true',
+    'prefix = "files"'
+  ].join('\n');
+  await writeFile(configPath, `${config}\n`, 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+    name: 'files__read_text',
+    arguments: {
+      reads: [
+        { path: 'public.txt', startLine: 1, endLine: 999 },
+        { path: 'second.txt' },
+        { path: 'nested/third.md', startLine: 30, endLine: 60 }
+      ],
+      format: 'annotated'
+    }
+  } })}\n`);
+  const noAllowlist = await nextLine(child.stdout);
+  assert.equal(noAllowlist.result.isError, true);
+  assert.match(noAllowlist.result.content[0].text, /files\.read_text path argument reads\[0\]\.path/);
+  assert.match(noAllowlist.result.content[0].text, /outside allowed_directories and allowed_files/);
+  assert.match(noAllowlist.result.content[0].text, /public\.txt/);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'files__read_text',
+    arguments: {
+      reads: [
+        { path: '.ssh/project-notes.txt', startLine: 1, endLine: 20 },
+        { path: 'public.txt' }
+      ],
+      format: 'annotated'
+    }
+  } })}\n`);
+  const disallowedGlob = await nextLine(child.stdout);
+  assert.equal(disallowedGlob.result.isError, true);
+  assert.match(disallowedGlob.result.content[0].text, /files\.read_text path argument reads\[0\]\.path/);
+  assert.match(disallowedGlob.result.content[0].text, /glob filter disallowed_path_globs/);
+  assert.match(disallowedGlob.result.content[0].text, /\*\*\.ssh\*\*/);
+  assert.match(disallowedGlob.result.content[0].text, /\.ssh/);
 });
 
 test('gateway preserves safe-download outputSchema and embedded ZIP resource content', async (t) => {

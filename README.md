@@ -58,14 +58,15 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 ## 同梱MCP
 | MCP | 公開ツールの例 | 用途 |
 | --- | --- | --- |
-| `safe-files` | `list_files`、`search_text`、`file_info`、`read_text_file`、`read_text_lines`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、ファイル情報、行範囲読み取り、読み書き、限定されたパッチ適用 |
+| `safe-files` | `list_files`、`search_text`、`file_info`、`read_text`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、複数ファイル・行範囲読み取り、ファイル情報、読み書き、限定されたパッチ適用 |
 | `safe-images` | `read_image` | PNG、JPEG、WebPをChatGPTの画像コンテンツとして読み取る |
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
 | `gitmcp` | `status`、`diff`、`log`、`branches`、`switch_branch`、`add_all`、`commit`、`push`、`pull`、`clone_repository` | 許可したリポジトリに対する限定されたGit操作 |
 | `gh-workflow` | `list_runs`、`watch_run`、`view_run`、`view_run_jobs`、`view_failed_logs`、`list_workflows`、`view_workflow_yaml` | 明示的に許可したGitHubリポジトリのActions実行状況を読み取り専用で確認 |
 同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。<br>
 ### safe-files
-`safe-files`は、`gateway.toml`で指定された`cwd`をプロセスの作業ディレクトリ兼Workspaceルートとして使います。<br>
+`safe-files`で外向きに「MCP root」と呼ぶものは、`gateway.toml`で指定された`cwd`を初期値とする現在の作業ディレクトリです。相対パスはこのMCP rootから解決され、`set_working_directory`で許可ディレクトリ内の別の既存ディレクトリへ変更できます。<br>
+`read_text`はMCP rootからの相対パスと絶対パスの両方を受け付けますが、正規化後および実在パス解決後の対象が設定された許可ディレクトリ内に残る場合だけ読み取ります。<br>
 主な機能は次のとおりです。<br>
 - 固定された`rg --files --hidden`による再帰一覧
 - 固定された`rg`によるUTF-8テキスト検索

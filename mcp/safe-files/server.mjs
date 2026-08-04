@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const MAX_TEXT_BYTES = Number(process.env.SAFE_FILES_MAX_BYTES ?? 2 * 1024 * 1024);
+const MAX_READ_OUTPUT_BYTES = Number(process.env.SAFE_FILES_MAX_READ_OUTPUT_BYTES ?? 4 * 1024 * 1024);
+const MAX_READ_ITEMS = 20;
 const MAX_PATCH_BYTES = Number(process.env.SAFE_FILES_MAX_PATCH_BYTES ?? 4 * 1024 * 1024);
 const MAX_TRANSFER_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_BYTES ?? 16 * 1024 * 1024);
 const MAX_TRANSFER_CHUNK_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_CHUNK_BYTES ?? 512 * 1024);
@@ -24,7 +26,8 @@ Usage:
 Options:
   --help  Print this help and exit.
 
-The process working directory is the workspace root. Set cwd in gateway.toml instead of passing --root.
+The process working directory is exposed as the MCP root and is the base for relative paths. Set cwd in gateway.toml instead of passing --root.
+Tools that document it, including read_text, accept both paths relative to the current MCP root and absolute paths. Every resolved path must remain inside a configured allowed directory.
 When exposed through the gateway, add the same absolute directory to allowed_directories.
 Run one safe-files entry per workspace when you need multiple roots.
 `;
@@ -97,8 +100,8 @@ const LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: false
 };
-const toolResult = (value, isError = false) => ({
-  content: [{ type: 'text', text: JSON.stringify(value) }],
+const toolResult = (value, isError = false, displayText) => ({
+  content: [{ type: 'text', text: typeof displayText === 'string' ? displayText : JSON.stringify(value) }],
   structuredContent: value,
   isError
 });
@@ -106,19 +109,19 @@ const toolResult = (value, isError = false) => ({
 const schemas = [
   {
     name: 'roots',
-    description: 'List the process working directory used as the workspace root.',
+    description: 'List configured allowed workspace directories and the current MCP root, which is the process working directory used to resolve relative paths.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'get_working_directory',
-    description: 'Return the directory used to resolve relative paths.',
+    description: 'Return the current MCP root, which is the working directory used to resolve relative paths.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'set_working_directory',
-    description: 'Change the relative-path base to an existing directory inside the process working directory.',
+    description: 'Change the current MCP root and relative-path base to an existing directory inside a configured allowed directory.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -183,28 +186,36 @@ const schemas = [
     annotations: READ_ONLY_ANNOTATIONS
   },
   {
-    name: 'read_text_file',
-    description: 'Read a UTF-8 workspace file. UTF-16, UTF-32, invalid UTF-8, and detected credentials are rejected.',
-    inputSchema: {
-      type: 'object',
-      properties: { path: { type: 'string', minLength: 1 } },
-      required: ['path'],
-      additionalProperties: false
-    },
-    annotations: READ_ONLY_ANNOTATIONS
-  },
-  {
-    name: 'read_text_lines',
-    description: 'Read an inclusive UTF-8 line range. An end line past EOF is clamped to the actual final line; a start line past EOF is rejected.',
+    name: 'read_text',
+    description: 'Read one or more UTF-8 workspace files. Paths may be absolute or relative to the current MCP root, which is the current working directory; every resolved path must remain inside a configured allowed directory. Each read may request the whole file or an inclusive line range. UTF-16, UTF-32, invalid UTF-8, detected credentials, and other failures are reported independently per file. Use format=annotated for absolute-path delimiters and source line numbers.',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', minLength: 1 },
+        path: { type: 'string', minLength: 1, description: 'Absolute path or path relative to the current MCP root/current working directory.' },
         startLine: { type: 'integer', minimum: 1 },
-        endLine: { type: 'integer', minimum: 1 }
+        endLine: { type: 'integer', minimum: 1 },
+        reads: {
+          type: 'array',
+          minItems: 1,
+          maxItems: MAX_READ_ITEMS,
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', minLength: 1, description: 'Absolute path or path relative to the current MCP root/current working directory.' },
+              startLine: { type: 'integer', minimum: 1 },
+              endLine: { type: 'integer', minimum: 1 }
+            },
+            required: ['path'],
+            additionalProperties: false
+          }
+        },
+        format: { type: 'string', enum: ['structured', 'annotated'], default: 'structured' }
       },
-      required: ['path', 'startLine', 'endLine'],
-      additionalProperties: false
+      additionalProperties: false,
+      oneOf: [
+        { required: ['path'], not: { required: ['reads'] } },
+        { required: ['reads'], not: { required: ['path'] } }
+      ]
     },
     annotations: READ_ONLY_ANNOTATIONS
   },
@@ -518,35 +529,133 @@ async function readBinarySample(path, size) {
   }
 }
 
-async function readTextLines(args) {
-  const target = await resolveExisting(args.path);
+function normalizeTextReadRequests(args) {
+  const hasPath = Object.hasOwn(args, 'path');
+  const hasReads = Object.hasOwn(args, 'reads');
+  if (hasPath === hasReads) throw new Error('Specify exactly one of path or reads');
+  if (args.format !== undefined && args.format !== 'structured' && args.format !== 'annotated') {
+    throw new Error(`Invalid read format: ${String(args.format)}`);
+  }
+  if (hasPath) return [{ path: args.path, startLine: args.startLine, endLine: args.endLine }];
+  if (args.startLine !== undefined || args.endLine !== undefined) {
+    throw new Error('Top-level startLine and endLine cannot be used with reads');
+  }
+  if (!Array.isArray(args.reads) || args.reads.length < 1 || args.reads.length > MAX_READ_ITEMS) {
+    throw new Error(`reads must contain between 1 and ${MAX_READ_ITEMS} items`);
+  }
+  return args.reads;
+}
+
+function validateTextReadRange(input, path) {
+  const hasStartLine = input.startLine !== undefined;
+  const hasEndLine = input.endLine !== undefined;
+  if (hasStartLine !== hasEndLine) throw new Error(`Both startLine and endLine are required for ${path}`);
+  if (!hasStartLine) return null;
+  const startLine = input.startLine;
+  const requestedEndLine = input.endLine;
+  if (!Number.isSafeInteger(startLine) || startLine < 1) {
+    throw new Error(`Invalid start line for ${path}: got ${String(startLine)}, expected an integer of at least 1`);
+  }
+  if (!Number.isSafeInteger(requestedEndLine) || requestedEndLine < 1) {
+    throw new Error(`Invalid end line for ${path}: got ${String(requestedEndLine)}, expected an integer of at least 1`);
+  }
+  if (requestedEndLine < startLine) {
+    throw new Error(`End line is before start line for ${path}: got ${requestedEndLine}, expected at least ${startLine}`);
+  }
+  return { startLine, requestedEndLine };
+}
+
+async function readOneText(input) {
+  const inputPath = input?.path;
+  if (typeof inputPath !== 'string' || inputPath.length < 1) throw new Error('Read path must be a non-empty string');
+  const target = await resolveExisting(inputPath);
   if (!(await stat(target.path)).isFile()) throw new Error('Path is not a file');
   const content = decodeUtf8(await readFile(target.path));
   rejectCredentialContent(content);
   const lines = splitTextLines(content);
-  const startLine = args.startLine;
-  const requestedEndLine = args.endLine;
-  if (!Number.isSafeInteger(startLine) || startLine < 1) {
-    throw new Error(`Invalid start line for ${target.path}: got ${String(startLine)}, expected an integer of at least 1`);
+  const range = validateTextReadRange(input, target.path);
+  if (!range) {
+    return {
+      ok: true,
+      inputPath,
+      path: target.path,
+      startLine: lines.length === 0 ? null : 1,
+      endLine: lines.length === 0 ? null : lines.length,
+      requestedEndLine: null,
+      lineCount: lines.length,
+      contentBytes: new TextEncoder().encode(content).length,
+      content
+    };
   }
-  if (!Number.isSafeInteger(requestedEndLine) || requestedEndLine < 1) {
-    throw new Error(`Invalid end line for ${target.path}: got ${String(requestedEndLine)}, expected an integer of at least 1`);
+  if (range.startLine > lines.length) {
+    throw new Error(`Start line is out of range for ${target.path}: got ${range.startLine}, expected a maximum of ${lines.length}`);
   }
-  if (startLine > lines.length) {
-    throw new Error(`Start line is out of range for ${target.path}: got ${startLine}, expected a maximum of ${lines.length}`);
-  }
-  if (requestedEndLine < startLine) {
-    throw new Error(`End line is before start line for ${target.path}: got ${requestedEndLine}, expected at least ${startLine}`);
-  }
-  const endLine = Math.min(requestedEndLine, lines.length);
+  const endLine = Math.min(range.requestedEndLine, lines.length);
+  const rangedContent = lines.slice(range.startLine - 1, endLine).join('\n');
   return {
+    ok: true,
+    inputPath,
     path: target.path,
-    startLine,
+    startLine: range.startLine,
     endLine,
-    requestedEndLine,
+    requestedEndLine: range.requestedEndLine,
     lineCount: lines.length,
-    content: lines.slice(startLine - 1, endLine).join('\n')
+    contentBytes: new TextEncoder().encode(rangedContent).length,
+    content: rangedContent
   };
+}
+
+function formatAnnotatedTextRead(item) {
+  const path = item.path ?? item.inputPath ?? '<invalid path>';
+  const delimiter = `----- ${path} -----`;
+  if (!item.ok) return `${delimiter}\nERROR: ${item.error}\n${delimiter}`;
+  const lines = splitTextLines(item.content);
+  const firstLine = item.startLine ?? 1;
+  const body = lines.map((line, index) => `${firstLine + index}: ${line}`);
+  return [delimiter, ...body, delimiter].join('\n');
+}
+
+async function readText(args) {
+  const requests = normalizeTextReadRequests(args);
+  const format = args.format ?? 'structured';
+  const results = [];
+  const annotatedBlocks = [];
+  let outputBytes = 0;
+  let contentBytes = 0;
+  for (const request of requests) {
+    try {
+      const item = await readOneText(request);
+      const annotated = format === 'annotated' ? formatAnnotatedTextRead(item) : null;
+      const itemOutputBytes = format === 'annotated'
+        ? new TextEncoder().encode(annotated).length
+        : item.contentBytes;
+      if (outputBytes + itemOutputBytes > MAX_READ_OUTPUT_BYTES) {
+        throw new Error(`Combined read output exceeds ${MAX_READ_OUTPUT_BYTES} bytes`);
+      }
+      outputBytes += itemOutputBytes;
+      contentBytes += item.contentBytes;
+      results.push(item);
+      if (annotated !== null) annotatedBlocks.push(annotated);
+    } catch (error) {
+      const failed = {
+        ok: false,
+        inputPath: typeof request?.path === 'string' ? request.path : null,
+        error: error instanceof Error ? error.message : String(error)
+      };
+      results.push(failed);
+      if (format === 'annotated') annotatedBlocks.push(formatAnnotatedTextRead(failed));
+    }
+  }
+  const result = {
+    format,
+    requested: requests.length,
+    succeeded: results.filter((item) => item.ok).length,
+    failed: results.filter((item) => !item.ok).length,
+    contentBytes,
+    results
+  };
+  if (format === 'annotated') result.annotated = annotatedBlocks.join('\n');
+  return result;
 }
 
 async function inspectFileInfo(path) {
@@ -1007,17 +1116,10 @@ async function callTool(name, args = {}) {
       return listFiles(args);
     case 'search_text':
       return searchText(args);
-    case 'read_text_lines':
-      return readTextLines(args);
+    case 'read_text':
+      return readText(args);
     case 'file_info':
       return fileInfo(args);
-    case 'read_text_file': {
-      const target = await resolveExisting(args.path);
-      if (!(await stat(target.path)).isFile()) throw new Error('Path is not a file');
-      const content = decodeUtf8(await readFile(target.path));
-      rejectCredentialContent(content);
-      return { path: target.path, content };
-    }
     case 'read_file_chunk': {
       const target = await resolveExisting(args.path);
       const info = await stat(target.path);
@@ -1098,7 +1200,7 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-files', version: '4.1.0' },
+        serverInfo: { name: 'safe-files', version: '4.2.0' },
         instructions: 'Current-working-directory UTF-8 editing, fixed ripgrep search, and bounded file transfer. The gateway enforces configured path allowlists before tool calls are forwarded.'
       });
     }
@@ -1107,7 +1209,13 @@ export function createServer() {
     if (request.method === 'tools/list') return response(request.id, { tools: schemas });
     if (request.method === 'tools/call') {
       try {
-        return response(request.id, toolResult({ ok: true, result: await callTool(request.params?.name, request.params?.arguments ?? {}) }));
+        const toolName = request.params?.name;
+        const result = await callTool(toolName, request.params?.arguments ?? {});
+        if (toolName === 'read_text' && result?.format === 'annotated') {
+          const { annotated, ...structuredResult } = result;
+          return response(request.id, toolResult({ ok: true, result: structuredResult }, false, annotated));
+        }
+        return response(request.id, toolResult({ ok: true, result }));
       } catch (error) {
         return response(request.id, toolResult({ ok: false, error: error instanceof Error ? error.message : String(error) }, true));
       }

@@ -102,7 +102,9 @@ test('child MCP environment is allowlisted instead of inheriting credentials', a
 
 test('safe-files uses cwd while the gateway applies generic path allowlists', async () => {
   const filesServer = await readFile(new URL('../mcp/safe-files/server.mjs', import.meta.url), 'utf8');
-  assert.match(filesServer, /process working directory is the workspace root/i);
+  assert.match(filesServer, /process working directory is exposed as the MCP root/i);
+  assert.match(filesServer, /accept both paths relative to the current MCP root and absolute paths/i);
+  assert.match(filesServer, /Every resolved path must remain inside a configured allowed directory/i);
   assert.doesNotMatch(filesServer, /--root <path>|parseSafeFilesArgs/);
   assert.doesNotMatch(filesServer, /chatgpt-local-mcp-root|ROOT_MARKER/);
   assert.doesNotMatch(filesServer, /name:\s*['"](?:execute|start_command|without_sandbox|shell)['"]/);
