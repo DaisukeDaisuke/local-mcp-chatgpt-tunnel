@@ -26,7 +26,7 @@ test('external annotation config creates only missing prefix sections and preser
   const config = await loadToolAnnotationConfig(path, ['browser', 'ghidra']);
   await loadToolAnnotationConfig(path, ['browser', 'ghidra']);
   const text = await readFile(path, 'utf8');
-  assert.match(text, /LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS/);
+  assert.match(text, /Discovered tools are inserted here as UNCLASSIFIED/);
   assert.equal((text.match(/\[tool_annotations\.browser\]/g) ?? []).length, 1);
   assert.equal((text.match(/\[tool_annotations\.ghidra\]/g) ?? []).length, 1);
 

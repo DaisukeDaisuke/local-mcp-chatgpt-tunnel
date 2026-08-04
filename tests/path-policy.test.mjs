@@ -161,7 +161,7 @@ test('Windows path policy blocks alternate data stream aliases of the gateway co
     protectedFiles: ['C:\\work\\config\\gateway.toml']
   });
   await assert.rejects(
-    policy.assertToolArguments('read_text', { path: 'C:\\work\\config\\gateway.toml::$DATA' }),
+    policy.assertToolArguments('read_text', { path: 'C:\\work\\config\\gateway.toml:gateway-config' }),
     /gateway configuration/
   );
 });
