@@ -457,6 +457,6 @@ https://azukiazusa.dev/blog/openai-secure-mcp-tunnel/ <br>
 ### 14 トラブルシューティング
 
 #### 14.2 mcpが読み込まれない
-- `config/gateway.toml`設定ファイル、`tunnel-client.exe`のログをChatGPT丸投げしてください。
+- `config/gateway.toml`設定ファイル、`tunnel-client.exe`のログをChatGPTに丸投げしてください。
 - それでも解決しない場合、変更を保存してからパソコンを再起動し、新規チャットで始めてください。
 
