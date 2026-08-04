@@ -342,11 +342,18 @@ Cancelを押してページを閉じます。
 $apiKey = 'ここにTunnel runtime API keyを貼る'
 $tunnelId = 'tunnel_0123456789abcdef0123456789abcdef'
 
-if ([string]::IsNullOrWhiteSpace($apiKey)) {
-throw 'CONTROL_PLANE_API_KEY is empty.'
+if (
+[string]::IsNullOrWhiteSpace($apiKey) -or
+$apiKey -eq 'ここにTunnel runtime API keyを貼る'
+) {
+throw 'CONTROL_PLANE_API_KEY is empty or unchanged.'
 }
-if ([string]::IsNullOrWhiteSpace($tunnelId)) {
-throw 'CONTROL_PLANE_TUNNEL_ID is empty.'
+
+if (
+[string]::IsNullOrWhiteSpace($tunnelId) -or
+$tunnelId -eq 'tunnel_0123456789abcdef0123456789abcdef'
+) {
+throw 'CONTROL_PLANE_TUNNEL_ID is empty or unchanged.'
 }
 
 # 現在のPowerShellと、ここから起動するtunnel-clientへ即時反映
@@ -359,13 +366,14 @@ $env:CONTROL_PLANE_TUNNEL_ID = $tunnelId
     $apiKey,
     [EnvironmentVariableTarget]::User
 )
+
 [Environment]::SetEnvironmentVariable(
-'CONTROL_PLANE_TUNNEL_ID',
-$tunnelId,
-[EnvironmentVariableTarget]::User
+    'CONTROL_PLANE_TUNNEL_ID',
+    $tunnelId,
+    [EnvironmentVariableTarget]::User
 )
 
-Remove-Variable apiKey, tunnelId
+Remove-Variable -Name apiKey, tunnelId
 ```
 これは現在のPowerShellへ即時反映し、Windowsのユーザー環境変数としても永続保存します。<br>Machine環境変数にはせず、管理者PowerShellも使いません。<br>既に起動している別のPowerShellやアプリへは反映されないため、そちらで使う場合は新しく起動します。<br>
 同じWindowsユーザーで動く別プロセスからはユーザー環境変数を読めます。<br>SSH鍵や他サービスの資格情報と強く分離したい場合は、このTunnel専用の標準Windowsユーザーで設定します。<br>
@@ -442,10 +450,15 @@ ChatGPTに、作成したカスタムアプリのツールが利用可能にな�
 ### 13 外部MCPのtool annotationsを設定する
 外部MCPを起動し、ChatGPT側でカスタムアプリを更新して初期ハンドシェイクが完了すると、`config\tool-annotations.toml`が生成または更新されます。<br>
 生成後、このファイルをAIに提示し、各MCPとツールの実際の動作に合わせて、読み取り専用か、状態を変更するか、破壊的か、再実行可能か、外部へ接続するかを適切に設定させてください。<br>
-すべてのツールを一律に同じ分類へ変更せず、ツールごとの説明と動作を確認して設定します。編集後はGatewayとTunnelを再起動し、ChatGPT側のカスタムアプリを再度更新してください。<br>
+AIには最初に`gateway__list_available_tools`を呼び出させ、現在公開されているツールの完全な名前空間付きツール名と説明を確認させます。対象MCPのprefixが不明な場合は引数を省略し、既知の場合はprefixを指定して対象を絞ります。<br>
+`gateway__list_available_tools`が返すのはツール名と概要であるため、それだけで分類を決めず、AIが利用可能な実際のツール定義も確認し、入力スキーマにある引数名、型、必須項目、既定値、指定可能なパスやURL、実行時の副作用を調査したうえで分類案を作成させてください。<br>
+すべてのツールを一律に同じ分類へ変更せず、ツールごとの説明、実際の引数、動作、ローカル状態への変更、外部通信の有無を確認して設定します。<br>
+> [!IMPORTANT]
+> AIが作成した分類案と`tool-annotations.toml`の変更内容は、適用前に必ず人間がレビューしてください。特に、書き込み、削除、任意コード実行、外部送信、ブラウザー操作、デバッガー操作を行うツールが読み取り専用として誤分類されていないことを確認します。<br>
+> レビュー後に編集を確定し、GatewayとTunnelを再起動して、ChatGPT側のカスタムアプリを再度更新してください。
 
 > [!WARNING]
-> #### 13.1 警告: この設定をスキップすると安全ブロックが増える可能性があります
+> #### 13.1 警告: この設定とレビューをスキップすると安全ブロックが増える可能性があります
 > `tool-annotations.toml`の確認と設定を省略すると、ChatGPTがツールの安全性を正しく判定できず、`リクエストの安全性を確認できなかったため、このツールの呼び出しは OpenAI によってブロックされました。`と表示される確率が上昇します。<br>
 > 外部MCPを追加した場合や公開ツールが増えた場合は、初期ハンドシェイクの完了後にこのファイルを再確認してください。
 
