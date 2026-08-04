@@ -15,7 +15,6 @@
 通常権限のPowerShellで、必要なものだけを一行ずつ実行します。<br>既に導入済みのものは飛ばしてください。<br>
 ```powershell
 winget install -e --id OpenJS.NodeJS.LTS
-winget install -e --id Git.Git
 winget install -e --id BurntSushi.ripgrep.MSVC
 ```
 
@@ -23,6 +22,7 @@ winget install -e --id BurntSushi.ripgrep.MSVC
 ```
 winget install -e --id GitHub.cli
 winget install -e --id Python.Python.3.12
+winget install -e --id Git.Git
 ```
 
 Chrome、Ghidra、その他の外部MCPは、実際に使うものだけを各プロジェクトの公式手順で導入します。<br>安全上の理由から、このスクリプトで一括導入はしません。<br>
