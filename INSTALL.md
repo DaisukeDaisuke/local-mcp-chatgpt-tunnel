@@ -311,7 +311,7 @@ Cancelを押してページを閉じます。
 > [!CAUTION]
 > このセクションは正確に従ってください。<br>
 > 課金可能なAPI keyを作成した場合、流出時に課金が発生し、高額請求、またはクレジットがマイナス（借金）になる可能性があります。<br>
-> また、誤ってWebサイトへ貼り付けないように、PowerShellと該当するブラウザーを閉じたうえで作業することをお勧めします。<br>
+> また、誤ってWebサイトへ貼り付けないように、PowerShellと該当するブラウザー以外を閉じたうえで作業することをお勧めします。<br>
 > 作業完了後は、クリップボードを別の内容で上書きしてください。
 ### 8.1 Runtime API keysを開く
 [OpenAI PlatformのRuntime API keysを開く](https://platform.openai.com/settings/organization/api-keys)<br>
