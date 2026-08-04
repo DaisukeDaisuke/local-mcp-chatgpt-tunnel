@@ -165,6 +165,7 @@ async function startChild(childConfig) {
       allowedFiles: childConfig.allowedFiles,
       disallowedDirectories: childConfig.disallowedDirectories,
       disallowedFiles: childConfig.disallowedFiles,
+      protectedFiles: childConfig.dangerousAllowGatewayConfigAccess ? [] : childConfig.protectedGatewayConfigPaths,
       disallowedPathGlobs: childConfig.disallowedPathGlobs
     });
     try {
@@ -199,6 +200,12 @@ async function stopChild(name) {
 }
 
 const toolSucceeded = (result) => result?.isError !== true && result?.structuredContent?.ok !== false;
+
+function updateChildWorkingDirectory(route, result) {
+  if (!toolSucceeded(result)) return;
+  const workingDirectory = result?.structuredContent?.result?.workingDirectory;
+  if (typeof workingDirectory === 'string' && workingDirectory) route.child.pathPolicy.setCwd(workingDirectory);
+}
 
 async function applyLifecycle(route, result) {
   if (!toolSucceeded(result)) return;
@@ -263,6 +270,7 @@ async function handle(request) {
         name: route.originalName,
         arguments: toolArguments
       }));
+      updateChildWorkingDirectory(route, result);
       await applyLifecycle(route, result);
       return response(request.id, result);
     } catch (error) {

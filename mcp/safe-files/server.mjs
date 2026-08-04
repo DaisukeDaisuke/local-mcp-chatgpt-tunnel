@@ -1008,6 +1008,26 @@ const pathSort = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 const normalizedRelativePath = (base, path) => relative(base, path).split(sep).join('/');
 const excludedBy = (path, exclusions) => exclusions.some((entry) => path === entry || path.startsWith(`${entry}${sep}`));
 const isGitInternalPath = (relativePath) => relativePath.split('/').includes('.git');
+const RIPGREP_GLOB_META = new Set(['\\', '*', '?', '[', ']', '{', '}', '!']);
+const escapeRipgrepGlobLiteral = (value) => [...value]
+  .map((character) => RIPGREP_GLOB_META.has(character) ? `\\${character}` : character)
+  .join('');
+
+async function deniedRipgrepGlobs(base) {
+  const blocked = await denied();
+  const patterns = new Set();
+  for (const file of blocked.files) {
+    if (!within(base, file) || file === base) continue;
+    patterns.add(`!${escapeRipgrepGlobLiteral(normalizedRelativePath(base, file))}`);
+  }
+  for (const directory of blocked.directories) {
+    if (!within(base, directory) || directory === base) continue;
+    const relativeDirectory = escapeRipgrepGlobLiteral(normalizedRelativePath(base, directory));
+    patterns.add(`!${relativeDirectory}`);
+    patterns.add(`!${relativeDirectory}/**`);
+  }
+  return [...patterns];
+}
 
 async function listFiles(args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Tool arguments must be an object');
@@ -1025,6 +1045,7 @@ async function listFiles(args) {
   const command = ['--files', '--hidden', '--null', '--sort', 'path'];
   if (args.includeIgnored === true) command.push('--no-ignore');
   for (const glob of globs) command.push('--glob', glob);
+  for (const glob of await deniedRipgrepGlobs(target.path)) command.push('--glob', glob);
   command.push('--glob', '!.git', '--glob', '!.git/**', '--glob', '!**/.git', '--glob', '!**/.git/**', '--', target.path);
   const output = decodeUtf8Strict(await runRipgrep(command));
   const files = [];
@@ -1055,6 +1076,7 @@ async function searchText(args) {
   if (args.fixedStrings === true) command.push('--fixed-strings');
   if (args.caseSensitive === false) command.push('--ignore-case');
   for (const glob of validateGlobs(args.globs)) command.push('--glob', glob);
+  for (const glob of await deniedRipgrepGlobs(target.path)) command.push('--glob', glob);
   command.push('--', args.query, target.path);
   const output = decodeUtf8Strict(await runRipgrep(command));
   const matches = [];

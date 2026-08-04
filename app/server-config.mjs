@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { dirname, posix, resolve, win32 } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -65,7 +65,7 @@ function normalizeLifecycle(raw, key, serverName) {
   return { server: value.server, tool: value.tool };
 }
 
-function normalizeServer(name, raw, base, platform) {
+function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`mcp_servers.${name} must be a table`);
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error(`mcp_servers.${name}.enabled must be boolean`);
   if (raw.enabled === false) return null;
@@ -76,6 +76,9 @@ function normalizeServer(name, raw, base, platform) {
   if (raw.serial_group !== undefined && (typeof raw.serial_group !== 'string' || !raw.serial_group)) throw new Error(`mcp_servers.${name}.serial_group must be a non-empty string`);
   if (raw.deferred !== undefined && typeof raw.deferred !== 'boolean') throw new Error(`mcp_servers.${name}.deferred must be boolean`);
   if (raw.annotation_config !== undefined && typeof raw.annotation_config !== 'boolean') throw new Error(`mcp_servers.${name}.annotation_config must be boolean`);
+  if (raw.dangerous_allow_gateway_config_access !== undefined && typeof raw.dangerous_allow_gateway_config_access !== 'boolean') {
+    throw new Error(`mcp_servers.${name}.dangerous_allow_gateway_config_access must be boolean`);
+  }
   const timeoutSeconds = raw.tool_timeout_sec ?? raw.request_timeout_sec ?? 1800;
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw new Error(`mcp_servers.${name}.tool_timeout_sec must be positive`);
   const startupTimeoutSeconds = raw.startup_timeout_sec ?? 30;
@@ -110,7 +113,9 @@ function normalizeServer(name, raw, base, platform) {
     allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform),
     disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`, platform),
     disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform),
-    disallowedPathGlobs: normalizeDisallowedPathGlobs(raw.disallowed_path_globs, `mcp_servers.${name}.disallowed_path_globs`)
+    disallowedPathGlobs: normalizeDisallowedPathGlobs(raw.disallowed_path_globs, `mcp_servers.${name}.disallowed_path_globs`),
+    dangerousAllowGatewayConfigAccess: raw.dangerous_allow_gateway_config_access === true,
+    protectedGatewayConfigPaths
   };
 }
 
@@ -121,9 +126,11 @@ export function configPathFromArgs(argv = process.argv.slice(2)) {
 
 export async function loadGatewayConfig(configPath = configPathFromArgs(), { platform = process.platform } = {}) {
   const resolvedConfigPath = absoluteFrom(repositoryRoot, configPath, process.platform);
+  let canonicalConfigPath;
   let raw;
   try {
-    raw = parseToml(await readFile(resolvedConfigPath, 'utf8'));
+    canonicalConfigPath = await realpath(resolvedConfigPath);
+    raw = parseToml(await readFile(canonicalConfigPath, 'utf8'));
   } catch (error) {
     throw new Error(`Gateway configuration is not readable at ${resolvedConfigPath}: ${error.message}`);
   }
@@ -138,15 +145,17 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
     throw new Error('gateway.toml must define at least one [mcp_servers.<name>] table');
   }
   const base = dirname(resolvedConfigPath);
+  const protectedGatewayConfigPaths = [...new Set([resolvedConfigPath, canonicalConfigPath])];
   const servers = [];
   const disabledServerNames = [];
   for (const [name, server] of Object.entries(raw.mcp_servers)) {
-    const normalized = normalizeServer(name, server, base, platform);
+    const normalized = normalizeServer(name, server, base, platform, protectedGatewayConfigPaths);
     if (normalized) servers.push(normalized);
     else disabledServerNames.push(name);
   }
   return {
     configPath: resolvedConfigPath,
+    canonicalConfigPath,
     toolAnnotationsPath: absoluteFrom(base, raw.tool_annotations_path ?? 'tool-annotations.toml', platform),
     privateUseOnly: true,
     publishToolDirectory: raw.publish_tool_directory === true,

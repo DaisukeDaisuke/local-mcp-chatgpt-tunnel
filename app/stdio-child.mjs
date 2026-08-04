@@ -19,11 +19,18 @@ export class StdioMcpChild {
   async start() {
     if (this.child) return;
     const { command, args = [], cwd, env = {} } = this.config;
+    const protectedGatewayConfigPaths = this.config.dangerousAllowGatewayConfigAccess
+      ? []
+      : (this.config.protectedGatewayConfigPaths ?? []);
+    const disallowedFiles = [...new Set([
+      ...(this.config.disallowedFiles ?? []),
+      ...protectedGatewayConfigPaths
+    ])];
     const policyEnvironment = {
       LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify(this.config.allowedDirectories ?? []),
       LOCAL_MCP_ALLOWED_FILES: JSON.stringify(this.config.allowedFiles ?? []),
       LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(this.config.disallowedDirectories ?? []),
-      LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(this.config.disallowedFiles ?? []),
+      LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(disallowedFiles),
       LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? [])
     };
     this.child = spawn(command, args, {

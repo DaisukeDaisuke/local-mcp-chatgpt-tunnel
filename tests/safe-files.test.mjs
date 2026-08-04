@@ -346,6 +346,30 @@ test('list_files uses fixed ripgrep listing, honors ignore files, and excludes e
   assert.equal(truncated.result.structuredContent.result.truncated, true);
 });
 
+test('list_files and search_text exclude configured denied files before ripgrep reads them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-denied-rg-'));
+  const deniedPath = join(root, 'gateway.toml');
+  await writeFile(join(root, 'public.txt'), 'needle public\n', 'utf8');
+  await writeFile(deniedPath, 'needle secret\n', 'utf8');
+  const server = await serverFor(root, 'denied-rg', { disallowedFiles: [deniedPath] });
+
+  const listed = await server(request(2, 'tools/call', {
+    name: 'list_files',
+    arguments: { path: '.', includeIgnored: true, maxResults: 20 }
+  }));
+  assert.equal(listed.result.isError, false);
+  assert.deepEqual(listed.result.structuredContent.result.files.map((file) => file.relativePath), ['public.txt']);
+
+  const searched = await server(request(3, 'tools/call', {
+    name: 'search_text',
+    arguments: { query: 'needle', path: '.', fixedStrings: true }
+  }));
+  assert.equal(searched.result.isError, false);
+  assert.equal(searched.result.structuredContent.result.count, 1);
+  assert.match(searched.result.structuredContent.result.matches[0].path, /public\.txt$/);
+  assert.equal(searched.result.structuredContent.result.matches[0].text, 'needle public');
+});
+
 test('list_files rejects option and scope injection while treating shell metacharacters as literal path data', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safe-files-injection-'));
   const literalDirectories = ['--aaa', 'semi;name', 'amp&name', 'dollar$(name)', 'back`tick'];

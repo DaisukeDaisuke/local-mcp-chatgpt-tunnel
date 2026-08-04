@@ -354,6 +354,8 @@ async function repository(path = '.') {
   const actualTop = await assertAllowedExisting(top);
   if (!within(actualTop, cwd)) throw new Error('repositoryPath is outside its Git worktree');
   await assertRepositoryHasNoGlobDeniedPaths(actualTop);
+  const denied = await deniedTrackedPaths(actualTop);
+  if (denied.length > 0) throw new Error(`Repository contains denied paths: ${denied.join(', ')}`);
   return actualTop;
 }
 

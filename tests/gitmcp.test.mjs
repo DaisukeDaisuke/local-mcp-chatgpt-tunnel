@@ -20,7 +20,7 @@ async function importGitMcp(root, args, suffix, options = {}) {
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
-  process.env.LOCAL_MCP_DISALLOWED_FILES = '[]';
+  process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
   try {
     return await import(`../mcp/gitmcp/server.mjs?test=${suffix}-${Date.now()}`);
@@ -125,4 +125,24 @@ test('gitmcp refuses repository operations when an internal path matches disallo
   assert.match(refused.result.structuredContent.error, /Git repository scan/);
   assert.match(refused.result.structuredContent.error, /glob filter disallowed_path_globs/);
   assert.match(refused.result.structuredContent.error, /\.ssh/);
+});
+
+test('gitmcp refuses repository operations when a tracked file is denied', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitmcp-denied-file-'));
+  const deniedPath = join(root, 'gateway.toml');
+  await exec('git', ['init'], { cwd: root });
+  await exec('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
+  await exec('git', ['config', 'user.name', 'Test User'], { cwd: root });
+  await writeFile(deniedPath, 'private_use_only = true\n', 'utf8');
+  await exec('git', ['add', '--', 'gateway.toml'], { cwd: root });
+  await exec('git', ['commit', '-m', 'fixture'], { cwd: root });
+  const { createServer } = await importGitMcp(root, [], 'denied-file', { disallowedFiles: [deniedPath] });
+  const server = createServer();
+  await server(request(1, 'initialize'));
+  const refused = await server(request(2, 'tools/call', {
+    name: 'diff', arguments: { repositoryPath: root }
+  }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /Repository contains denied paths/);
+  assert.match(refused.result.structuredContent.error, /gateway\.toml/);
 });

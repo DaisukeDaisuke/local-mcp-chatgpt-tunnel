@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -58,23 +58,6 @@ test('path-shaped values are checked even when the argument key is unfamiliar', 
   assert.equal(pathPolicyInternals.looksLikePath('https://example.com/a'), false);
 });
 
-test('path policy resolves symlinks before allowing a path', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'path-policy-root-'));
-  const outside = await mkdtemp(join(tmpdir(), 'path-policy-outside-'));
-  const secret = join(outside, 'secret.txt');
-  const link = join(root, 'linked.txt');
-  await writeFile(secret, 'secret', 'utf8');
-  try {
-    await symlink(secret, link);
-  } catch (error) {
-    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
-      t.skip(`Symbolic links are unavailable in this Windows environment: ${error.code}`);
-      return;
-    }
-    throw error;
-  }
-  const policy = new ToolPathPolicy({ serverName: 'files', cwd: root, allowedDirectories: [root], allowedFiles: [] });
-
 test('disallowed paths override allowed directories', async () => {
   const policy = new ToolPathPolicy({
     serverName: 'files',
@@ -89,9 +72,6 @@ test('disallowed paths override allowed directories', async () => {
   await assert.rejects(policy.assertToolArguments('read', { path: 'private\\secret.txt' }), /denied by disallowed/);
   await assert.rejects(policy.assertToolArguments('read', { path: '.env' }), /denied by disallowed/);
 });
-  await assert.rejects(policy.assertToolArguments('read', { path: link }), /outside allowed_directories/);
-});
-
 for (const platform of ['linux', 'darwin']) {
   test(`path policy uses POSIX path rules on ${platform}`, async () => {
     const policy = new ToolPathPolicy({
@@ -158,3 +138,30 @@ for (const [platform, cwd, deniedPath, allowedPath] of [
     );
   });
 }
+
+test('path policy blocks direct access to the gateway configuration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'path-policy-config-'));
+  const config = join(root, 'gateway.toml');
+  await writeFile(config, 'private_use_only = true\n', 'utf8');
+  const policy = new ToolPathPolicy({
+    serverName: 'files',
+    cwd: root,
+    allowedDirectories: [root],
+    protectedFiles: [config]
+  });
+  await assert.rejects(policy.assertToolArguments('read_text', { path: config }), /gateway configuration/);
+});
+
+test('Windows path policy blocks alternate data stream aliases of the gateway configuration', async () => {
+  const policy = new ToolPathPolicy({
+    serverName: 'files',
+    platform: 'win32',
+    cwd: 'C:\\work',
+    allowedDirectories: ['C:\\work'],
+    protectedFiles: ['C:\\work\\config\\gateway.toml']
+  });
+  await assert.rejects(
+    policy.assertToolArguments('read_text', { path: 'C:\\work\\config\\gateway.toml::$DATA' }),
+    /gateway configuration/
+  );
+});

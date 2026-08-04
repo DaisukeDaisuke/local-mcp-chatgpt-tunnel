@@ -33,6 +33,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     'enabled = true',
     'prefix = "a"',
     'annotation_config = false',
+    'dangerous_allow_gateway_config_access = true',
     'startup_timeout_sec = 5',
     'tool_timeout_sec = 15',
     'deferred = true',
@@ -59,6 +60,9 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.equal(config.servers[0].name, 'alpha');
   assert.equal(config.servers[0].prefix, 'a');
   assert.equal(config.servers[0].manageAnnotations, false);
+  assert.equal(config.servers[0].dangerousAllowGatewayConfigAccess, true);
+  assert.ok(config.servers[0].protectedGatewayConfigPaths.includes(config.configPath));
+  assert.ok(config.servers[0].protectedGatewayConfigPaths.includes(config.canonicalConfigPath));
   assert.equal(config.servers[0].requestTimeoutMs, 15000);
   assert.equal(config.servers[0].startupTimeoutMs, 5000);
   assert.equal(config.servers[0].env.CONFIG, 'alpha.json');
@@ -167,6 +171,27 @@ test('gateway config requires annotation_config to be boolean', async () => {
     'annotation_config = "yes"'
   ].join('\n'), 'utf8');
   await assert.rejects(loadGatewayConfig(path), /annotation_config must be boolean/);
+});
+
+test('gateway config requires dangerous_allow_gateway_config_access to be boolean and defaults it to false', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-config-access-'));
+  const invalidPath = join(directory, 'invalid.toml');
+  await writeFile(invalidPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'dangerous_allow_gateway_config_access = "yes"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(invalidPath), /dangerous_allow_gateway_config_access must be boolean/);
+
+  const defaultPath = join(directory, 'default.toml');
+  await writeFile(defaultPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"'
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(defaultPath);
+  assert.equal(config.servers[0].dangerousAllowGatewayConfigAccess, false);
 });
 
 test('gateway path allowlists require absolute paths', async () => {

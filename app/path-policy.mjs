@@ -84,6 +84,17 @@ function isWithin(style, directory, candidate) {
   return target === base || target.startsWith(`${base}${api.sep}`);
 }
 
+function isProtectedFileTarget(entry, normalized, canonical) {
+  const protectedLexical = comparable(entry.style, entry.lexical);
+  const protectedCanonical = comparable(entry.style, entry.canonical);
+  const candidateLexical = comparable(normalized.style, normalized.path);
+  const candidateCanonical = comparable(normalized.style, canonical);
+  if (protectedLexical === candidateLexical || protectedCanonical === candidateCanonical) return true;
+  if (entry.style !== 'windows') return false;
+  return candidateLexical.startsWith(`${protectedLexical}:`)
+    || candidateCanonical.startsWith(`${protectedCanonical}:`);
+}
+
 async function canonicalizeExistingPrefix(style, value) {
   const nativeStyle = process.platform === 'win32' ? 'windows' : 'posix';
   if (style !== nativeStyle) return value;
@@ -168,6 +179,7 @@ export class ToolPathPolicy {
     allowedFiles = [],
     disallowedDirectories = [],
     disallowedFiles = [],
+    protectedFiles = [],
     disallowedPathGlobs = [],
     platform = process.platform
   }) {
@@ -177,6 +189,7 @@ export class ToolPathPolicy {
     this.allowedFilesInput = allowedFiles;
     this.disallowedDirectoriesInput = disallowedDirectories;
     this.disallowedFilesInput = disallowedFiles;
+    this.protectedFilesInput = protectedFiles;
     this.disallowedPathGlobs = normalizeDisallowedPathGlobs(disallowedPathGlobs);
     this.platform = platform;
     this.allowedPromise = null;
@@ -187,8 +200,9 @@ export class ToolPathPolicy {
       normalizeAllowedEntries(this.allowedDirectoriesInput, this.cwd, 'allowed_directories', this.platform),
       normalizeAllowedEntries(this.allowedFilesInput, this.cwd, 'allowed_files', this.platform),
       normalizeAllowedEntries(this.disallowedDirectoriesInput, this.cwd, 'disallowed_directories', this.platform),
-      normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files', this.platform)
-    ]).then(([directories, files, disallowedDirectories, disallowedFiles]) => {
+      normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files', this.platform),
+      normalizeAllowedEntries(this.protectedFilesInput, this.cwd, 'protected_files', this.platform)
+    ]).then(([directories, files, disallowedDirectories, disallowedFiles, protectedFiles]) => {
       for (const entry of disallowedDirectories) {
         const covered = directories.some((allowed) => allowed.style === entry.style
           && isWithin(allowed.style, allowed.canonical, entry.canonical));
@@ -203,9 +217,13 @@ export class ToolPathPolicy {
           throw new Error(`disallowed_files entry is not inside allowed_directories or allowed_files: ${entry.lexical}`);
         }
       }
-      return { directories, files, disallowedDirectories, disallowedFiles };
+      return { directories, files, disallowedDirectories, disallowedFiles, protectedFiles };
     });
     return this.allowedPromise;
+  }
+
+  setCwd(cwd) {
+    this.cwd = cwd;
   }
 
   async assertToolArguments(toolName, args) {
@@ -220,6 +238,11 @@ export class ToolPathPolicy {
         throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is invalid: ${error.message}`);
       }
       const canonical = await canonicalizeExistingPrefix(normalized.style, normalized.path);
+      const protectedFile = allowed.protectedFiles.some((entry) => entry.style === normalized.style
+        && isProtectedFileTarget(entry, normalized, canonical));
+      if (protectedFile) {
+        throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} targets the gateway configuration; direct reads and edits are disabled`);
+      }
       const globMatch = findDisallowedPathGlob(canonical, this.disallowedPathGlobs, this.platform);
       if (globMatch) {
         throw disallowedPathGlobError(

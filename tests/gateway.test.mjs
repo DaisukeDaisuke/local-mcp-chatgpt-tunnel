@@ -232,6 +232,36 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   }
 });
 
+test('gateway denies direct reads of its loaded configuration by default', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-protected-config-'));
+  const configPath = join(workspace, 'gateway.toml');
+  await writeFile(join(workspace, 'public.txt'), 'public', 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/safe-files/server.mjs')}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "files"'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { path: configPath }
+  } })}\n`);
+  const denied = await nextLine(child.stdout);
+  assert.equal(denied.result.isError, true);
+  assert.match(denied.result.content[0].text, /targets the gateway configuration/);
+});
+
 test('gateway applies empty allowlists and disallowed path globs to nested read_text batches', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-config-'));
