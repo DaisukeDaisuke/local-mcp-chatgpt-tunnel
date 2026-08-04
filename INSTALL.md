@@ -125,6 +125,7 @@ disallowed_path_globs = ['**.ssh**']
 `.git`内部は常に除外します。<br>
 ### 4.4 safe-imagesを必要な場合だけ有効にする
 Downloads内などのPNG、JPEG、WebPをChatGPTへ画像として渡す場合は、読み取り専用の`safe-images`を追加または有効化します。<br>
+chrome-devtools-mcpなど、ローカルパスに画像を保存するmcpによるスクリーンショットを取り込むために必要となる可能性があります。<br>
 ```toml
 [mcp_servers.images]
 command = "node"
@@ -146,6 +147,7 @@ ChatGPTからは`images__read_image`へ`{"path":"画像.png"}`を渡します。
 ### 4.5 safe-downloadを必要な場合だけ有効にする
 ソースコードなどをZIPで受け取る場合は、`safe-download`を`safe-files`や`safe-images`とは別のMCPエントリとして追加します。<br>
 `cwd`と`allowed_directories`には、ChatGPTへ渡してよいソースだけを含む専用ディレクトリを指定します。<br>
+ローカルファイルを、ChatGPTサンドボックスにアップロードする目的を想定しています。<br>
 ```toml
 [mcp_servers.downloads]
 command = "node"
@@ -169,6 +171,7 @@ ChatGPTからは`downloads__download_zip`へ`path`を渡します。<br>単一�
 ### 4.6 gh-workflowを必要な場合だけ有効にする
 GitHub Actionsの実行状況をChatGPTから確認する場合は、読み取り専用の`gh-workflow`を追加または有効化します。<br>
 事前に通常権限のPowerShellで`gh auth login`を済ませ、対象リポジトリを読めるGitHubアカウントで認証してください。<br>
+gitmcpでコミット後、デプロイ完了まで待機することを想定しています。依存関係として`GitHub cli`が必要です。<br>
 ```toml
 [mcp_servers.gh_workflow]
 command = "node"
