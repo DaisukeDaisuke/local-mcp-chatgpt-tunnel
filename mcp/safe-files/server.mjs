@@ -231,11 +231,15 @@ const schemas = [
   },
   {
     name: 'apply_patch',
-    description: 'Apply a structured patch or unified Git diff in the workspace. This invokes only the built-in parser or fixed git apply command.',
+    description: 'Apply a structured patch or unified Git diff in the workspace. Every file path inside the patch must be workspace-relative; absolute paths and parent traversal are rejected. This invokes only the built-in parser or fixed git apply command.',
     inputSchema: {
       type: 'object',
       properties: {
-        patch: { type: 'string', minLength: 1 },
+        patch: {
+          type: 'string',
+          minLength: 1,
+          description: 'Structured patch or unified Git diff whose file paths are relative to the current safe-files workspace, for example INSTALL.md or src/app.mjs. Do not use absolute paths.'
+        },
         dryRun: { type: 'boolean', default: false }
       },
       required: ['patch'],
@@ -452,7 +456,8 @@ function parseStructuredPatch(patch) {
 }
 
 function validatePatchPath(path) {
-  if (typeof path !== 'string' || path.trim() === '' || isAbsolute(path)) throw new Error(`Unsafe patch path: ${path}`);
+  if (typeof path !== 'string' || path.trim() === '') throw new Error('Patch path must be a non-empty workspace-relative path');
+  if (isAbsolute(path)) throw new Error(`Unsafe patch path: ${path}. Use a workspace-relative path such as INSTALL.md instead of an absolute path.`);
   const parts = path.split(/[\\/]+/);
   if (parts.includes('..')) throw new Error(`Unsafe patch path: ${path}`);
   if (parts.some((part) => part.toLowerCase() === '.git')) throw new Error(`Git internals are not patch targets: ${path}`);

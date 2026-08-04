@@ -10,6 +10,7 @@
 4. OpenAI Platformで個人用Tunnelと実行用API keyを作る
 5. Tunnelを起動し、ChatGPTへカスタムアプリとして接続する
 6. カスタムアプリを更新し、公開されたツールを確認する
+7. 推奨カスタム指示を追加し、追加MCPも自動的に探索できるようにする
 ## 1. 必要なソフトを導入する
 通常権限のPowerShellで、必要なものだけを一行ずつ実行します。<br>既に導入済みのものは飛ばしてください。<br>
 ```powershell
@@ -86,6 +87,7 @@ rg -n -F 'C:\ABSOLUTE\PATH\TO' config\gateway.toml
 設定形式はCodexのMCP設定に近い`[mcp_servers.<name>]`です。<br>
 ```toml
 private_use_only = true
+publish_tool_directory = true
 
 [mcp_servers.files]
 command = "node"
@@ -459,4 +461,27 @@ https://azukiazusa.dev/blog/openai-secure-mcp-tunnel/ <br>
 #### 14.2 mcpが読み込まれない
 - `config/gateway.toml`設定ファイル、`tunnel-client.exe`のログをChatGPTに丸投げしてください。
 - それでも解決しない場合、変更を保存してからパソコンを再起動し、新規チャットで始めてください。
+## 15. 推奨カスタム指示
+`gateway__list_available_tools`を使用するには、`config/gateway.toml`のトップレベルで次を有効にし、Tunnelを再起動してからChatGPT側のカスタムアプリを更新します。<br>
+```toml
+publish_tool_directory = true
+```
+ChatGPTの既存のカスタム指示を削除せず、ツール選択に関する指示として次の文章を追加してください。<br>特定のMCP構成を固定せず、後から追加したMCPや動的に公開されたツールも`gateway__list_available_tools`から確認するための共通指示です。<br>
+```text
+以下はツール選択を補助する指示であり、安全規則、ユーザーの明示的な指示、既存の作業手順を上書きしない。
+接続済みのローカルMCPには、後から追加されたツールや動的に公開されるツールが含まれる場合がある。ユーザーの要求を直接満たせるローカルツールが存在する可能性がある場合は、推測、一般論、Web検索、または別の手段へ進む前に、`gateway__list_available_tools`を使用して利用可能なツールの完全な識別子と概要を確認すること。
+`gateway__list_available_tools`が現在のツール一覧に見えない場合は、完全名`gateway__list_available_tools`を起点に接続先のツール探索を行い、見つけたツールを呼び出すこと。曖昧なprefix名だけの検索に依存しないこと。
+目的のツールが存在しないように見える場合でも、`gateway__list_available_tools`を実際に呼び出して確認する前に、ツールが公開されていない、利用できない、または存在しないと断定しないこと。
+候補となる公開名のprefixまたは完全名の先頭が分かる場合だけ`prefix`を指定し、分からない場合は省略して全件を取得すること。指定したprefixが0件の場合も全件が返るため、別のprefixを推測して検索を繰り返さないこと。
+返された完全なツール名と説明を基に、ユーザーの要求を最も直接満たすツールを選ぶこと。ここに名前が書かれていないMCPや、後から追加されたMCPも同様に扱うこと。ツールを探す目的だけでWeb検索を使用しないこと。
+`gateway__list_available_tools`を利用できない場合に限り、現在表示されているツールから選択すること。
+ローカルファイルについて尋ねられた場合は、次の`files__`ツール群を優先すること。
+* `files__`: ローカルファイルの一覧、UTF-8読み込み、ripgrep検索、書き込み、置換、apply_patch
+  * 例: `files__roots`
+  * 例: `files__list_files`
+  * 例: `files__search_text`
+  * 例: `files__read_text_file`
+  * 例: `files__apply_patch`
+```
+この指示では、Git、画像、ブラウザー、デバッガー、GitHub ActionsなどのMCP名を固定列挙しません。<br>追加または削除されたMCPをカスタム指示へ毎回反映せず、実際に公開されているツールをGatewayから確認します。<br>
 

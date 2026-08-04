@@ -42,6 +42,9 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   ]);
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
   assert.ok(!names.some((name) => ['execute', 'shell', 'start_command', 'without_sandbox'].includes(name)));
+  const applyPatch = listed.result.tools.find((tool) => tool.name === 'apply_patch');
+  assert.match(applyPatch.description, /workspace-relative/);
+  assert.match(applyPatch.inputSchema.properties.patch.description, /Do not use absolute paths/);
   await writeFile(join(root, 'utf16.txt'), Buffer.from([0xff, 0xfe, 0x41, 0x00]));
   const result = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'utf16.txt' } }));
   assert.equal(result.result.isError, true);
@@ -263,6 +266,17 @@ test('unified apply_patch uses fixed git apply and blocks .git internals', async
   const symlinkRefused = await server(request(5, 'tools/call', { name: 'apply_patch', arguments: { patch: symlinkPatch } }));
   assert.equal(symlinkRefused.result.isError, true);
   assert.match(symlinkRefused.result.structuredContent.error, /Symlink/);
+});
+
+test('apply_patch explains that absolute patch paths must be workspace-relative', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-absolute-patch-'));
+  const server = await serverFor(root, 'absolute-patch');
+  const absolute = process.platform === 'win32' ? 'C:\\workspace\\a.txt' : '/workspace/a.txt';
+  const patch = ['*** Begin Patch', `*** Add File: ${absolute}`, '+bad', '*** End Patch'].join('\n');
+  const refused = await server(request(2, 'tools/call', { name: 'apply_patch', arguments: { patch } }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /workspace-relative path/);
+  assert.match(refused.result.structuredContent.error, /absolute path/);
 });
 
 test('safe-files refuses symlink escape and performs exact replacement', async (t) => {
