@@ -190,7 +190,36 @@ disallowed_path_globs = ['**.ssh**']
 許可リポジトリが1件の場合は各ツールの`repository`を省略できます。複数の場合は、呼び出すたびに許可リスト内の`repository`を指定します。<br>
 `cwd`は省略せず、実在する安全な作業ディレクトリを必ず明示します。設定例は`enabled = false`であり、内容を確認してから有効化します。<br>
 公開するのはrun一覧、run待機、run概要、job一覧、ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLだけです。workflow実行、再実行、cancel、delete、artifact download、`gh api`は公開しません。<br>
-### 4.7 任意のstdio MCPを追加する
+### 4.7 gitmcpを必要な場合だけ有効にする
+ローカルGitリポジトリの状態確認、差分確認、ブランチ操作、ステージ、コミットなどをChatGPTから行う場合は、同梱の`gitmcp`を有効化します。<br>
+使用しない場合は`enabled = false`のままにしてください。<br>
+gitmcpは、依存関係として、`Git For Windows`を要求します。
+```toml
+[mcp_servers.git]
+command = "node"
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']
+cwd = 'C:\Users\owner\Documents\YOUR_PROJECT'
+enabled = false
+prefix = "git"
+annotation_config = false
+startup_timeout_sec = 60
+tool_timeout_sec = 1800
+serial_group = "git"
+allowed_directories = ['C:\Users\owner\Documents\YOUR_PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+```
+`enabled = false`では`gitmcp`自体を起動せず、Gitツールを一つも公開しません。パスと操作範囲を確認した後、必要な場合だけ`enabled = true`へ変更します。<br>
+`gitmcp`を有効にすると、`roots`、`get_working_directory`、`set_working_directory`、`status`、`ls_files`、`branches`、`remotes`、`log`、`diff`、`switch_branch`、`add_all`、`commit`を公開します。<br>
+`push`、`pull`、`clone_repository`は、次の起動引数で個別にツール一覧から除外できます。<br>
+`--disable-push=true`は`push`を除外します。`false`にすると現在のブランチを指定済みremoteへpushできますが、force pushと任意refspecは公開しません。省略時は`false`です。<br>
+`--disable-pull=true`は`pull`を除外します。`false`にすると設定済みupstreamを取得し、拒否対象パスを検査してからfast-forward onlyで反映します。省略時は`true`です。<br>
+`--disable-clone=true`は`clone_repository`を除外します。`false`にすると許可ディレクトリ直下の新規子ディレクトリへcloneできます。省略時は`true`です。<br>
+上の設定例は3機能をすべて除外しています。必要な機能だけ該当値を`false`へ変更してください。これらの引数は`gitmcp`全体や`commit`などのローカルGitツールを無効化する設定ではありません。<br>
+`cwd`は相対パスの基準となる実在するディレクトリです。`allowed_directories`にはChatGPTからGit操作を許可するリポジトリまたはその親ディレクトリだけを指定し、秘密情報や私用ディレクトリは`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`で拒否してください。<br>
+### 4.8 任意のstdio MCPを追加する
 任意のstdio MCPも同じ形式で追加できます。<br>
 ```toml
 [mcp_servers.example]
@@ -222,7 +251,7 @@ Gatewayは全MCPのツール引数を再帰的に検査します。<br>
 `enabled = false`のMCPは起動しません。<br>GatewayはMCP名、実行ファイル、引数、作業ディレクトリ、環境変数をハードコードしません。<br>現在直接集約するのは、`command`で起動するstdio MCPです。<br>Ghidra MCPやDQ9 MCPなどの外部MCP本体は同梱していません。<br>
 有効なMCPの一部が起動できなくても、Gatewayは初期化を続行し、起動できたMCPのツールだけを公開します。<br>起動できなかったMCPは標準エラーへ`unavailable and was skipped`として記録されます。<br>すべてを一時的に無効化した設定でもGatewayは起動し、ツール一覧は空になります。<br>
 Codex設定からコピーした`tool_output_token_limit`、`[mcp_servers.<name>.tools.<tool>]`の承認設定、その他Gatewayが使わない項目は残しても読み飛ばされます。<br>トークン数の計測やCodexの承認UIは実装していないため、無視された項目はこのGatewayでは効果を持ちません。<br>
-### 4.8 起動前にgateway.tomlを完成させる
+### 4.9 起動前にgateway.tomlを完成させる
 手順10へ進む前に、`config/gateway.toml`のすべての`enabled = true`のMCPを見直します。<br>
 `command`、`args`、`cwd`、`prefix`、`allowed_directories`、`allowed_files`など、使用するMCPに必要な項目を完全に記入してください。<br>
 説明用のダミーパス、未記入の値、意図していない許可範囲が一つでも残っている場合は、GatewayとTunnelを起動しません。<br>

@@ -37,6 +37,13 @@ export const GIT_MCP_HELP = `gitmcp
 Usage:
   node mcp/gitmcp/server.mjs [--disable-push=true|false] [--disable-pull=true|false] [--disable-clone=true|false]
 
+Options:
+  --disable-push=true|false   Remove the push tool when true. Default: false.
+  --disable-pull=true|false   Remove the pull tool when true. Default: true.
+  --disable-clone=true|false  Remove the clone_repository tool when true. Default: true.
+
+The disable options affect only push, pull, and clone_repository. Local Git tools such as status,
+diff, switch_branch, add_all, and commit remain available while this MCP server is enabled.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
 Git is always spawned with shell=false and fixed subcommands and options.
 `;

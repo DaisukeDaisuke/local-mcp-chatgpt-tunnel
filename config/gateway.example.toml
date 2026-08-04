@@ -19,13 +19,15 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# Safe Git operations. Disabled by default; set enabled=true after replacing paths.
-# --disable-push=true removes the push tool entirely.
-# --disable-pull=true removes the pull tool entirely.
-# --disable-clone=true removes clone_repository entirely. Set it to false to enable clone.
+# Git operations for explicitly allowed repositories only. Set enabled=true only when needed.
+# enabled=false prevents the entire gitmcp server from starting.
+# --disable-push=true removes push from the published tool list. Default when omitted: false.
+# --disable-pull=true removes pull from the published tool list. Default when omitted: true.
+# --disable-clone=true removes clone_repository from the published tool list. Default when omitted: true.
+# These flags do not disable local tools such as status, diff, switch_branch, add_all, or commit.
 [mcp_servers.git]
 command = "node"
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=false', '--disable-pull=true', '--disable-clone=true']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "git"
