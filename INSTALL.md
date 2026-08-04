@@ -26,6 +26,19 @@ winget install -e --id Python.Python.3.12
 ```
 
 Chrome、Ghidra、その他の外部MCPは、実際に使うものだけを各プロジェクトの公式手順で導入します。<br>安全上の理由から、このスクリプトで一括導入はしません。<br>
+
+## 1.2 このリポジトリをクローンし展開する
+更新の利便性から、git経由をお勧めしますが、[zip経由](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)でのダウンロード、展開でも問題ありません。
+
+### 1.3 git
+```
+git clone https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel.git
+```
+
+### 1.4 zip
+[最新版のスナップショットをダウンロード](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)
+ダウンロードしたファイルを展開してください。
+
 ## 2. tunnel-clientを配置する
 ### 2.1 Windows用ZIPをダウンロードする
 [tunnel-client Windows amd64版ZIPをダウンロード](https://github.com/openai/tunnel-client/releases/latest/download/tunnel-client-v0.0.10-windows-amd64.zip)<br>
