@@ -287,8 +287,9 @@ Requirements:
 - When a native program is genuinely required, invoke a fixed executable directly with spawn or execFile, shell: false, a fixed subcommand, and individually validated arguments. Use an explicit allowlist and a -- separator where the target program supports it.
 - Do not expose a general-purpose command runner, arbitrary script execution, arbitrary executable selection, arbitrary environment-variable injection, or unrestricted native-program arguments.
 - If the stdio MCP performs any filesystem operation, it must implement all of the following tools: `get_current_root`, `get_working_directory`, and `set_working_directory`. These tools are mandatory, not optional.
-- `get_current_root` must return the single currently configured workspace root. It must not enumerate arbitrary filesystem roots or expose unrelated paths.
-- `get_working_directory` must return the current working directory as a path relative to `get_current_root`. `set_working_directory` must accept only a root-relative path to an existing directory inside the current root and must reject any directory denied by the path policy. Changing the working directory must not change how child-tool path arguments are interpreted: those arguments remain relative to `get_current_root`.
+- `get_current_root` must return the canonical absolute path of the allowed workspace root currently in use. It must not enumerate arbitrary filesystem roots or expose unrelated paths.
+- `get_working_directory` must return the canonical absolute path of the current working directory, matching the behavior of `mcp/safe-files/server.mjs`. It must not return a path relative to `get_current_root`.
+- `set_working_directory` must accept a path relative to `get_current_root`, resolve it to an existing directory inside that root, apply the complete path policy, then store and return its canonical absolute path. The relative-only input rule is an intentional restriction for generated MCPs; the returned working directory remains absolute.
 - Any stdio MCP that performs filesystem operations must support and enforce these exact configuration arrays:
   `allowed_directories = []`
   `allowed_files = []`
