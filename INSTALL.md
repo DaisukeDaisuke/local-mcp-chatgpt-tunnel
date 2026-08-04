@@ -439,17 +439,27 @@ ChatGPTに、作成したカスタムアプリのツールが利用可能にな�
 > [!IMPORTANT]
 > お疲れさまでした。ChatGPTからローカルMCPを使用できるようになりました。
 
+### 13 外部MCPのtool annotationsを設定する
+外部MCPを起動し、ChatGPT側でカスタムアプリを更新して初期ハンドシェイクが完了すると、`config\tool-annotations.toml`が生成または更新されます。<br>
+生成後、このファイルをAIに提示し、各MCPとツールの実際の動作に合わせて、読み取り専用か、状態を変更するか、破壊的か、再実行可能か、外部へ接続するかを適切に設定させてください。<br>
+すべてのツールを一律に同じ分類へ変更せず、ツールごとの説明と動作を確認して設定します。編集後はGatewayとTunnelを再起動し、ChatGPT側のカスタムアプリを再度更新してください。<br>
 
-### 13. 補足資料
+> [!WARNING]
+> #### 13.1 警告: この設定をスキップすると安全ブロックが増える可能性があります
+> `tool-annotations.toml`の確認と設定を省略すると、ChatGPTがツールの安全性を正しく判定できず、`リクエストの安全性を確認できなかったため、このツールの呼び出しは OpenAI によってブロックされました。`と表示される確率が上昇します。<br>
+> 外部MCPを追加した場合や公開ツールが増えた場合は、初期ハンドシェイクの完了後にこのファイルを再確認してください。
 
-### 13.1 ローカルサーバー
+### 14 補足資料
+
+### 14.1 ローカルサーバー
 
 Gatewayの稼働中は、`http://localhost:8080/`からゲートウェイの状態を確認できます。<br>
 ```
 http://localhost:8080/
 ```
 
-### 13.2 参考文献
+
+### 14.3 参考文献
 
 https://x.com/nakasyou0/status/2083740389471904012 <br>
 
@@ -457,12 +467,12 @@ https://azukiazusa.dev/blog/openai-secure-mcp-tunnel/ <br>
 
 https://azukiazusa.dev/blog/mcp-tool-annotations/ <br>
 
-### 14 トラブルシューティング
+### 15 トラブルシューティング
 
-#### 14.2 mcpが読み込まれない
+#### 15.1 mcpが読み込まれない
 - `config/gateway.toml`設定ファイル、`tunnel-client.exe`のログをChatGPTに丸投げしてください。
 - それでも解決しない場合、変更を保存してからパソコンを再起動し、新規チャットで始めてください。
-### 15. 推奨カスタム指示
+### 15.2 推奨カスタム指示
 `gateway__list_available_tools`を使用するには、`config/gateway.toml`のトップレベルで次を有効にし、Tunnelを再起動してからChatGPT側のカスタムアプリを更新します。<br>
 ```toml
 publish_tool_directory = true
