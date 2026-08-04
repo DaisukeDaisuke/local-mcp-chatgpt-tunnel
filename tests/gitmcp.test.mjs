@@ -61,6 +61,8 @@ test('gitmcp exposes pull and recursive clone only when explicitly enabled', asy
   assert.ok(tools.has('pull'));
   assert.ok(tools.has('clone_repository'));
   assert.equal(tools.get('clone_repository').inputSchema.properties.recurseSubmodules.type, 'boolean');
+  assert.equal(tools.get('clone_repository').inputSchema.properties.depth.type, 'integer');
+  assert.equal(tools.get('clone_repository').inputSchema.properties.depth.minimum, 1);
 });
 
 test('gitmcp rejects unknown CLI options instead of forwarding them to Git', async () => {

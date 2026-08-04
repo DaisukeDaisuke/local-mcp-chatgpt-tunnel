@@ -127,14 +127,15 @@ const schemas = [
   }] : []),
   ...(!cli.disableClone ? [{
     name: 'clone_repository',
-    description: 'Clone into one new relative child directory under an allowed directory. recurseSubmodules adds only the fixed --recurse-submodules option.',
+    description: 'Clone into one new relative child directory under an allowed directory. recurseSubmodules adds the fixed --recurse-submodules option, and depth adds a fixed --depth=<n> option.',
     inputSchema: {
       type: 'object',
       properties: {
         url: { type: 'string', minLength: 1, maxLength: 4096 },
         destinationDirectory: { type: 'string', minLength: 1, maxLength: 255 },
         parentDirectory: { type: 'string', default: '.' },
-        recurseSubmodules: { type: 'boolean', default: false }
+        recurseSubmodules: { type: 'boolean', default: false },
+        depth: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
       },
       required: ['url', 'destinationDirectory'],
       additionalProperties: false
@@ -476,12 +477,20 @@ async function callTool(name, args = {}) {
       if (cli.disableClone) throw new Error('clone is disabled');
       const url = safeCloneUrl(args.url);
       const { parent, destination } = await assertAllowedNewDirectory(args.parentDirectory ?? '.', args.destinationDirectory);
+      const depth = args.depth;
+      if (depth !== undefined && (!Number.isSafeInteger(depth) || depth < 1)) throw new Error('depth must be a positive safe integer');
       const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
       const command = ['clone', '--no-local', '--config', `core.hooksPath=${nullPath}`];
       if (args.recurseSubmodules === true) command.push('--recurse-submodules');
+      if (depth !== undefined) command.push(`--depth=${depth}`);
       command.push('--', url, args.destinationDirectory);
       await runGit(parent, command);
-      return { parentDirectory: parent, destinationDirectory: destination, recurseSubmodules: args.recurseSubmodules === true };
+      return {
+        parentDirectory: parent,
+        destinationDirectory: destination,
+        recurseSubmodules: args.recurseSubmodules === true,
+        ...(depth === undefined ? {} : { depth })
+      };
     }
     default: throw new Error(`Unknown tool: ${name}`);
   }
