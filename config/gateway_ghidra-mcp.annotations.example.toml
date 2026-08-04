@@ -1,0 +1,27 @@
+[tool_annotations.ghidra-mcp]
+default = "READ_ONLY_ANNOTATIONS"
+[tool_annotations.ghidra-mcp.tools]
+# 接続先や公開ツール群だけを変更する、可逆なローカル状態操作
+connect_instance = "LOCAL_STATE_ANNOTATIONS"
+load_tool_group = "LOCAL_STATE_ANNOTATIONS"
+unload_tool_group = "LOCAL_STATE_ANNOTATIONS"
+# Ghidraプロジェクトへ永続データを追加し、自動解析も実行し得る
+import_file = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+# 実行中プロセスへ接続し、その実行状態へ影響する
+debugger_attach = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+debugger_detach = "LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS"
+# ブレークポイントは対象プロセスのコードまたはデバッグレジスタを変更する
+debugger_set_breakpoint = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+debugger_remove_breakpoint = "LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS"
+# 実行位置を進める操作は再実行するたび結果が変わる
+debugger_continue = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+debugger_step_into = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+debugger_step_over = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+# トレースやウォッチポイントを対象プロセスへ設定する
+debugger_trace_function = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+debugger_trace_stop = "LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS"
+debugger_watch_memory = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+debugger_watch_stop = "LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS"
+[tool_annotations.ghidra-mcp.open_world_tools]
+# Ghidraとデバッガはローカルで閉じており、ネットワーク上の不特定対象へ
+# 操作するツールではないため、すべてfalseのままとする。

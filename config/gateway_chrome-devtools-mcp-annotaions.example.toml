@@ -1,0 +1,31 @@
+[tool_annotations.chrome-devtools]
+default = "READ_ONLY_ANNOTATIONS"
+[tool_annotations.chrome-devtools.tools]
+# ページ上で不可逆な操作や外部送信を起こし得る操作
+click = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+drag = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+evaluate_script = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+execute_webmcp_tool = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+handle_dialog = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+press_key = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+type_text = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+# ローカルなブラウザ状態を変更するが、通常は再実行可能な操作
+emulate = "LOCAL_STATE_ANNOTATIONS"
+fill = "LOCAL_STATE_ANNOTATIONS"
+fill_form = "LOCAL_STATE_ANNOTATIONS"
+hover = "LOCAL_STATE_ANNOTATIONS"
+navigate_page = "LOCAL_STATE_ANNOTATIONS"
+new_page = "LOCAL_STATE_ANNOTATIONS"
+performance_start_trace = "LOCAL_STATE_ANNOTATIONS"
+performance_stop_trace = "LOCAL_STATE_ANNOTATIONS"
+resize_page = "LOCAL_STATE_ANNOTATIONS"
+select_page = "LOCAL_STATE_ANNOTATIONS"
+upload_file = "LOCAL_STATE_ANNOTATIONS"
+# 対象を消すが、同じ操作を繰り返しても追加の破壊は起きない
+close_page = "LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS"
+# 明示されたパスへ解析結果やキャプチャを書き出し得る操作
+get_network_request = "LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS"
+lighthouse_audit = "LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS"
+take_heapsnapshot = "LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS"
+take_screenshot = "LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS"
+take_snapshot = "LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS"
