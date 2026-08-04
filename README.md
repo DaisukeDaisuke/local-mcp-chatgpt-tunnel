@@ -58,7 +58,7 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 ## 同梱MCP
 | MCP | 公開ツールの例 | 用途 |
 | --- | --- | --- |
-| `safe-files` | `list_files`、`search_text`、`read_text_file`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、読み書き、限定されたパッチ適用 |
+| `safe-files` | `list_files`、`search_text`、`file_info`、`read_text_file`、`read_text_lines`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、ファイル情報、行範囲読み取り、読み書き、限定されたパッチ適用 |
 | `safe-images` | `read_image` | PNG、JPEG、WebPをChatGPTの画像コンテンツとして読み取る |
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
 | `gitmcp` | `status`、`diff`、`log`、`branches`、`switch_branch`、`add_all`、`commit`、`push`、`pull`、`clone_repository` | 許可したリポジトリに対する限定されたGit操作 |

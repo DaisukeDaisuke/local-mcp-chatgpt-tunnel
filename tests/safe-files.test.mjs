@@ -8,8 +8,8 @@ const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, params })
 
 async function serverFor(root, suffix, options = {}) {
   process.env.SAFE_FILES_ROOTS = JSON.stringify([root]);
-  process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
-  process.env.LOCAL_MCP_DISALLOWED_FILES = '[]';
+  process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = JSON.stringify(options.disallowedDirectories ?? []);
+  process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
   const { createServer } = await import(`../mcp/safe-files/server.mjs?test=${suffix}-${Date.now()}`);
   const server = createServer();
@@ -36,8 +36,8 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   const listed = await server(request(2, 'tools/list', {}));
   const names = listed.result.tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
-    'apply_patch', 'create_directory', 'get_working_directory', 'list_directory',
-    'list_files', 'read_file_chunk', 'read_text_file', 'replace_text', 'roots', 'search_text',
+    'apply_patch', 'create_directory', 'file_info', 'get_working_directory', 'list_directory',
+    'list_files', 'read_file_chunk', 'read_text_file', 'read_text_lines', 'replace_text', 'roots', 'search_text',
     'set_working_directory', 'write_file', 'write_text_file'
   ]);
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
@@ -49,6 +49,139 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
   const result = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'utf16.txt' } }));
   assert.equal(result.result.isError, true);
   assert.match(result.result.structuredContent.error, /UTF-16/);
+});
+
+test('read_text_lines returns an inclusive range, clamps the end line, and rejects an impossible start line precisely', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-lines-'));
+  const path = join(root, 'lines.txt');
+  await writeFile(path, 'first\r\nsecond\nthird\n', 'utf8');
+  await writeFile(join(root, 'empty.txt'), '', 'utf8');
+  const server = await serverFor(root, 'read-lines');
+
+  const clamped = await server(request(2, 'tools/call', {
+    name: 'read_text_lines', arguments: { path: 'lines.txt', startLine: 2, endLine: 999 }
+  }));
+  assert.equal(clamped.result.isError, false);
+  assert.deepEqual(clamped.result.structuredContent.result, {
+    path,
+    startLine: 2,
+    endLine: 3,
+    requestedEndLine: 999,
+    lineCount: 3,
+    content: 'second\nthird'
+  });
+
+  const impossible = await server(request(3, 'tools/call', {
+    name: 'read_text_lines', arguments: { path: 'lines.txt', startLine: 4, endLine: 8 }
+  }));
+  assert.equal(impossible.result.isError, true);
+  assert.equal(
+    impossible.result.structuredContent.error,
+    `Start line is out of range for ${path}: got 4, expected a maximum of 3`
+  );
+
+  const empty = await server(request(4, 'tools/call', {
+    name: 'read_text_lines', arguments: { path: 'empty.txt', startLine: 1, endLine: 1 }
+  }));
+  assert.equal(empty.result.isError, true);
+  assert.equal(
+    empty.result.structuredContent.error,
+    `Start line is out of range for ${join(root, 'empty.txt')}: got 1, expected a maximum of 0`
+  );
+
+  const fakeRuntimeKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-');
+  await writeFile(join(root, 'credential.txt'), `safe\n${fakeRuntimeKey}\n`, 'utf8');
+  const credential = await server(request(5, 'tools/call', {
+    name: 'read_text_lines', arguments: { path: 'credential.txt', startLine: 1, endLine: 1 }
+  }));
+  assert.equal(credential.result.isError, true);
+  assert.match(credential.result.structuredContent.error, /credential/i);
+});
+
+test('file_info batches paths and reports type, bytes, line availability, censorship, prohibition, and binary likelihood without returning content', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-info-'));
+  const textPath = join(root, 'text.txt');
+  const binaryPath = join(root, 'binary.bin');
+  const credentialPath = join(root, 'credential.txt');
+  const prohibitedPath = join(root, 'blocked.pem');
+  const deniedPath = join(root, 'denied.txt');
+  const utf16Path = join(root, 'utf16.txt');
+  const fakeRuntimeKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-');
+  await mkdir(join(root, 'directory'));
+  await writeFile(textPath, 'alpha\nbeta\n', 'utf8');
+  await writeFile(binaryPath, Buffer.from([0x00, 0x01, 0x02, 0xff]));
+  await writeFile(credentialPath, fakeRuntimeKey, 'utf8');
+  await writeFile(prohibitedPath, 'public certificate placeholder', 'utf8');
+  await writeFile(deniedPath, 'denied metadata only', 'utf8');
+  await writeFile(utf16Path, Buffer.from([0xff, 0xfe, 0x41, 0x00]));
+  const server = await serverFor(root, 'file-info', { disallowedFiles: [deniedPath] });
+
+  const batch = await server(request(2, 'tools/call', {
+    name: 'file_info',
+    arguments: {
+      paths: [
+        'text.txt', 'binary.bin', 'credential.txt', 'blocked.pem',
+        'denied.txt', 'directory', 'utf16.txt', 'missing.txt'
+      ]
+    }
+  }));
+  assert.equal(batch.result.isError, false);
+  assert.equal(batch.result.structuredContent.result.count, 8);
+  const items = Object.fromEntries(batch.result.structuredContent.result.items.map((item) => [item.requestedPath, item]));
+
+  const text = items['text.txt'];
+  assert.equal(text.ok, true);
+  assert.equal(text.type, 'file');
+  assert.equal(text.bytes, Buffer.byteLength('alpha\nbeta\n'));
+  assert.equal(text.hasLineCount, true);
+  assert.equal(text.lineCount, 2);
+  assert.equal(text.censored, false);
+  assert.equal(text.prohibited, false);
+  assert.equal(text.binaryLikely, false);
+  assert.equal(text.textEncoding, 'utf-8');
+  assert.equal('content' in text, false);
+
+  const binary = items['binary.bin'];
+  assert.equal(binary.ok, true);
+  assert.equal(binary.binaryLikely, true);
+  assert.equal(binary.binaryReason, 'nul_byte');
+  assert.equal(binary.hasLineCount, false);
+  assert.equal(binary.lineCount, null);
+
+  const credential = items['credential.txt'];
+  assert.equal(credential.ok, true);
+  assert.equal(credential.censored, true);
+  assert.equal(credential.hasLineCount, true);
+  assert.equal(credential.lineCount, 1);
+
+  const prohibited = items['blocked.pem'];
+  assert.equal(prohibited.ok, true);
+  assert.equal(prohibited.prohibited, true);
+  assert.ok(prohibited.prohibitedReasons.includes('blocked_transfer_extension:.pem'));
+
+  const denied = items['denied.txt'];
+  assert.equal(denied.ok, true);
+  assert.equal(denied.prohibited, true);
+  assert.ok(denied.prohibitedReasons.includes('disallowed_files'));
+  const deniedRead = await server(request(3, 'tools/call', { name: 'read_text_file', arguments: { path: 'denied.txt' } }));
+  assert.equal(deniedRead.result.isError, true);
+
+  const directory = items.directory;
+  assert.equal(directory.ok, true);
+  assert.equal(directory.type, 'directory');
+  assert.equal(directory.hasLineCount, false);
+  assert.equal(directory.binaryChecked, 'not_applicable');
+  assert.equal(typeof directory.bytes, 'number');
+
+  const utf16 = items['utf16.txt'];
+  assert.equal(utf16.ok, true);
+  assert.equal(utf16.binaryLikely, false);
+  assert.equal(utf16.textEncoding, 'utf-16-le');
+  assert.equal(utf16.hasLineCount, false);
+
+  const missing = items['missing.txt'];
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /ENOENT/);
 });
 
 test('list_files uses fixed ripgrep listing, honors ignore files, and excludes exact files or directories', async () => {
@@ -158,14 +291,22 @@ test('safe-files rejects direct access and listings when a configured path glob 
   assert.match(direct.result.structuredContent.error, /\*\*\.ssh\*\*/);
   assert.match(direct.result.structuredContent.error, /\.ssh/);
 
-  const directory = await server(request(3, 'tools/call', {
+  const info = await server(request(3, 'tools/call', {
+    name: 'file_info', arguments: { paths: ['.ssh/id_ed25519.txt'] }
+  }));
+  assert.equal(info.result.isError, false);
+  assert.equal(info.result.structuredContent.result.items[0].ok, true);
+  assert.equal(info.result.structuredContent.result.items[0].prohibited, true);
+  assert.ok(info.result.structuredContent.result.items[0].prohibitedReasons.includes('disallowed_path_globs:**.ssh**'));
+
+  const directory = await server(request(4, 'tools/call', {
     name: 'list_directory', arguments: { path: '.' }
   }));
   assert.equal(directory.result.isError, true);
   assert.match(directory.result.structuredContent.error, /list_directory entry/);
   assert.match(directory.result.structuredContent.error, /\.ssh/);
 
-  const recursive = await server(request(4, 'tools/call', {
+  const recursive = await server(request(5, 'tools/call', {
     name: 'list_files', arguments: { path: '.', includeIgnored: true }
   }));
   assert.equal(recursive.result.isError, true);
@@ -181,6 +322,7 @@ test('ripgrep search and file transfer stay inside an explicitly configured work
   const searched = await server(request(2, 'tools/call', { name: 'search_text', arguments: { query: 'beta', path: 'src', fixedStrings: true } }));
   assert.equal(searched.result.isError, false);
   assert.equal(searched.result.structuredContent.result.count, 1);
+  assert.equal(searched.result.structuredContent.result.matches[0].line, 2);
   assert.match(searched.result.structuredContent.result.matches[0].text, /beta/);
   const transferred = await server(request(3, 'tools/call', { name: 'read_file_chunk', arguments: { path: 'src/a.txt', length: 5 } }));
   assert.equal(transferred.result.isError, false);

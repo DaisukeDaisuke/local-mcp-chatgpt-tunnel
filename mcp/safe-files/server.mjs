@@ -12,6 +12,7 @@ const MAX_TRANSFER_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_BYTES ?? 1
 const MAX_TRANSFER_CHUNK_BYTES = Number(process.env.SAFE_FILES_MAX_TRANSFER_CHUNK_BYTES ?? 512 * 1024);
 const MAX_SEARCH_OUTPUT_BYTES = Number(process.env.SAFE_FILES_MAX_SEARCH_OUTPUT_BYTES ?? 8 * 1024 * 1024);
 const MAX_SEARCH_RESULTS = Number(process.env.SAFE_FILES_MAX_SEARCH_RESULTS ?? 500);
+const MAX_BINARY_SAMPLE_BYTES = 64 * 1024;
 const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
 
@@ -162,6 +163,37 @@ const schemas = [
     }
   },
   {
+    name: 'read_text_lines',
+    description: 'Read an inclusive UTF-8 line range. An end line past EOF is clamped to the actual final line; a start line past EOF is rejected.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', minLength: 1 },
+        startLine: { type: 'integer', minimum: 1 },
+        endLine: { type: 'integer', minimum: 1 }
+      },
+      required: ['path', 'startLine', 'endLine'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'file_info',
+    description: 'Inspect multiple workspace paths without returning file content, including type, size, line availability, credential censorship, prohibition status, and a binary-likelihood assessment. Each path reports success or its own error independently.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'array',
+          items: { type: 'string', minLength: 1 },
+          minItems: 1,
+          maxItems: 100
+        }
+      },
+      required: ['paths'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'read_file_chunk',
     description: 'Transfer a bounded chunk of a non-secret workspace file as base64. ROM, state, and key file types are rejected.',
     inputSchema: {
@@ -301,12 +333,22 @@ const denied = () => {
 };
 
 async function assertNotDenied(candidate, context = 'Path') {
+  const status = await prohibitedPathStatus(candidate);
+  if (status.globMatch) throw disallowedPathGlobError(context, status.globMatch);
+  if (status.deniedByConfiguration) throw new Error('Path is denied by disallowed_directories or disallowed_files');
+}
+
+async function prohibitedPathStatus(candidate) {
   const globMatch = findDisallowedPathGlob(candidate, configuredDisallowedPathGlobs);
-  if (globMatch) throw disallowedPathGlobError(context, globMatch);
   const blocked = await denied();
-  if (blocked.files.includes(candidate) || blocked.directories.some((directory) => within(directory, candidate))) {
-    throw new Error('Path is denied by disallowed_directories or disallowed_files');
-  }
+  const deniedFile = blocked.files.includes(candidate);
+  const deniedDirectory = blocked.directories.find((directory) => within(directory, candidate)) ?? null;
+  return {
+    globMatch,
+    deniedFile,
+    deniedDirectory,
+    deniedByConfiguration: deniedFile || deniedDirectory !== null
+  };
 }
 
 async function chooseRoot(path) {
@@ -320,11 +362,16 @@ async function chooseRoot(path) {
 }
 
 async function resolveExisting(path) {
+  const target = await resolveExistingUnchecked(path);
+  await assertNotDenied(target.path);
+  return target;
+}
+
+async function resolveExistingUnchecked(path) {
   const { root, candidate } = await chooseRoot(path);
   const actual = await realpath(candidate);
   if (!within(root, actual)) throw new Error('Resolved path escaped the allowed workspace root');
   assertSafePath(root, actual);
-  await assertNotDenied(actual);
   return { root, path: actual };
 }
 
@@ -378,6 +425,163 @@ function redactCredentialContent(text) {
     });
   }
   return { text: output, redacted };
+}
+
+function splitTextLines(content) {
+  if (content.length === 0) return [];
+  const lines = content.split(/\r\n|\n|\r/);
+  if (/(?:\r\n|\n|\r)$/.test(content)) lines.pop();
+  return lines;
+}
+
+function detectedTextEncoding(bytes) {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'utf-8';
+  if (bytes[0] === 0xff && bytes[1] === 0xfe && bytes[2] === 0x00 && bytes[3] === 0x00) return 'utf-32-le';
+  if (bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0xfe && bytes[3] === 0xff) return 'utf-32-be';
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16-le';
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16-be';
+  return 'utf-8';
+}
+
+function assessBinaryLikelihood(bytes, complete) {
+  const textEncoding = detectedTextEncoding(bytes);
+  if (textEncoding !== 'utf-8') {
+    return { binaryLikely: false, binaryReason: null, textEncoding };
+  }
+  if (bytes.includes(0x00)) {
+    return { binaryLikely: true, binaryReason: 'nul_byte', textEncoding: null };
+  }
+  let controlBytes = 0;
+  for (const byte of bytes) {
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0c && byte !== 0x0d) controlBytes += 1;
+  }
+  if (bytes.length > 0 && controlBytes / bytes.length >= 0.1) {
+    return { binaryLikely: true, binaryReason: 'control_byte_ratio', textEncoding: null };
+  }
+  try {
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    decoder.decode(bytes, { stream: !complete });
+  } catch {
+    return { binaryLikely: true, binaryReason: 'invalid_utf8', textEncoding: null };
+  }
+  return { binaryLikely: false, binaryReason: null, textEncoding };
+}
+
+async function readBinarySample(path, size) {
+  if (size <= MAX_TEXT_BYTES) return { bytes: await readFile(path), complete: true };
+  const handle = await open(path, 'r');
+  try {
+    const bytes = Buffer.alloc(MAX_BINARY_SAMPLE_BYTES);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    return { bytes: bytes.subarray(0, bytesRead), complete: false };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readTextLines(args) {
+  const target = await resolveExisting(args.path);
+  if (!(await stat(target.path)).isFile()) throw new Error('Path is not a file');
+  const content = decodeUtf8(await readFile(target.path));
+  rejectCredentialContent(content);
+  const lines = splitTextLines(content);
+  const startLine = args.startLine;
+  const requestedEndLine = args.endLine;
+  if (!Number.isSafeInteger(startLine) || startLine < 1) {
+    throw new Error(`Invalid start line for ${target.path}: got ${String(startLine)}, expected an integer of at least 1`);
+  }
+  if (!Number.isSafeInteger(requestedEndLine) || requestedEndLine < 1) {
+    throw new Error(`Invalid end line for ${target.path}: got ${String(requestedEndLine)}, expected an integer of at least 1`);
+  }
+  if (startLine > lines.length) {
+    throw new Error(`Start line is out of range for ${target.path}: got ${startLine}, expected a maximum of ${lines.length}`);
+  }
+  if (requestedEndLine < startLine) {
+    throw new Error(`End line is before start line for ${target.path}: got ${requestedEndLine}, expected at least ${startLine}`);
+  }
+  const endLine = Math.min(requestedEndLine, lines.length);
+  return {
+    path: target.path,
+    startLine,
+    endLine,
+    requestedEndLine,
+    lineCount: lines.length,
+    content: lines.slice(startLine - 1, endLine).join('\n')
+  };
+}
+
+async function inspectFileInfo(path) {
+  const target = await resolveExistingUnchecked(path);
+  const info = await stat(target.path);
+  const type = info.isFile() ? 'file' : info.isDirectory() ? 'directory' : info.isSymbolicLink() ? 'symlink' : 'other';
+  const pathStatus = await prohibitedPathStatus(target.path);
+  const prohibitedReasons = [];
+  if (pathStatus.globMatch) prohibitedReasons.push(`disallowed_path_globs:${pathStatus.globMatch.pattern}`);
+  if (pathStatus.deniedFile) prohibitedReasons.push('disallowed_files');
+  if (pathStatus.deniedDirectory) prohibitedReasons.push(`disallowed_directories:${pathStatus.deniedDirectory}`);
+  if (type === 'file') {
+    const extension = extname(target.path).toLowerCase();
+    if (BLOCKED_TRANSFER_EXTENSIONS.has(extension)) prohibitedReasons.push(`blocked_transfer_extension:${extension}`);
+    if (BLOCKED_BINARY_WRITE_EXTENSIONS.has(extension)) prohibitedReasons.push(`blocked_binary_write_extension:${extension}`);
+  }
+  const result = {
+    path: target.path,
+    type,
+    bytes: info.size,
+    hasLineCount: false,
+    lineCount: null,
+    censored: type === 'file' ? null : false,
+    censorChecked: type === 'file' ? 'not_checked' : 'not_applicable',
+    prohibited: prohibitedReasons.length > 0,
+    prohibitedReasons,
+    binaryLikely: type === 'file' ? null : false,
+    binaryReason: null,
+    binaryChecked: type === 'file' ? 'not_checked' : 'not_applicable',
+    textEncoding: null
+  };
+  if (type !== 'file') return result;
+  const sample = await readBinarySample(target.path, info.size);
+  const binary = assessBinaryLikelihood(sample.bytes, sample.complete);
+  result.binaryLikely = binary.binaryLikely;
+  result.binaryReason = binary.binaryReason;
+  result.binaryChecked = sample.complete ? 'full' : 'sample';
+  result.textEncoding = binary.textEncoding;
+  const sampleText = sample.bytes.toString('utf8');
+  const credentialFound = containsCredential(sampleText);
+  result.censored = credentialFound ? true : sample.complete ? false : null;
+  result.censorChecked = sample.complete ? 'full' : 'sample';
+  if (sample.complete && !binary.binaryLikely && binary.textEncoding === 'utf-8') {
+    const content = decodeUtf8(sample.bytes);
+    result.hasLineCount = true;
+    result.lineCount = splitTextLines(content).length;
+    result.censored = containsCredential(content);
+  }
+  return result;
+}
+
+async function fileInfo(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Tool arguments must be an object');
+  for (const key of Object.keys(args)) if (key !== 'paths') throw new Error(`file_info does not accept the ${key} argument`);
+  if (!Array.isArray(args.paths) || args.paths.length < 1 || args.paths.length > 100) {
+    throw new Error('file_info paths must be an array containing 1 through 100 paths');
+  }
+  const items = [];
+  for (const requestedPath of args.paths) {
+    if (typeof requestedPath !== 'string' || requestedPath.length === 0) {
+      items.push({ requestedPath, ok: false, error: 'Path must be a non-empty string' });
+      continue;
+    }
+    try {
+      items.push({ requestedPath, ok: true, ...(await inspectFileInfo(requestedPath)) });
+    } catch (error) {
+      items.push({
+        requestedPath,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return { count: items.length, items };
 }
 
 async function atomicWriteBytes(path, bytes, overwrite) {
@@ -764,6 +968,10 @@ async function callTool(name, args = {}) {
       return listFiles(args);
     case 'search_text':
       return searchText(args);
+    case 'read_text_lines':
+      return readTextLines(args);
+    case 'file_info':
+      return fileInfo(args);
     case 'read_text_file': {
       const target = await resolveExisting(args.path);
       if (!(await stat(target.path)).isFile()) throw new Error('Path is not a file');
@@ -851,7 +1059,7 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-files', version: '4.0.0' },
+        serverInfo: { name: 'safe-files', version: '4.1.0' },
         instructions: 'Current-working-directory UTF-8 editing, fixed ripgrep search, and bounded file transfer. The gateway enforces configured path allowlists before tool calls are forwarded.'
       });
     }
