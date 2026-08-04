@@ -16,10 +16,15 @@
 ```powershell
 winget install -e --id OpenJS.NodeJS.LTS
 winget install -e --id Git.Git
-winget install -e --id GitHub.cli
 winget install -e --id BurntSushi.ripgrep.MSVC
+```
+
+下記のソフトウェアはオプションです、内蔵mcpや、外部mcpで必要となる可能性があります。
+```
+winget install -e --id GitHub.cli
 winget install -e --id Python.Python.3.12
 ```
+
 Chrome、Ghidra、その他の外部MCPは、実際に使うものだけを各プロジェクトの公式手順で導入します。<br>安全上の理由から、このスクリプトで一括導入はしません。<br>
 ## 2. tunnel-clientを配置する
 ### 2.1 Windows用ZIPをダウンロードする
