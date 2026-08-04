@@ -41,6 +41,30 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
     'set_working_directory', 'write_file', 'write_text_file'
   ]);
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
+  const expectedAnnotationKeys = ['destructiveHint', 'idempotentHint', 'openWorldHint', 'readOnlyHint'];
+  for (const tool of listed.result.tools) {
+    assert.deepEqual(Object.keys(tool.annotations).sort(), expectedAnnotationKeys, `${tool.name} should expose all tool hints`);
+    assert.equal(tool.annotations.openWorldHint, false, `${tool.name} should remain inside the configured local workspace`);
+  }
+  const expectAnnotations = (toolNames, expected) => {
+    for (const name of toolNames) {
+      const tool = listed.result.tools.find((candidate) => candidate.name === name);
+      assert.deepEqual(tool.annotations, expected, `${name} annotations`);
+    }
+  };
+  expectAnnotations([
+    'roots', 'get_working_directory', 'list_directory', 'list_files', 'search_text',
+    'read_text_file', 'read_text_lines', 'file_info', 'read_file_chunk'
+  ], { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+  expectAnnotations([
+    'set_working_directory', 'create_directory'
+  ], { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+  expectAnnotations([
+    'write_file', 'write_text_file'
+  ], { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
+  expectAnnotations([
+    'replace_text', 'apply_patch'
+  ], { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false });
   assert.ok(!names.some((name) => ['execute', 'shell', 'start_command', 'without_sandbox'].includes(name)));
   const applyPatch = listed.result.tools.find((tool) => tool.name === 'apply_patch');
   assert.match(applyPatch.description, /workspace-relative/);

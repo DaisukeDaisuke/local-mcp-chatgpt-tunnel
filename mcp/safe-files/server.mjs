@@ -67,6 +67,36 @@ const TOOL_OUTPUT_SCHEMA = {
   required: ['ok'],
   additionalProperties: false
 };
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+};
+const LOCAL_STATE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+};
+const LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false
+};
+const LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false
+};
+const LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+};
 const toolResult = (value, isError = false) => ({
   content: [{ type: 'text', text: JSON.stringify(value) }],
   structuredContent: value,
@@ -77,12 +107,14 @@ const schemas = [
   {
     name: 'roots',
     description: 'List the process working directory used as the workspace root.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'get_working_directory',
     description: 'Return the directory used to resolve relative paths.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'set_working_directory',
@@ -92,7 +124,8 @@ const schemas = [
       properties: { path: { type: 'string', minLength: 1 } },
       required: ['path'],
       additionalProperties: false
-    }
+    },
+    annotations: LOCAL_STATE_ANNOTATIONS
   },
   {
     name: 'list_directory',
@@ -102,7 +135,8 @@ const schemas = [
       properties: { path: { type: 'string', minLength: 1 } },
       required: ['path'],
       additionalProperties: false
-    }
+    },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'list_files',
@@ -128,12 +162,7 @@ const schemas = [
       },
       additionalProperties: false
     },
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false
-    }
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'search_text',
@@ -150,7 +179,8 @@ const schemas = [
       },
       required: ['query'],
       additionalProperties: false
-    }
+    },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'read_text_file',
@@ -160,7 +190,8 @@ const schemas = [
       properties: { path: { type: 'string', minLength: 1 } },
       required: ['path'],
       additionalProperties: false
-    }
+    },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'read_text_lines',
@@ -174,7 +205,8 @@ const schemas = [
       },
       required: ['path', 'startLine', 'endLine'],
       additionalProperties: false
-    }
+    },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'file_info',
@@ -191,7 +223,8 @@ const schemas = [
       },
       required: ['paths'],
       additionalProperties: false
-    }
+    },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'read_file_chunk',
@@ -205,7 +238,8 @@ const schemas = [
       },
       required: ['path'],
       additionalProperties: false
-    }
+    },
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'write_file',
@@ -220,7 +254,8 @@ const schemas = [
       },
       required: ['path', 'dataBase64'],
       additionalProperties: false
-    }
+    },
+    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
   },
   {
     name: 'write_text_file',
@@ -234,7 +269,8 @@ const schemas = [
       },
       required: ['path', 'content'],
       additionalProperties: false
-    }
+    },
+    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
   },
   {
     name: 'replace_text',
@@ -249,7 +285,8 @@ const schemas = [
       },
       required: ['path', 'oldText', 'newText'],
       additionalProperties: false
-    }
+    },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
   {
     name: 'create_directory',
@@ -259,7 +296,8 @@ const schemas = [
       properties: { path: { type: 'string', minLength: 1 } },
       required: ['path'],
       additionalProperties: false
-    }
+    },
+    annotations: LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS
   },
   {
     name: 'apply_patch',
@@ -276,7 +314,8 @@ const schemas = [
       },
       required: ['patch'],
       additionalProperties: false
-    }
+    },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   }
 ].map((schema) => ({ ...schema, outputSchema: TOOL_OUTPUT_SCHEMA }));
 
