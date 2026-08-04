@@ -268,6 +268,45 @@ tool = "stop_browser"
 
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。<br>
 Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。<br>
+## SDK
+[mainブランチのZIP](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)をダウンロードしてChatGPTへ添付し、次のプロンプトを送信すると、このリポジトリをSDK兼参照実装として使った、単一の`.mjs`ファイルで完結する独立のstdio MCPを作成させられます。<br>
+`<Describe the MCP tools you need here.>`は、作成したいツールと操作対象の具体的な説明へ置き換えてください。<br>
+```text
+The attached local-mcp-chatgpt-tunnel-main.zip is the SDK and reference implementation. Inspect it before writing code.
+Create an independent stdio MCP implemented as one self-contained Node.js ESM .mjs file for the following purpose:
+
+<Describe the MCP tools you need here.>
+
+Requirements:
+- Return the complete .mjs file and the minimal config/gateway.toml entry needed to run it through local-mcp-chatgpt-tunnel.
+- Do not modify the attached repository. The generated stdio MCP must not depend on files inside the repository at runtime and must use only Node.js built-in modules unless I explicitly permit an external dependency.
+- Follow the repository's MCP protocol handling, JSON Schema conventions, outputSchema declarations, tool annotations, error handling, stdout/stderr separation, timeouts, and bounded-output design.
+- Write only JSON-RPC protocol messages to stdout. Write diagnostics and logs to stderr.
+- Shell injection must be impossible under all circumstances. Treat every MCP argument, path, filename, identifier, option, and environment-derived value as untrusted input.
+- Never pass a constructed or user-controlled command string to a shell. Do not use child_process.exec, execSync, spawn with shell: true, cmd.exe /c, powershell -Command, bash -c, or sh -c.
+- When a native program is genuinely required, invoke a fixed executable directly with spawn or execFile, shell: false, a fixed subcommand, and individually validated arguments. Use an explicit allowlist and a -- separator where the target program supports it.
+- Do not expose a general-purpose command runner, arbitrary script execution, arbitrary executable selection, arbitrary environment-variable injection, or unrestricted native-program arguments.
+- If the stdio MCP performs any filesystem operation, it must implement all of the following tools: `get_current_root`, `get_working_directory`, and `set_working_directory`. These tools are mandatory, not optional.
+- `get_current_root` must return the single currently configured workspace root. It must not enumerate arbitrary filesystem roots or expose unrelated paths.
+- `get_working_directory` must return the current working directory as a path relative to `get_current_root`. `set_working_directory` must accept only a root-relative path to an existing directory inside the current root and must reject any directory denied by the path policy. Changing the working directory must not change how child-tool path arguments are interpreted: those arguments remain relative to `get_current_root`.
+- Any stdio MCP that performs filesystem operations must support and enforce these exact configuration arrays:
+  `allowed_directories = []`
+  `allowed_files = []`
+  `disallowed_directories = []`
+  `disallowed_files = []`
+  `disallowed_path_globs = []`
+- Apply the allowlist and denylist to every filesystem operation, including working-directory changes. Deny rules must take precedence over allow rules.
+- Every filesystem tool must accept paths relative to `get_current_root` by default. Absolute paths are forbidden unless the stated operation genuinely requires them and the tool documents and validates that exception explicitly.
+- Reject `..`, parent traversal, root-relative paths, drive-relative paths, UNC paths, NTFS alternate data streams, and any other syntax that could escape or reinterpret the current root. Normalize and validate the relative path before resolving it, then verify the resolved real path remains inside the current root and passes every allowlist and denylist check.
+- Do not require callers to provide redundant absolute paths when the same target can be identified safely by a path relative to `get_current_root`.
+- A tool that accepts input files must accept multiple files as an array unless the underlying operation can inherently and safely operate on exactly one file. Validate every file independently and enforce bounded file counts, sizes, and output sizes.
+- For build-related tools, require the caller to select a narrow project, target, package, configuration, or input-file set. Do not default to building an entire workspace or repository when a narrower target is possible. Keep the executable, subcommand, and build options fixed or allowlisted.
+- This stdio MCP is not executed inside the ChatGPT sandbox. It runs on the user's real Windows PC with the permissions of the current Windows user. Remove unsafe capabilities by design instead of relying on the model to ask for confirmation.
+- Do not download, install, update, or access the network unless I explicitly require that behavior. If network access is required, restrict destinations and operations to an explicit allowlist.
+- Close child-process stdin, impose timeouts and output limits, handle cancellation and termination, and return structured MCP errors without crashing the process.
+- Include clear tool descriptions, strict input schemas, strict output schemas, accurate annotations, and a short security explanation for every capability.
+- Prefer a small, auditable implementation. Do not add convenience features that expand the security boundary beyond the stated purpose.
+```
 ## 診断とテスト
 必要なコマンドの検出とバージョン確認を行います。インストールや設定変更は行いません。<br>
 ```powershell
