@@ -1,6 +1,7 @@
 private_use_only = true
 # Publishes gateway__list_available_tools. It reads only the gateway's existing in-memory tool registry.
 publish_tool_directory = false
+tool_annotations_path = "tool-annotations.toml"
 
 # safe-files uses cwd as its workspace root. The server script path must therefore be absolute.
 [mcp_servers.files]
@@ -9,6 +10,7 @@ args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\safe-files\server.mjs'
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = true
 prefix = "files"
+annotation_config = false
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
@@ -27,6 +29,7 @@ args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '-
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "git"
+annotation_config = false
 startup_timeout_sec = 60
 tool_timeout_sec = 1800
 serial_group = "git"
@@ -47,6 +50,7 @@ args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "gh_workflow"
+annotation_config = false
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
 serial_group = "gh_workflow"
@@ -63,6 +67,7 @@ args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\safe-images\server.mjs
 cwd = 'C:\Users\owner\Downloads'
 enabled = false
 prefix = "images"
+annotation_config = false
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 allowed_directories = ['C:\Users\owner\Downloads']
@@ -80,6 +85,7 @@ args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\safe-download\server.m
 cwd = 'C:\ABSOLUTE\PATH\TO\DOWNLOADABLE\SOURCE'
 enabled = false
 prefix = "downloads"
+annotation_config = false
 startup_timeout_sec = 30
 tool_timeout_sec = 300
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\DOWNLOADABLE\SOURCE']
@@ -110,6 +116,7 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # cwd = 'C:\path\to'
 # enabled = false
 # prefix = "my_server"
+# annotation_config = true
 # startup_timeout_sec = 30
 # tool_timeout_sec = 1800
 # blocked_tools = ["dangerous_tool"]

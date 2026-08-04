@@ -62,6 +62,12 @@ test('safe-download exposes only download_zip with a declared output schema', as
   const listed = await server(request(2, 'tools/list', {}));
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['download_zip']);
   assert.equal(listed.result.tools[0].outputSchema?.type, 'object');
+  assert.deepEqual(listed.result.tools[0].annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  });
 });
 
 test('download_zip returns one JS file as a ZIP resource without duplicating base64 in structuredContent', async () => {

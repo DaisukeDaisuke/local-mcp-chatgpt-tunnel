@@ -73,7 +73,12 @@ const toolResult = (value, isError = false) => ({
   structuredContent: value,
   isError
 });
-const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const READ_ONLY_ANNOTATIONS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const LOCAL_STATE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
+const LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+const OPEN_WORLD_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
+const OPEN_WORLD_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
 const repositorySchema = () => ({
   type: 'object',
   properties: { repositoryPath: { type: 'string', default: '.' } },
@@ -81,49 +86,54 @@ const repositorySchema = () => ({
 });
 
 const schemas = [
-  { name: 'roots', description: 'List allowed and denied Git paths and the current working directory.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: readOnly },
-  { name: 'get_working_directory', description: 'Return the directory used to resolve relative repository paths.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: readOnly },
+  { name: 'roots', description: 'List allowed and denied Git paths and the current working directory.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'get_working_directory', description: 'Return the directory used to resolve relative repository paths.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: READ_ONLY_ANNOTATIONS },
   {
     name: 'set_working_directory',
     description: 'Change the relative-path base to an existing allowed directory that is not denied.',
-    inputSchema: { type: 'object', properties: { path: { type: 'string', minLength: 1 } }, required: ['path'], additionalProperties: false }
+    inputSchema: { type: 'object', properties: { path: { type: 'string', minLength: 1 } }, required: ['path'], additionalProperties: false },
+    annotations: LOCAL_STATE_ANNOTATIONS
   },
-  { name: 'status', description: 'Return porcelain Git status.', inputSchema: repositorySchema(), annotations: readOnly },
-  { name: 'ls_files', description: 'List tracked files without exposing .git internals.', inputSchema: repositorySchema(), annotations: readOnly },
-  { name: 'branches', description: 'List local and remote branches and identify the current branch.', inputSchema: repositorySchema(), annotations: readOnly },
-  { name: 'remotes', description: 'List configured remote names and URLs.', inputSchema: repositorySchema(), annotations: readOnly },
+  { name: 'status', description: 'Return porcelain Git status.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'ls_files', description: 'List tracked files without exposing .git internals.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'branches', description: 'List local and remote branches and identify the current branch.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'remotes', description: 'List configured remote names and URLs.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   {
     name: 'log',
     description: 'Return a bounded recent commit log.',
     inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, maxCount: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }, additionalProperties: false },
-    annotations: readOnly
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'diff',
     description: 'Return a working-tree or staged diff with external diff commands disabled.',
     inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, staged: { type: 'boolean', default: false } }, additionalProperties: false },
-    annotations: readOnly
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'switch_branch',
     description: 'Switch to an existing local branch, or create one from the current HEAD.',
-    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, branch: { type: 'string', minLength: 1, maxLength: 255 }, create: { type: 'boolean', default: false } }, required: ['branch'], additionalProperties: false }
+    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, branch: { type: 'string', minLength: 1, maxLength: 255 }, create: { type: 'boolean', default: false } }, required: ['branch'], additionalProperties: false },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
-  { name: 'add_all', description: 'Stage all changes with the fixed command git add --all -- .', inputSchema: repositorySchema() },
+  { name: 'add_all', description: 'Stage all changes with the fixed command git add --all -- .', inputSchema: repositorySchema(), annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS },
   {
     name: 'commit',
     description: 'Commit already staged changes using a literal message. This tool does not stage files.',
-    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, message: { type: 'string', minLength: 1 } }, required: ['message'], additionalProperties: false }
+    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, message: { type: 'string', minLength: 1 } }, required: ['message'], additionalProperties: false },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
   ...(!cli.disablePush ? [{
     name: 'push',
     description: 'Push the current branch to a named remote. Force push and arbitrary refspecs are not supported.',
-    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, remote: { type: 'string', minLength: 1, maxLength: 255, default: 'origin' }, setUpstream: { type: 'boolean', default: false } }, additionalProperties: false }
+    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, remote: { type: 'string', minLength: 1, maxLength: 255, default: 'origin' }, setUpstream: { type: 'boolean', default: false } }, additionalProperties: false },
+    annotations: OPEN_WORLD_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
   }] : []),
   ...(!cli.disablePull ? [{
     name: 'pull',
     description: 'Fetch the configured upstream without submodules, reject denied incoming paths, then fast-forward only. Arbitrary remotes, refspecs, merge commits, and rebase are not supported.',
-    inputSchema: repositorySchema()
+    inputSchema: repositorySchema(),
+    annotations: OPEN_WORLD_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
   }] : []),
   ...(!cli.disableClone ? [{
     name: 'clone_repository',
@@ -139,7 +149,8 @@ const schemas = [
       },
       required: ['url', 'destinationDirectory'],
       additionalProperties: false
-    }
+    },
+    annotations: OPEN_WORLD_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS
   }] : [])
 ].map((schema) => ({ ...schema, outputSchema: TOOL_OUTPUT_SCHEMA }));
 

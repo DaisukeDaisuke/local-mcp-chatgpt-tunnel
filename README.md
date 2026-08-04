@@ -99,6 +99,7 @@ args = ['C:\path\to\server.py']
 cwd = 'C:\path\to'
 enabled = true
 prefix = "example"
+annotation_config = true
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
 allowed_directories = ['C:\work\project']
@@ -108,9 +109,27 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 ```
 有効なstdio MCPだけが子プロセスとして起動し、元のツール名`tool_name`はChatGPT側で`example__tool_name`として公開されます。`enabled = false`のエントリは起動しません。<br>
 Codex設定からコピーした`tool_output_token_limit`、ツール別の承認設定、Gatewayが認識しない項目は無視されます。このGateway上では効果を持ちません。<br>
+### 外部MCPのツールannotations
+外部MCPは、子MCPが返した`annotations`を基準にしつつ、欠けている`readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint`を明示値へ補完して公開します。子MCPが`readOnlyHint = true`だけを返した場合は、明示指定がない限り`destructiveHint = false`、`idempotentHint = true`として補完します。<br>
+Gateway起動時、`tool_annotations_path`で指定したTOMLがなければ作成し、有効な外部MCPのprefixに対応する`[tool_annotations.<prefix>]`が存在しない場合だけ末尾へ追加します。既存のprefix設定やツール割り当ては上書きしません。<br>
+同梱MCPは各`server.mjs`でannotationsを定義しているため、`gateway.toml`で`annotation_config = false`にします。外部MCPは省略時に`true`として扱います。<br>
+自動生成されるTOML内には、次の省略名と4つのhintの意味がコメントで記載されます。`open_world_hint`はprefix全体、`open_world_tools`は個別ツールの`openWorldHint`を上書きします。<br>
+```toml
+[tool_annotations.chrome-devtools]
+default = "LOCAL_STATE_ANNOTATIONS"
+open_world_hint = true
+[tool_annotations.chrome-devtools.tools]
+take_snapshot = "READ_ONLY_ANNOTATIONS"
+click = "LOCAL_STATE_ANNOTATIONS"
+[tool_annotations.chrome-devtools.open_world_tools]
+take_snapshot = false
+click = true
+```
+利用できる省略名は`READ_ONLY_ANNOTATIONS`、`LOCAL_STATE_ANNOTATIONS`、`LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS`、`LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS`、`LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS`です。省略名を設定しないツールは、子MCPが返したannotationsの既存値を保持し、欠けているhintだけを補完します。<br>
 ## Gateway設定
 ### ユーザーの決定は尊重されます
 Gatewayの動作は、利用者が`config/gateway.toml`へ明示した設定によって決まります。MCPを自動検出して勝手に登録することや、設定ファイルを自動的に書き換えることはありません。<br>
+例外として、外部MCPのツールannotationsだけは、`tool_annotations_path`で指定された独立TOMLへ未登録prefixの空テンプレートを追記します。`gateway.toml`、既存prefix、既存ツール設定は変更しません。<br>
 接続するMCP、その起動コマンド、引数、作業ディレクトリ、環境変数、有効・無効、公開しないツール、パスの許可・拒否範囲、直列実行、遅延起動は、すべて利用者が選択します。<br>
 Gatewayはその設定を読み取り、検証して適用しますが、利用者の代わりに安全性や用途を推測して設定を追加したり、許可範囲を広げたりしません。<br>
 `config/gateway.example.toml`は設定例であり、そのまま適用される「魔法のスクリプト」ではありません。必要な項目だけを確認して`config/gateway.toml`へ記述し、実際に起動するプログラムと公開する機能を利用者自身が把握できる構成にしています。<br>
@@ -146,6 +165,7 @@ Codexの設定ファイルをそのまま読み込む互換機能ではなく、
 ```toml
 private_use_only = true
 publish_tool_directory = false
+tool_annotations_path = "tool-annotations.toml"
 
 [mcp_servers.my_server]
 command = "node"
@@ -153,6 +173,7 @@ args = ['C:\path\to\server.mjs', '--example=value']
 cwd = 'C:\path\to'
 enabled = true
 prefix = "my_server"
+annotation_config = true
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
 serial_group = "my_server"
@@ -180,12 +201,14 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | --- | --- |
 | `private_use_only` | Gateway全体の必須設定です。安全確認のため、必ず`true`にする必要があります。 |
 | `publish_tool_directory` | `true`にすると内蔵ツール`gateway__list_available_tools`を公開します。省略時と`false`では公開しません。 |
+| `tool_annotations_path` | 外部MCPのannotations設定TOMLです。相対パスは`gateway.toml`のあるディレクトリを基準にし、省略時は同じディレクトリの`tool-annotations.toml`です。 |
 | `[mcp_servers.<name>]` | 1つのstdio MCPを定義します。`<name>`はGateway内で一意にします。 |
 | `command` | 子MCPを起動する実行ファイルまたはコマンドです。`enabled = false`でない場合は必須です。 |
 | `args` | `command`へ渡す引数を文字列配列で指定します。省略時は引数なしで起動します。 |
 | `cwd` | 子MCPの作業ディレクトリです。相対パスは`gateway.toml`があるディレクトリを基準に解決され、省略時はそのディレクトリを使います。 |
 | `enabled` | `false`にすると設定を残したまま、そのMCPを起動対象から除外します。省略時は有効です。 |
 | `prefix` | ChatGPTへ公開するツール名の接頭辞です。元の`tool_name`は`<prefix>__<tool_name>`として公開されます。省略時は`[mcp_servers.<name>]`の`<name>`を使います。 |
+| `annotation_config` | 外部annotations設定を適用するかを指定します。省略時は`true`です。同梱MCPのように自身で完全なannotationsを持つ場合は`false`にします。 |
 | `startup_timeout_sec` | 子MCPの起動と初期化を待つ秒数です。正の数で指定し、省略時は30秒です。 |
 | `tool_timeout_sec` | 子MCPのツール呼び出しを待つ秒数です。正の数で指定し、省略時は1800秒です。 |
 | `request_timeout_sec` | `tool_timeout_sec`の互換用別名です。両方ある場合は`tool_timeout_sec`が優先されるため、新しい設定では`tool_timeout_sec`を使用します。 |

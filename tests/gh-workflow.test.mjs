@@ -91,8 +91,12 @@ test('gh-workflow exposes only read-only workflow inspection tools', async () =>
     'view_workflow_yaml'
   ]);
   for (const tool of listed.result.tools) {
-    assert.equal(tool.annotations.readOnlyHint, true);
-    assert.equal(tool.annotations.destructiveHint, false);
+    assert.deepEqual(tool.annotations, {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true
+    });
   }
 });
 

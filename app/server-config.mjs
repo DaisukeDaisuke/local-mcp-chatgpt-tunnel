@@ -75,6 +75,7 @@ function normalizeServer(name, raw, base, platform) {
   if (raw.prefix !== undefined && (typeof raw.prefix !== 'string' || !raw.prefix)) throw new Error(`mcp_servers.${name}.prefix must be a non-empty string`);
   if (raw.serial_group !== undefined && (typeof raw.serial_group !== 'string' || !raw.serial_group)) throw new Error(`mcp_servers.${name}.serial_group must be a non-empty string`);
   if (raw.deferred !== undefined && typeof raw.deferred !== 'boolean') throw new Error(`mcp_servers.${name}.deferred must be boolean`);
+  if (raw.annotation_config !== undefined && typeof raw.annotation_config !== 'boolean') throw new Error(`mcp_servers.${name}.annotation_config must be boolean`);
   const timeoutSeconds = raw.tool_timeout_sec ?? raw.request_timeout_sec ?? 1800;
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw new Error(`mcp_servers.${name}.tool_timeout_sec must be positive`);
   const startupTimeoutSeconds = raw.startup_timeout_sec ?? 30;
@@ -99,6 +100,7 @@ function normalizeServer(name, raw, base, platform) {
     requestTimeoutMs: Math.round(timeoutSeconds * 1000),
     startupTimeoutMs: Math.round(startupTimeoutSeconds * 1000),
     serialGroup: typeof raw.serial_group === 'string' && raw.serial_group ? raw.serial_group : undefined,
+    manageAnnotations: raw.annotation_config !== false,
     deferred: raw.deferred === true,
     startAfter: normalizeLifecycle(raw, 'start_after', name),
     stopAfter: normalizeLifecycle(raw, 'stop_after', name),
@@ -129,6 +131,9 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
   if (raw.publish_tool_directory !== undefined && typeof raw.publish_tool_directory !== 'boolean') {
     throw new Error('gateway.toml publish_tool_directory must be boolean');
   }
+  if (raw.tool_annotations_path !== undefined && (typeof raw.tool_annotations_path !== 'string' || !raw.tool_annotations_path)) {
+    throw new Error('gateway.toml tool_annotations_path must be a non-empty string');
+  }
   if (!raw.mcp_servers || typeof raw.mcp_servers !== 'object' || Array.isArray(raw.mcp_servers)) {
     throw new Error('gateway.toml must define at least one [mcp_servers.<name>] table');
   }
@@ -142,6 +147,7 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
   }
   return {
     configPath: resolvedConfigPath,
+    toolAnnotationsPath: absoluteFrom(base, raw.tool_annotations_path ?? 'tool-annotations.toml', platform),
     privateUseOnly: true,
     publishToolDirectory: raw.publish_tool_directory === true,
     servers,

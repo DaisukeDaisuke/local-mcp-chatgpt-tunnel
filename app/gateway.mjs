@@ -3,6 +3,7 @@ import { scrubSecretEnvironment } from './child-environment.mjs';
 import { ToolPathPolicy } from './path-policy.mjs';
 import { StdioMcpChild } from './stdio-child.mjs';
 import { loadGatewayConfig } from './server-config.mjs';
+import { applyConfiguredAnnotations, loadToolAnnotationConfig } from './tool-annotations.mjs';
 import {
   TOOL_DIRECTORY_NAME,
   createToolDirectoryPayload,
@@ -43,6 +44,10 @@ class SerialQueues {
 }
 
 const config = await loadGatewayConfig();
+const toolAnnotationConfig = await loadToolAnnotationConfig(
+  config.toolAnnotationsPath,
+  config.servers.filter((server) => server.manageAnnotations).map((server) => server.prefix)
+);
 const queues = new SerialQueues();
 const children = [];
 const childrenByName = new Map();
@@ -67,7 +72,10 @@ function rebuildRoutes() {
       const publicName = namespacedName(child.config.prefix, tool.name);
       if (config.publishToolDirectory && publicName === TOOL_DIRECTORY_NAME) throw new Error(`Tool name collision: ${publicName}`);
       if (toolRoutes.has(publicName)) throw new Error(`Tool name collision: ${publicName}`);
-      toolRoutes.set(publicName, { child, originalName: tool.name, tool: { ...tool, name: publicName } });
+      const annotatedTool = child.config.manageAnnotations
+        ? applyConfiguredAnnotations(tool, child.config.prefix, toolAnnotationConfig)
+        : tool;
+      toolRoutes.set(publicName, { child, originalName: tool.name, tool: { ...annotatedTool, name: publicName } });
     }
   }
 }

@@ -63,6 +63,44 @@ test('gitmcp exposes pull and recursive clone only when explicitly enabled', asy
   assert.equal(tools.get('clone_repository').inputSchema.properties.recurseSubmodules.type, 'boolean');
   assert.equal(tools.get('clone_repository').inputSchema.properties.depth.type, 'integer');
   assert.equal(tools.get('clone_repository').inputSchema.properties.depth.minimum, 1);
+  const annotationKeys = ['destructiveHint', 'idempotentHint', 'openWorldHint', 'readOnlyHint'];
+  for (const tool of tools.values()) assert.deepEqual(Object.keys(tool.annotations).sort(), annotationKeys);
+  assert.deepEqual(tools.get('status').annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  });
+  assert.deepEqual(tools.get('set_working_directory').annotations, {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  });
+  assert.deepEqual(tools.get('add_all').annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false
+  });
+  assert.deepEqual(tools.get('commit').annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: false
+  });
+  assert.deepEqual(tools.get('push').annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true
+  });
+  assert.deepEqual(tools.get('clone_repository').annotations, {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true
+  });
 });
 
 test('gitmcp rejects unknown CLI options instead of forwarding them to Git', async () => {

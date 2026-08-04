@@ -41,7 +41,12 @@ test('safe-images exposes only the read_image tool', async () => {
   const listed = await server(request(2, 'tools/list', {}));
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['read_image']);
   assert.equal(listed.result.tools[0].outputSchema?.type, 'object');
-  assert.equal(listed.result.tools[0].annotations.readOnlyHint, true);
+  assert.deepEqual(listed.result.tools[0].annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  });
 });
 
 test('read_image returns MCP image content and metadata without duplicating base64 in structuredContent', async () => {

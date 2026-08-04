@@ -32,6 +32,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     "args = ['alpha.mjs']",
     'enabled = true',
     'prefix = "a"',
+    'annotation_config = false',
     'startup_timeout_sec = 5',
     'tool_timeout_sec = 15',
     'deferred = true',
@@ -57,6 +58,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.disabledServerNames, ['beta']);
   assert.equal(config.servers[0].name, 'alpha');
   assert.equal(config.servers[0].prefix, 'a');
+  assert.equal(config.servers[0].manageAnnotations, false);
   assert.equal(config.servers[0].requestTimeoutMs, 15000);
   assert.equal(config.servers[0].startupTimeoutMs, 5000);
   assert.equal(config.servers[0].env.CONFIG, 'alpha.json');
@@ -139,6 +141,32 @@ test('gateway config requires publish_tool_directory to be boolean', async () =>
     'enabled = false'
   ].join('\n'), 'utf8');
   await assert.rejects(loadGatewayConfig(path), /publish_tool_directory must be boolean/);
+});
+
+test('gateway config resolves the external tool annotations path beside gateway.toml', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-annotations-path-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    'tool_annotations_path = "annotations/tools.toml"',
+    '[mcp_servers.alpha]',
+    'command = "node"'
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(path);
+  assert.equal(config.toolAnnotationsPath, join(directory, 'annotations', 'tools.toml'));
+  assert.equal(config.servers[0].manageAnnotations, true);
+});
+
+test('gateway config requires annotation_config to be boolean', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-annotation-flag-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'annotation_config = "yes"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /annotation_config must be boolean/);
 });
 
 test('gateway path allowlists require absolute paths', async () => {
