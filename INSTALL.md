@@ -461,13 +461,14 @@ https://azukiazusa.dev/blog/openai-secure-mcp-tunnel/ <br>
 #### 14.2 mcpが読み込まれない
 - `config/gateway.toml`設定ファイル、`tunnel-client.exe`のログをChatGPTに丸投げしてください。
 - それでも解決しない場合、変更を保存してからパソコンを再起動し、新規チャットで始めてください。
-## 15. 推奨カスタム指示
+### 15. 推奨カスタム指示
 `gateway__list_available_tools`を使用するには、`config/gateway.toml`のトップレベルで次を有効にし、Tunnelを再起動してからChatGPT側のカスタムアプリを更新します。<br>
 ```toml
 publish_tool_directory = true
 ```
 ChatGPTの既存のカスタム指示を削除せず、ツール選択に関する指示として次の文章を追加してください。<br>特定のMCP構成を固定せず、後から追加したMCPや動的に公開されたツールも`gateway__list_available_tools`から確認するための共通指示です。<br>
 ```text
+===開始ローカルmcpプラグイン指示===
 以下はツール選択を補助する指示であり、安全規則、ユーザーの明示的な指示、既存の作業手順を上書きしない。
 接続済みのローカルMCPには、後から追加されたツールや動的に公開されるツールが含まれる場合がある。ユーザーの要求を直接満たせるローカルツールが存在する可能性がある場合は、推測、一般論、Web検索、または別の手段へ進む前に、`gateway__list_available_tools`を使用して利用可能なツールの完全な識別子と概要を確認すること。
 `gateway__list_available_tools`が現在のツール一覧に見えない場合は、完全名`gateway__list_available_tools`を起点に接続先のツール探索を行い、見つけたツールを呼び出すこと。曖昧なprefix名だけの検索に依存しないこと。
@@ -482,6 +483,7 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
   * 例: `files__search_text`
   * 例: `files__read_text_file`
   * 例: `files__apply_patch`
+===終了ローカルmcpプラグイン指示===
 ```
 この指示では、Git、画像、ブラウザー、デバッガー、GitHub ActionsなどのMCP名を固定列挙しません。<br>追加または削除されたMCPをカスタム指示へ毎回反映せず、実際に公開されているツールをGatewayから確認します。<br>
 
