@@ -77,7 +77,11 @@ const toolResult = (value, isError = false) => ({
   isError
 });
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
-const runIdSchema = { type: 'string', pattern: '^[1-9][0-9]{0,19}$' };
+const runIdSchema = {
+  type: 'string',
+  pattern: '^[1-9][0-9]{0,19}$',
+  description: 'GitHub Actions run ID from /actions/runs/RUN_ID, not the job ID from /job/JOB_ID.'
+};
 const repositorySchema = {
   type: 'string',
   enum: cli.repositories,

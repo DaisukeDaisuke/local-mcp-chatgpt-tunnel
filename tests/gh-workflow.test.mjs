@@ -98,6 +98,12 @@ test('gh-workflow exposes only read-only workflow inspection tools', async () =>
       openWorldHint: true
     });
   }
+  for (const tool of listed.result.tools.filter((entry) => entry.inputSchema.properties.runId)) {
+    assert.equal(
+      tool.inputSchema.properties.runId.description,
+      'GitHub Actions run ID from /actions/runs/RUN_ID, not the job ID from /job/JOB_ID.'
+    );
+  }
 });
 
 test('gh-workflow builds the requested fixed gh run commands without a shell', async () => {
