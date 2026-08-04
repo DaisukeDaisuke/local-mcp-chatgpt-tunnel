@@ -137,8 +137,70 @@ macOSとLinuxでは`/`を区切りとして扱い、大文字小文字を区別�
 拒否時のエラーには、`disallowed_path_globs`で拒否されたこと、一致したglob、正規化された対象パスが表示されます。<br>
 Gateway側の検査は、ChatGPTから子MCPへ渡るツール引数のガードです。<br>
 同梱の`safe-files`、`safe-images`、`safe-download`、`gitmcp`は同じ設定を子プロセス内でも検査しますが、任意に接続した第三者MCPの内部アクセスをOSレベルで防ぐ機能ではありません。<br>
+### MCPサーバー設定の形式
+Gatewayは、CodexのMCP設定と同じように、MCPごとの設定を`[mcp_servers.<name>]`テーブルへまとめる形式を採用しています。<br>
+Codexの設定ファイルをそのまま読み込む互換機能ではなく、Gatewayが実装している項目だけを認識します。<br>
+`config/gateway.toml`へMCPを追加する場合は、コメント用の`#`を付けず、次のように記述します。以下はGatewayが認識する全オプションを載せたテンプレートです。。<br>
+```toml
+private_use_only = true
+
+[mcp_servers.my_server]
+command = "node"
+args = ['C:\path\to\server.mjs', '--example=value']
+cwd = 'C:\path\to'
+enabled = true
+prefix = "my_server"
+startup_timeout_sec = 30
+tool_timeout_sec = 1800
+serial_group = "my_server"
+deferred = true
+blocked_tools = ["dangerous_tool"]
+blocked_tool_substrings = ["script", "shell", "execute"]
+allowed_directories = ['C:\work\project']
+allowed_files = ['C:\Users\owner\Downloads\upload.png']
+disallowed_directories = ['C:\work\project\private']
+disallowed_files = ['C:\work\project\.env']
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.my_server.start_after]
+server = "controller"
+tool = "prepare_my_server"
+
+[mcp_servers.my_server.stop_after]
+server = "controller"
+tool = "stop_my_server"
+
+[mcp_servers.my_server.env]
+EXAMPLE_CONFIG = 'C:\path\to\config.json'
+```
+| 項目 | 説明 |
+| --- | --- |
+| `private_use_only` | Gateway全体の必須設定です。安全確認のため、必ず`true`にする必要があります。 |
+| `[mcp_servers.<name>]` | 1つのstdio MCPを定義します。`<name>`はGateway内で一意にします。 |
+| `command` | 子MCPを起動する実行ファイルまたはコマンドです。`enabled = false`でない場合は必須です。 |
+| `args` | `command`へ渡す引数を文字列配列で指定します。省略時は引数なしで起動します。 |
+| `cwd` | 子MCPの作業ディレクトリです。相対パスは`gateway.toml`があるディレクトリを基準に解決され、省略時はそのディレクトリを使います。 |
+| `enabled` | `false`にすると設定を残したまま、そのMCPを起動対象から除外します。省略時は有効です。 |
+| `prefix` | ChatGPTへ公開するツール名の接頭辞です。元の`tool_name`は`<prefix>__<tool_name>`として公開されます。省略時は`[mcp_servers.<name>]`の`<name>`を使います。 |
+| `startup_timeout_sec` | 子MCPの起動と初期化を待つ秒数です。正の数で指定し、省略時は30秒です。 |
+| `tool_timeout_sec` | 子MCPのツール呼び出しを待つ秒数です。正の数で指定し、省略時は1800秒です。 |
+| `request_timeout_sec` | `tool_timeout_sec`の互換用別名です。両方ある場合は`tool_timeout_sec`が優先されるため、新しい設定では`tool_timeout_sec`を使用します。 |
+| `serial_group` | 同じ値を持つMCPのツール呼び出しを直列化します。同じブラウザーやリポジトリなど、同時操作させたくない資源に使用します。 |
+| `deferred` | `true`にするとGateway初期化時には起動せず、`start_after`で指定したツールが成功するまで遅延します。省略時は`false`です。 |
+| `blocked_tools` | ChatGPTへ公開しないツール名を完全一致の文字列配列で指定します。 |
+| `blocked_tool_substrings` | ChatGPTへ公開しないツール名の部分文字列を指定します。大文字小文字は区別せず、globや正規表現としては扱いません。 |
+| `allowed_directories` | 指定した絶対パスのディレクトリと、その配下へのアクセスを許可します。 |
+| `allowed_files` | 指定した絶対パスのファイルだけを完全一致で許可します。 |
+| `disallowed_directories` | 許可範囲内であっても拒否するディレクトリと、その配下を絶対パスで指定します。 |
+| `disallowed_files` | 許可範囲内であっても拒否するファイルを絶対パスで指定します。 |
+| `disallowed_path_globs` | 正規化されたパス全体へ適用する拒否globを指定します。ファイルとフォルダの両方が対象です。 |
+| `[mcp_servers.<name>.start_after]` | `server`と`tool`で指定した別MCPのツールが成功した後、このMCPを起動します。通常は`deferred = true`と組み合わせます。 |
+| `[mcp_servers.<name>.stop_after]` | `server`と`tool`で指定した別MCPのツールが成功した後、このMCPを停止します。 |
+| `[mcp_servers.<name>.env]` | 子MCPへ追加で渡す環境変数です。値には文字列、数値、真偽値を指定できます。Gatewayのパスポリシー用に予約された環境変数は上書きできません。 |
+通常のMCPは`deferred = false`または省略で起動します。その場合、`start_after`は不要です。<br>
+`url`によるリモートMCP設定は拒否されます。Codex固有の`tool_output_token_limit`は読み取られても使用されず、このGateway上では効果を持ちません。<br>
 ### 公開ツールの除外
-ツール名の完全一致は`blocked_tools`、大文字小文字を区別しない部分一致は`blocked_tool_substrings`で非公開にできます。
+ツール名の完全一致は`blocked_tools`、大文字小文字を区別しない部分一致は`blocked_tool_substrings`で非公開にできます。。<br>
 ```toml
 blocked_tools = ["dangerous_tool"]
 blocked_tool_substrings = ["script", "shell", "execute"]
