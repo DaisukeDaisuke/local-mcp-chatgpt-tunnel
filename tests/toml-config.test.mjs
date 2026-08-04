@@ -26,6 +26,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   const path = join(directory, 'gateway.toml');
   await writeFile(path, [
     'private_use_only = true',
+    'publish_tool_directory = true',
     '[mcp_servers.alpha]',
     'command = "node"',
     "args = ['alpha.mjs']",
@@ -52,6 +53,8 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   ].join('\n'), 'utf8');
   const config = await loadGatewayConfig(path, { platform: 'win32' });
   assert.equal(config.servers.length, 1);
+  assert.equal(config.publishToolDirectory, true);
+  assert.deepEqual(config.disabledServerNames, ['beta']);
   assert.equal(config.servers[0].name, 'alpha');
   assert.equal(config.servers[0].prefix, 'a');
   assert.equal(config.servers[0].requestTimeoutMs, 15000);
@@ -122,6 +125,20 @@ test('gateway config permits every MCP entry to be disabled', async () => {
   ].join('\n'), 'utf8');
   const config = await loadGatewayConfig(path);
   assert.deepEqual(config.servers, []);
+  assert.deepEqual(config.disabledServerNames, ['files']);
+  assert.equal(config.publishToolDirectory, false);
+});
+
+test('gateway config requires publish_tool_directory to be boolean', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-tool-directory-config-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    'publish_tool_directory = "yes"',
+    '[mcp_servers.files]',
+    'enabled = false'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /publish_tool_directory must be boolean/);
 });
 
 test('gateway path allowlists require absolute paths', async () => {

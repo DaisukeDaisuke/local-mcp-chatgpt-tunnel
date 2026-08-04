@@ -1,4 +1,6 @@
 private_use_only = true
+# Publishes gateway__list_available_tools. It reads only the gateway's existing in-memory tool registry.
+publish_tool_directory = false
 
 # safe-files uses cwd as its workspace root. The server script path must therefore be absolute.
 [mcp_servers.files]

@@ -301,3 +301,89 @@ test('tools/list waits for concurrent initialization when a child MCP is unavail
   assert.equal(listed.id, 2);
   assert.deepEqual(listed.result.tools, []);
 });
+
+test('optional gateway tool directory returns full names, prefix matches, counts, and disabled proxy names', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-tool-directory-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-tool-directory-config-'));
+  const serverPath = join(workspace, 'server.mjs');
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(serverPath, `
+const tools = [
+  { name: 'plain', description: 'Allowed tool overview', inputSchema: { type: 'object' } },
+  { name: 'dangerous', description: 'Must not be exposed', inputSchema: { type: 'object' } }
+];
+let initialized = false;
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).replace(/\\r$/, '');
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    let reply = null;
+    if (request.method === 'initialize') {
+      initialized = true;
+      reply = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'directory-fixture', version: '1.0.0' } } };
+    } else if (request.method === 'tools/list' && initialized) {
+      reply = { jsonrpc: '2.0', id: request.id, result: { tools } };
+    }
+    if (reply) process.stdout.write(JSON.stringify(reply) + '\\n');
+  }
+});
+`, 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    'publish_tool_directory = true',
+    '[mcp_servers.demo]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "demo"',
+    'blocked_tools = ["dangerous"]',
+    '[mcp_servers.offline]',
+    'enabled = false'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
+  const listed = await nextLine(child.stdout);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['gateway__list_available_tools', 'demo__plain']);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'gateway__list_available_tools', arguments: { prefix: 'DEMO__PL' }
+  } })}\n`);
+  const filtered = await nextLine(child.stdout);
+  assert.equal(filtered.result.isError, false);
+  assert.deepEqual(filtered.result.structuredContent, {
+    tools: [{ name: 'demo__plain', description: 'Allowed tool overview' }],
+    availableToolCount: 1,
+    enabledProxyCount: 1,
+    rejectedToolCount: 1,
+    disabledProxyNames: ['offline']
+  });
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'gateway__list_available_tools', arguments: { prefix: 'no-such-prefix' }
+  } })}\n`);
+  const fallback = await nextLine(child.stdout);
+  assert.equal(fallback.result.structuredContent.availableToolCount, 2);
+  assert.deepEqual(fallback.result.structuredContent.tools.map((tool) => tool.name), [
+    'demo__plain',
+    'gateway__list_available_tools'
+  ]);
+  assert.equal(fallback.result.structuredContent.tools[0].inputSchema, undefined);
+  assert.equal(fallback.result.structuredContent.tools[0].outputSchema, undefined);
+});

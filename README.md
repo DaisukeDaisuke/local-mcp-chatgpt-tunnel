@@ -31,6 +31,7 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 - 危険なツールを名前または部分文字列で非公開にする
 - 同時実行させたくないMCPを`serial_group`で直列化する
 - 必要に応じて、特定のMCP全体を無効化する
+- 必要に応じて、公開済みツールをフル識別子またはprefixで検索する内蔵ディレクトリを公開する
 ## このリポジトリが行わないこと
 - OpenAI Responses APIやChat Completions APIの呼び出し
 - 独自AIエージェント、独自ハーネス、モデル課金処理の実装
@@ -91,6 +92,7 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 接続するMCPの起動コマンドや引数は、Gateway本体ではなく`config/gateway.toml`の`[mcp_servers.<name>]`へ記述します。<br>
 ```toml
 private_use_only = true
+publish_tool_directory = false
 [mcp_servers.example]
 command = "py"
 args = ['C:\path\to\server.py']
@@ -143,6 +145,7 @@ Codexの設定ファイルをそのまま読み込む互換機能ではなく、
 `config/gateway.toml`へMCPを追加する場合は、コメント用の`#`を付けず、次のように記述します。以下はGatewayが認識する全オプションを載せたテンプレートです。。<br>
 ```toml
 private_use_only = true
+publish_tool_directory = false
 
 [mcp_servers.my_server]
 command = "node"
@@ -176,6 +179,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | 項目 | 説明 |
 | --- | --- |
 | `private_use_only` | Gateway全体の必須設定です。安全確認のため、必ず`true`にする必要があります。 |
+| `publish_tool_directory` | `true`にすると内蔵ツール`gateway__list_available_tools`を公開します。省略時と`false`では公開しません。 |
 | `[mcp_servers.<name>]` | 1つのstdio MCPを定義します。`<name>`はGateway内で一意にします。 |
 | `command` | 子MCPを起動する実行ファイルまたはコマンドです。`enabled = false`でない場合は必須です。 |
 | `args` | `command`へ渡す引数を文字列配列で指定します。省略時は引数なしで起動します。 |
@@ -199,6 +203,11 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | `[mcp_servers.<name>.env]` | 子MCPへ追加で渡す環境変数です。値には文字列、数値、真偽値を指定できます。Gatewayのパスポリシー用に予約された環境変数は上書きできません。 |
 通常のMCPは`deferred = false`または省略で起動します。その場合、`start_after`は不要です。<br>
 `url`によるリモートMCP設定は拒否されます。Codex固有の`tool_output_token_limit`は読み取られても使用されず、このGateway上では効果を持ちません。<br>
+### 内蔵ツールディレクトリ
+トップレベルで`publish_tool_directory = true`を指定すると、`gateway__list_available_tools`を公開します。<br>
+このツールはGatewayが既に保持している公開ツールレジストリだけを参照し、設定ファイル、ファイルシステム、子MCPの追加情報を読みません。`enabled = false`のMCPは起動せず、名前だけを`disabledProxyNames`へ返します。<br>
+入力を省略すると現在利用可能なツールをすべて返し、`prefix`を指定すると大文字小文字を区別せずフル識別子の先頭一致で絞り込みます。該当が0件の場合はエラーにせず、全件を返します。<br>
+返却するツール情報は`chrome-devtools__click`のような省略しない公開名と説明だけです。入力スキーマ、出力スキーマ、起動コマンド、引数、パス、環境変数、拒否されたツール名は返しません。`enabledProxyCount`は設定上有効なMCP数、`rejectedToolCount`は起動済みMCPから公開を拒否したツール数です。<br>
 ### 公開ツールの除外
 ツール名の完全一致は`blocked_tools`、大文字小文字を区別しない部分一致は`blocked_tool_substrings`で非公開にできます。。<br>
 ```toml

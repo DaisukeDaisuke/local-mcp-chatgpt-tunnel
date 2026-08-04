@@ -126,12 +126,27 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
     throw new Error(`Gateway configuration is not readable at ${resolvedConfigPath}: ${error.message}`);
   }
   if (raw.private_use_only !== true) throw new Error('gateway.toml must set private_use_only = true');
+  if (raw.publish_tool_directory !== undefined && typeof raw.publish_tool_directory !== 'boolean') {
+    throw new Error('gateway.toml publish_tool_directory must be boolean');
+  }
   if (!raw.mcp_servers || typeof raw.mcp_servers !== 'object' || Array.isArray(raw.mcp_servers)) {
     throw new Error('gateway.toml must define at least one [mcp_servers.<name>] table');
   }
   const base = dirname(resolvedConfigPath);
-  const servers = Object.entries(raw.mcp_servers).map(([name, server]) => normalizeServer(name, server, base, platform)).filter(Boolean);
-  return { configPath: resolvedConfigPath, privateUseOnly: true, servers };
+  const servers = [];
+  const disabledServerNames = [];
+  for (const [name, server] of Object.entries(raw.mcp_servers)) {
+    const normalized = normalizeServer(name, server, base, platform);
+    if (normalized) servers.push(normalized);
+    else disabledServerNames.push(name);
+  }
+  return {
+    configPath: resolvedConfigPath,
+    privateUseOnly: true,
+    publishToolDirectory: raw.publish_tool_directory === true,
+    servers,
+    disabledServerNames
+  };
 }
 
 export const serverConfigInternals = {

@@ -64,6 +64,7 @@ test('gateway uses Codex-style generic MCP tables and honors enabled entries', a
   assert.match(config, /\[mcp_servers\.downloads\]/);
   assert.match(config, /command = "node"/);
   assert.match(config, /enabled = true/);
+  assert.match(config, /publish_tool_directory = false/);
   assert.match(config, /disallowed_path_globs = \['\*\*\.ssh\*\*'\]/);
   const loader = await readFile(new URL('../app/server-config.mjs', import.meta.url), 'utf8');
   assert.match(loader, /raw\.mcp_servers/);

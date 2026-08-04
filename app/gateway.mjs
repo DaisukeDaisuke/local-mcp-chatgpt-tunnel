@@ -3,6 +3,12 @@ import { scrubSecretEnvironment } from './child-environment.mjs';
 import { ToolPathPolicy } from './path-policy.mjs';
 import { StdioMcpChild } from './stdio-child.mjs';
 import { loadGatewayConfig } from './server-config.mjs';
+import {
+  TOOL_DIRECTORY_NAME,
+  createToolDirectoryPayload,
+  toolDirectoryDefinition,
+  toolDirectoryMcpResult
+} from './tool-directory.mjs';
 import { assertNotElevatedWindows } from './windows-integrity.mjs';
 
 scrubSecretEnvironment(process.env);
@@ -59,10 +65,17 @@ function rebuildRoutes() {
     for (const tool of child.tools) {
       if (blockedToolReason(child.config, tool.name)) continue;
       const publicName = namespacedName(child.config.prefix, tool.name);
+      if (config.publishToolDirectory && publicName === TOOL_DIRECTORY_NAME) throw new Error(`Tool name collision: ${publicName}`);
       if (toolRoutes.has(publicName)) throw new Error(`Tool name collision: ${publicName}`);
       toolRoutes.set(publicName, { child, originalName: tool.name, tool: { ...tool, name: publicName } });
     }
   }
+}
+
+function publishedTools() {
+  const tools = [...toolRoutes.values()].map((route) => route.tool);
+  if (config.publishToolDirectory) tools.unshift(toolDirectoryDefinition);
+  return tools;
 }
 
 function toolExposureReport() {
@@ -203,8 +216,26 @@ async function handle(request) {
   if (!started && initializationPromise) await initializationPromise;
   if (!started) return errorResponse(request.id, -32002, 'Server not initialized');
   if (request.method === 'ping') return response(request.id, {});
-  if (request.method === 'tools/list') return response(request.id, { tools: [...toolRoutes.values()].map((route) => route.tool) });
+  if (request.method === 'tools/list') return response(request.id, { tools: publishedTools() });
   if (request.method === 'tools/call') {
+    if (config.publishToolDirectory && request.params?.name === TOOL_DIRECTORY_NAME) {
+      const toolArguments = request.params?.arguments ?? {};
+      if (toolArguments.prefix !== undefined && typeof toolArguments.prefix !== 'string') {
+        return response(request.id, {
+          content: [{ type: 'text', text: 'prefix must be a string' }],
+          isError: true
+        });
+      }
+      const report = toolExposureReport();
+      const payload = createToolDirectoryPayload({
+        tools: publishedTools(),
+        prefix: toolArguments.prefix,
+        enabledProxyCount: config.servers.length,
+        rejectedToolCount: report.disabled.length,
+        disabledProxyNames: config.disabledServerNames
+      });
+      return response(request.id, toolDirectoryMcpResult(payload));
+    }
     const route = toolRoutes.get(request.params?.name);
     if (!route) return errorResponse(request.id, -32602, `Unknown tool: ${request.params?.name ?? ''}`);
     try {
