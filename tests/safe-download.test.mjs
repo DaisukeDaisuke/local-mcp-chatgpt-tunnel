@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
-import { access, mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -125,6 +125,10 @@ test('download_zip lists directories with ripgrep, supports safe globs and exact
 
 test('download_zip rejects scope, option, archive-name, blocked-file, and shell-injection attempts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safe-download-injection-'));
+  const outside = await mkdtemp(join(tmpdir(), 'safe-download-outside-'));
+  const outsideFile = join(outside, 'outside.txt');
+  await writeFile(outsideFile, 'outside', 'utf8');
+  const canonicalRoot = await realpath(root);
   await mkdir(join(root, '--aaa'));
   await mkdir(join(root, 'semi;name'));
   await writeFile(join(root, '--aaa', 'inside.js'), 'safe', 'utf8');
@@ -138,6 +142,13 @@ test('download_zip rejects scope, option, archive-name, blocked-file, and shell-
     }));
     assert.equal(result.result.isError, false, path);
   }
+  const outsideRefused = await server(request(id++, 'tools/call', {
+    name: 'download_zip', arguments: { path: outsideFile }
+  }));
+  assert.equal(outsideRefused.result.isError, true);
+  assert.match(outsideRefused.result.structuredContent.error, /outside all configured download roots/);
+  assert.match(outsideRefused.result.structuredContent.error, /Allowed directories \(absolute\):/);
+  assert.match(outsideRefused.result.structuredContent.error, new RegExp(canonicalRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   for (const argumentsValue of [
     { path: '.', archiveName: '../escape.zip' },
     { path: '.', archiveName: 'bad|name.zip' },

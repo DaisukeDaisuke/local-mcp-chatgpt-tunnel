@@ -140,6 +140,34 @@ test('bundled gh-workflow MCP is read-only and never invokes a shell', async () 
   assert.match(config, /\[mcp_servers\.gh_workflow\][\s\S]*?cwd = '[^']+'[\s\S]*?enabled = false/);
 });
 
+test('gitmcp preserves normal Git configuration while disabling only executable repository-controlled paths', async () => {
+  const source = await readFile(new URL('../mcp/gitmcp/server.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /GIT_CONFIG_NOSYSTEM/);
+  assert.doesNotMatch(source, /GIT_CONFIG_KEY_\d+: 'core\.attributesFile'/);
+  assert.doesNotMatch(source, /GIT_CONFIG_KEY_\d+: '(?:commit|tag|merge)\.gpgsign'/);
+  assert.doesNotMatch(source, /GIT_CONFIG_KEY_\d+: 'diff\.external'/);
+  assert.doesNotMatch(source, /--no-gpg-sign/);
+  assert.doesNotMatch(source, /--no-textconv|--no-ext-diff/);
+  assert.match(source, /'--ext-diff', '--textconv'/);
+  assert.match(source, /configuredCommitSigningRespected: true/);
+  assert.match(source, /lineEndingConversionRespected: true/);
+  assert.match(source, /systemAndGlobalCleanSmudgeFiltersRespected: true/);
+  assert.match(source, /\/\^\(local\|worktree\)\\s\//);
+});
+
+test('gateway publishes an exact access-scope tool and installation guidance requires using it instead of remembered paths', async () => {
+  const gateway = await readFile(new URL('../app/gateway.mjs', import.meta.url), 'utf8');
+  const scope = await readFile(new URL('../app/access-scope.mjs', import.meta.url), 'utf8');
+  const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
+  assert.match(scope, /get_gateway_access_scope/);
+  assert.match(scope, /exact current gateway-enforced allow\/deny path scope/i);
+  assert.match(gateway, /pathPolicy\.describe\(\)/);
+  assert.match(gateway, /call it before assuming a working directory or allowed local path/);
+  assert.match(install, /過去チャットの記憶で補わない/);
+  assert.match(install, /get_gateway_access_scope/);
+  assert.match(install, /gateway__list_available_tools/);
+});
+
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {
   await assert.rejects(access(new URL('../mcp/ghidra', import.meta.url)));
   await assert.rejects(access(new URL('../mcp/dq9-test', import.meta.url)));

@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  ACCESS_SCOPE_TOOL_NAME,
+  accessScopeMcpResult,
+  accessScopeToolDefinition
+} from './access-scope.mjs';
 import { scrubSecretEnvironment } from './child-environment.mjs';
 import { ToolPathPolicy } from './path-policy.mjs';
 import { StdioMcpChild } from './stdio-child.mjs';
@@ -72,6 +77,7 @@ function rebuildRoutes() {
   toolRoutes.clear();
   for (const child of children) {
     for (const tool of child.tools) {
+      if (tool.name === ACCESS_SCOPE_TOOL_NAME) continue;
       if (blockedToolReason(child.config, tool.name)) continue;
       const publicName = namespacedName(child.config.prefix, tool.name);
       if (config.publishToolDirectory && publicName === TOOL_DIRECTORY_NAME) throw new Error(`Tool name collision: ${publicName}`);
@@ -81,6 +87,15 @@ function rebuildRoutes() {
         : tool;
       toolRoutes.set(publicName, { child, originalName: tool.name, tool: { ...annotatedTool, name: publicName } });
     }
+    const accessScopePublicName = namespacedName(child.config.prefix, ACCESS_SCOPE_TOOL_NAME);
+    if (config.publishToolDirectory && accessScopePublicName === TOOL_DIRECTORY_NAME) throw new Error(`Tool name collision: ${accessScopePublicName}`);
+    if (toolRoutes.has(accessScopePublicName)) throw new Error(`Tool name collision: ${accessScopePublicName}`);
+    toolRoutes.set(accessScopePublicName, {
+      child,
+      originalName: ACCESS_SCOPE_TOOL_NAME,
+      synthetic: 'access-scope',
+      tool: { ...accessScopeToolDefinition, name: accessScopePublicName }
+    });
   }
 }
 
@@ -90,11 +105,18 @@ function publishedTools() {
   return tools;
 }
 
+function supportsGatewayErrorEnvelope(tool) {
+  return tool?.outputSchema?.type === 'object'
+    && tool.outputSchema.properties?.ok?.type === 'boolean'
+    && tool.outputSchema.properties?.result?.type === 'object';
+}
+
 function toolExposureReport() {
   const disabled = [];
   let found = 0;
   for (const child of children) {
     for (const tool of child.tools) {
+      if (tool.name === ACCESS_SCOPE_TOOL_NAME) continue;
       found += 1;
       const reason = blockedToolReason(child.config, tool.name);
       if (!reason) continue;
@@ -231,7 +253,7 @@ async function handle(request) {
       protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
       capabilities: { tools: { listChanged: true } },
       serverInfo: { name: 'local-mcp-gateway', version: '0.5.0' },
-      instructions: 'Private stdio MCP gateway for ChatGPT Secure MCP Tunnel. Enabled child servers come only from gateway.toml, and public tool names are namespaced.'
+      instructions: 'Private stdio MCP gateway for ChatGPT Secure MCP Tunnel. Enabled child servers come only from gateway.toml, and public tool names are namespaced. Every child prefix also exposes get_gateway_access_scope; call it before assuming a working directory or allowed local path.'
     });
   }
   if (request.method === 'notifications/initialized') {
@@ -265,6 +287,16 @@ async function handle(request) {
     if (!route) return errorResponse(request.id, -32602, `Unknown tool: ${request.params?.name ?? ''}`);
     try {
       const toolArguments = request.params?.arguments ?? {};
+      if (route.synthetic === 'access-scope') {
+        if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments) || Object.keys(toolArguments).length > 0) {
+          throw new Error(`${request.params?.name} does not accept arguments`);
+        }
+        return response(request.id, accessScopeMcpResult({
+          ...(await route.child.pathPolicy.describe()),
+          prefix: route.child.config.prefix,
+          childProcessCwd: route.child.config.cwd
+        }));
+      }
       await route.child.pathPolicy.assertToolArguments(route.originalName, toolArguments);
       const result = await queues.run(route.child.config.serialGroup, () => route.child.request('tools/call', {
         name: route.originalName,
@@ -274,10 +306,19 @@ async function handle(request) {
       await applyLifecycle(route, result);
       return response(request.id, result);
     } catch (error) {
-      return response(request.id, {
-        content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+      const message = error instanceof Error ? error.message : String(error);
+      const result = {
+        content: [{ type: 'text', text: message }],
         isError: true
-      });
+      };
+      if (error?.accessScope && supportsGatewayErrorEnvelope(route.tool)) {
+        result.structuredContent = {
+          ok: false,
+          error: message,
+          result: { accessScope: error.accessScope }
+        };
+      }
+      return response(request.id, result);
     }
   }
   return errorResponse(request.id, -32601, 'Method not found');

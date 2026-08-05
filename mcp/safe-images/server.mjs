@@ -133,6 +133,12 @@ const workingDirectory = async () => {
   return workingDirectoryPromise;
 };
 
+const outsideRootsError = (message, allowed) => new Error([
+  message,
+  `Allowed directories (absolute): ${allowed.length > 0 ? allowed.join(', ') : '(none)'}`,
+  'Allowed files (absolute): (none)'
+].join('\n'));
+
 async function resolveImagePath(path) {
   if (typeof path !== 'string' || path.length === 0 || path.includes('\0')) throw new Error('Path must be a non-empty string');
   if (/^(?:\\\\|\/\/)/.test(path)) throw new Error('UNC paths are not supported');
@@ -140,13 +146,13 @@ async function resolveImagePath(path) {
   const candidate = resolve(isAbsolute(path) ? path : join(await workingDirectory(), path));
   rejectAlternateDataStream(candidate);
   const root = allowed.find((entry) => within(entry, candidate));
-  if (!root) throw new Error('Path is outside all configured image roots');
+  if (!root) throw outsideRootsError('Path is outside all configured image roots', allowed);
   assertSafePath(root, candidate);
   const linkInfo = await lstat(candidate);
   if (linkInfo.isSymbolicLink()) throw new Error('Symbolic-link image paths are not supported');
   if (!linkInfo.isFile()) throw new Error('Image path is not a regular file');
   const actual = await realpath(candidate);
-  if (!within(root, actual)) throw new Error('Resolved path escaped the configured image root');
+  if (!within(root, actual)) throw outsideRootsError('Resolved path escaped the configured image root', allowed);
   assertSafePath(root, actual);
   assertNotGlobDenied(actual, 'read_image path');
   return actual;

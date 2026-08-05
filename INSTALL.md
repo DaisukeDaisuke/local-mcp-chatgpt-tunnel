@@ -546,10 +546,13 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
 以下はツール選択を補助する指示であり、安全規則、ユーザーの明示的な指示、既存の作業手順を上書きしない。
 `gateway__list_available_tools`は`config/gateway.toml`のトップレベルで`publish_tool_directory = true`にすると有効化でき、ユーザーの意向で無効化される場合もある。ローカルMCPで直接処理できる可能性がある場合は、推測、一般論、Web検索、別手段へ進む前に完全名を起点に探索し、利用可能なら必ず実際に呼び出して完全なツール名と説明を確認すること。呼び出さずに無効、未公開、利用不能、不存在と判断してはならず、実際に探索しても利用できない場合だけ現在表示されているツールで判断すること。
 `prefix`は既知の完全名または先頭文字列がある場合だけ指定し、不明なら省略すること。0件でも全件が返るため別のprefixを推測して繰り返さず、返された完全名と説明から最も直接的なツールを選ぶこと。ツール探索だけを目的にWeb検索しないこと。
-使用するMCPグループ（`files__`、`git__`など）に`get_working_directory`または`roots`がある場合は、そのチャットで同グループを初めて呼ぶ直前に現在の作業ディレクトリを確認すること。ユーザー指定の対象と異なる場合は、`set_working_directory`があれば変更可能か確かめ、許可範囲外などで変更できない場合は別の場所を操作せず、対象パスを`allowed_directories`へ追加するよう提案すること。作業ディレクトリを確認するツールがない外部MCPでは、この確認を行わないこと。
+使用するMCPグループの作業ディレクトリ、相対パス基準、許可範囲、拒否範囲のいずれかが不明な場合は、推測や過去チャットの記憶で補わないこと。まず現在のツール一覧から同じprefixの`get_gateway_access_scope`を探して実際に呼び出し、Gatewayが現在適用している`workingDirectory`、`relativePathBase`、`configured.allowedDirectories`、`configured.allowedFiles`、`configured.disallowedDirectories`、`configured.disallowedFiles`、`configured.protectedFiles`、`configured.disallowedPathGlobs`と、正規化済みの`effective.*`を確認すること。完全名が不明なら`gateway__list_available_tools`をprefix付きまたは引数なしで呼んで探すこと。
+使用するMCPグループ（`files__`、`git__`など）に`get_working_directory`または`roots`がある場合は、そのチャットで同グループを初めて呼ぶ直前に現在の作業ディレクトリを確認すること。`get_gateway_access_scope`と値が食い違う場合は操作を止め、設定またはMCPの同期不良としてユーザーへ報告すること。ユーザー指定の対象と異なる場合は、`set_working_directory`があれば変更可能か確かめ、許可範囲外などで変更できない場合は別の場所を操作せず、対象パスを`allowed_directories`へ追加するよう提案すること。
+パスが許可範囲外として拒否された場合は、エラー本文または`structuredContent.result.accessScope`に返された絶対パスの許可ディレクトリ・許可ファイルだけを現在の候補として扱うこと。拒否後に過去チャット、既定値、よくあるパスから別の作業ディレクトリを捏造して再試行しないこと。
+`gitmcp`を使用するときは、`.gitignore`、`.gitattributes`、改行変換、filter、署名などのGit標準設定を無視して独自にファイル集合やtext/binary判定を作らないこと。判断に必要なら、現在のツール一覧から同じprefixの`list_worktree_files`、`check_ignore`、`check_attributes`、`get_effective_config`、`get_policy`を探してGit自身の判定を確認すること。
 ローカルファイルの一覧、検索、読み書き、置換、パッチ適用には`files__`を優先すること。ユーザーが別ツールを指定した場合、または固有機能が必要な場合だけ他ツールの付随的なファイル操作を使うこと。
 任意コード、コマンド、シェル、スクリプト、プロセスを実行できるMCPは、このチャット履歴に今回の目的と対象への明示的な許可がある場合だけ呼ぶこと。許可がなければそのターンは許可を求めて終了し、許可前に別の任意コード実行ツールへ切り替えず、過去の許可を別目的や対象へ流用しないこと。
-`files__roots`が見えなくても、`gateway__list_available_tools`で確認する前に`files__`が無効、利用不能、不存在と断定しないこと。確認後も`files__`がなく、他の公開ツールにもファイル編集機能がない場合だけ編集不能と判断し、推測で代替せず理由を説明すること。
+`files__roots`や`files__get_gateway_access_scope`が見えなくても、`gateway__list_available_tools`で確認する前に`files__`が無効、利用不能、不存在と断定しないこと。確認後も`files__`がなく、他の公開ツールにもファイル編集機能がない場合だけ編集不能と判断し、推測で代替せず理由を説明すること。
 MCPの有効状態、公開ツール、`allowed_directories`、`allowed_files`などの許可設定は、ユーザーの明示的な指示なく変更、回避、緩和しないこと。変更方法を尋ねられた場合は`config/gateway.example.toml`を参照し、`config/gateway.toml`の該当設定、GatewayとTunnelの再起動、ChatGPT側のカスタムアプリ更新が必要と説明すること。明示的に変更を指示された場合だけ、安全なファイル編集手段で`config/gateway.toml`を編集すること。
 `files__`の代表例は`roots`、`get_working_directory`、`set_working_directory`、`list_files`、`search_text`、`file_info`、`read_text`、`apply_patch`である。`read_text`は単一または複数ファイルの全体・行範囲読み取りに対応する。
 ===終了ローカルmcpプラグイン指示===

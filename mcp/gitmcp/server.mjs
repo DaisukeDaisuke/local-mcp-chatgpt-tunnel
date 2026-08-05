@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { lstat, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
@@ -45,6 +45,8 @@ Options:
 The disable options affect only push, pull, and clone_repository. Local Git tools such as status,
 diff, switch_branch, add_all, and commit remain available while this MCP server is enabled.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
+Standard Git ignore rules, attributes, line-ending conversion, system/global filters, and configured
+commit signing are preserved. Repository-local executable Git configuration is rejected.
 Git is always spawned with shell=false and fixed subcommands and options.
 `;
 
@@ -91,9 +93,29 @@ const repositorySchema = () => ({
   properties: { repositoryPath: { type: 'string', default: '.' } },
   additionalProperties: false
 });
+const repositoryPathsSchema = () => ({
+  type: 'object',
+  properties: {
+    repositoryPath: { type: 'string', default: '.' },
+    paths: {
+      type: 'array',
+      items: { type: 'string', minLength: 1, maxLength: 4096 },
+      minItems: 1,
+      maxItems: 100
+    }
+  },
+  required: ['paths'],
+  additionalProperties: false
+});
 
 const schemas = [
   { name: 'roots', description: 'List allowed and denied Git paths and the current working directory.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: READ_ONLY_ANNOTATIONS },
+  {
+    name: 'get_policy',
+    description: 'Describe which standard Git ignore, attribute, line-ending, filter, signing, and configuration behaviors this MCP preserves or deliberately disables.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: READ_ONLY_ANNOTATIONS
+  },
   { name: 'get_working_directory', description: 'Return the directory used to resolve relative repository paths.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: READ_ONLY_ANNOTATIONS },
   {
     name: 'set_working_directory',
@@ -101,8 +123,12 @@ const schemas = [
     inputSchema: { type: 'object', properties: { path: { type: 'string', minLength: 1 } }, required: ['path'], additionalProperties: false },
     annotations: LOCAL_STATE_ANNOTATIONS
   },
-  { name: 'status', description: 'Return porcelain Git status.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
-  { name: 'ls_files', description: 'List tracked files without exposing .git internals.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'status', description: 'Return porcelain Git status. Standard Git ignore rules are respected for untracked files.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'ls_files', description: 'List tracked files without exposing .git internals. Tracked files remain listed even if a later ignore rule matches them.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'list_worktree_files', description: 'List tracked files and non-ignored untracked files using Git exclude rules, including .gitignore and configured excludes files.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'check_ignore', description: 'Ask Git which ignore rule applies to each repository path and whether that rule leaves the path ignored.', inputSchema: repositoryPathsSchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'check_attributes', description: 'Ask Git for all effective attributes on each repository path, including text, binary, diff, merge, filter, and line-ending attributes.', inputSchema: repositoryPathsSchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'get_effective_config', description: 'Return behavior-relevant effective Git configuration with scope and origin, excluding credentials and author name/email.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'branches', description: 'List local and remote branches and identify the current branch.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'remotes', description: 'List configured remote names and URLs.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   {
@@ -113,7 +139,7 @@ const schemas = [
   },
   {
     name: 'diff',
-    description: 'Return a working-tree or staged diff with external diff commands disabled.',
+    description: 'Return a working-tree or staged diff while respecting Git binary/text attributes and trusted system/global external diff and textconv configuration. Repository-local executable diff configuration is rejected.',
     inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, staged: { type: 'boolean', default: false } }, additionalProperties: false },
     annotations: READ_ONLY_ANNOTATIONS
   },
@@ -123,10 +149,10 @@ const schemas = [
     inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, branch: { type: 'string', minLength: 1, maxLength: 255 }, create: { type: 'boolean', default: false } }, required: ['branch'], additionalProperties: false },
     annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
-  { name: 'add_all', description: 'Stage all changes with the fixed command git add --all -- .', inputSchema: repositorySchema(), annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS },
+  { name: 'add_all', description: 'Stage all non-ignored changes with the fixed command git add --all -- . Standard Git ignore, attributes, clean filters, and line-ending conversion are respected.', inputSchema: repositorySchema(), annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS },
   {
     name: 'commit',
-    description: 'Commit already staged changes using a literal message. This tool does not stage files.',
+    description: 'Commit already staged changes using a literal message. Configured commit signing is respected; Git hooks remain disabled. This tool does not stage files.',
     inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, message: { type: 'string', minLength: 1 } }, required: ['message'], additionalProperties: false },
     annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
@@ -224,6 +250,14 @@ async function workingDirectory() {
   return workingDirectoryPromise;
 }
 
+function outsidePolicyError(message, rules) {
+  return new Error([
+    message,
+    `Allowed directories (absolute): ${rules.allowedDirectories.length > 0 ? rules.allowedDirectories.join(', ') : '(none)'}`,
+    `Allowed files (absolute): ${rules.allowedFiles.length > 0 ? rules.allowedFiles.join(', ') : '(none)'}`
+  ].join('\n'));
+}
+
 function lexicalCandidate(path, base) {
   if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
   return resolve(isAbsolute(path) ? path : join(base, path));
@@ -235,7 +269,7 @@ async function assertAllowedExisting(path) {
   assertNotGlobDenied(actual, 'Git path');
   const rules = await policy();
   const allowed = rules.allowedDirectories.some((root) => within(root, actual)) || rules.allowedFiles.some((file) => same(file, actual));
-  if (!allowed) throw new Error('Path is outside allowed_directories and allowed_files');
+  if (!allowed) throw outsidePolicyError('Path is outside allowed_directories and allowed_files', rules);
   const denied = rules.disallowedDirectories.some((root) => within(root, actual)) || rules.disallowedFiles.some((file) => same(file, actual));
   if (denied) throw new Error('Path is denied by disallowed_directories or disallowed_files');
   return actual;
@@ -252,7 +286,7 @@ async function assertAllowedNewDirectory(parentDirectory, destinationDirectory) 
   assertNotGlobDenied(destination, 'Git clone destination');
   if (!within(parent, destination)) throw new Error('Clone destination escaped parentDirectory');
   const rules = await policy();
-  if (!rules.allowedDirectories.some((root) => within(root, destination))) throw new Error('Clone destination is outside allowed_directories');
+  if (!rules.allowedDirectories.some((root) => within(root, destination))) throw outsidePolicyError('Clone destination is outside allowed_directories', rules);
   if (rules.disallowedDirectories.some((root) => within(root, destination)) || rules.disallowedFiles.some((file) => same(file, destination))) throw new Error('Clone destination is denied');
   try { await lstat(destination); throw new Error('Clone destination already exists'); }
   catch (error) { if (error?.code !== 'ENOENT') throw error; }
@@ -276,46 +310,36 @@ function safeCloneUrl(value) {
   throw new Error('Clone URL must use http, https, ssh, or git@host:path syntax');
 }
 
-async function runGit(cwd, args) {
+async function runGit(cwd, args, { input, acceptedExitCodes = [0] } = {}) {
   return new Promise((resolvePromise, reject) => {
     const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const environment = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_OPTIONAL_LOCKS: '0',
+      GIT_CONFIG_COUNT: '7',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+      GIT_CONFIG_VALUE_0: nullPath,
+      GIT_CONFIG_KEY_1: 'protocol.file.allow',
+      GIT_CONFIG_VALUE_1: 'never',
+      GIT_CONFIG_KEY_2: 'protocol.ext.allow',
+      GIT_CONFIG_VALUE_2: 'never',
+      GIT_CONFIG_KEY_3: 'protocol.http.allow',
+      GIT_CONFIG_VALUE_3: 'always',
+      GIT_CONFIG_KEY_4: 'protocol.https.allow',
+      GIT_CONFIG_VALUE_4: 'always',
+      GIT_CONFIG_KEY_5: 'protocol.ssh.allow',
+      GIT_CONFIG_VALUE_5: 'always',
+      GIT_CONFIG_KEY_6: 'core.fsmonitor',
+      GIT_CONFIG_VALUE_6: 'false'
+    };
+    delete environment.GIT_EXTERNAL_DIFF;
     const child = spawn('git', args, {
       cwd,
       shell: false,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_OPTIONAL_LOCKS: '0',
-        GIT_EXTERNAL_DIFF: '',
-        GIT_CONFIG_COUNT: '12',
-        GIT_CONFIG_KEY_0: 'core.hooksPath',
-        GIT_CONFIG_VALUE_0: nullPath,
-        GIT_CONFIG_KEY_1: 'diff.external',
-        GIT_CONFIG_VALUE_1: '',
-        GIT_CONFIG_KEY_2: 'core.attributesFile',
-        GIT_CONFIG_VALUE_2: nullPath,
-        GIT_CONFIG_KEY_3: 'protocol.file.allow',
-        GIT_CONFIG_VALUE_3: 'never',
-        GIT_CONFIG_KEY_4: 'protocol.ext.allow',
-        GIT_CONFIG_VALUE_4: 'never',
-        GIT_CONFIG_KEY_5: 'protocol.http.allow',
-        GIT_CONFIG_VALUE_5: 'always',
-        GIT_CONFIG_KEY_6: 'protocol.https.allow',
-        GIT_CONFIG_VALUE_6: 'always',
-        GIT_CONFIG_KEY_7: 'protocol.ssh.allow',
-        GIT_CONFIG_VALUE_7: 'always',
-        GIT_CONFIG_KEY_8: 'core.fsmonitor',
-        GIT_CONFIG_VALUE_8: 'false',
-        GIT_CONFIG_KEY_9: 'commit.gpgsign',
-        GIT_CONFIG_VALUE_9: 'false',
-        GIT_CONFIG_KEY_10: 'tag.gpgsign',
-        GIT_CONFIG_VALUE_10: 'false',
-        GIT_CONFIG_KEY_11: 'merge.gpgsign',
-        GIT_CONFIG_VALUE_11: 'false'
-      }
+      stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      env: environment
     });
     const stdout = [];
     const stderr = [];
@@ -338,12 +362,13 @@ async function runGit(cwd, args) {
     child.stdout.on('data', collect(stdout));
     child.stderr.on('data', collect(stderr));
     child.once('error', (error) => finish(error));
-    child.once('exit', (code) => {
+    child.once('close', (code) => {
       const out = Buffer.concat(stdout).toString('utf8');
       const err = Buffer.concat(stderr).toString('utf8');
-      if (code !== 0) finish(new Error(err.trim() || out.trim() || `git exited with ${code}`));
-      else finish(null, { stdout: out, stderr: err });
+      if (!acceptedExitCodes.includes(code)) finish(new Error(err.trim() || out.trim() || `git exited with ${code}`));
+      else finish(null, { stdout: out, stderr: err, exitCode: code });
     });
+    if (input !== undefined) child.stdin.end(input);
   });
 }
 
@@ -353,6 +378,7 @@ async function repository(path = '.') {
   const top = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).stdout.trim();
   const actualTop = await assertAllowedExisting(top);
   if (!within(actualTop, cwd)) throw new Error('repositoryPath is outside its Git worktree');
+  await assertNoRepositoryExecutableGitConfiguration(actualTop);
   await assertRepositoryHasNoGlobDeniedPaths(actualTop);
   const denied = await deniedTrackedPaths(actualTop);
   if (denied.length > 0) throw new Error(`Repository contains denied paths: ${denied.join(', ')}`);
@@ -378,11 +404,19 @@ async function deniedTrackedPaths(cwd) {
   });
 }
 
-async function assertNoExecutableGitConfiguration(cwd) {
+async function assertNoRepositoryExecutableGitConfiguration(cwd) {
   try {
-    const output = (await runGit(cwd, ['config', '--show-origin', '--get-regexp', '^(core\\.(hooksPath|sshCommand|gitProxy|fsmonitor)|filter\\..*\\.(clean|smudge|process)|diff\\..*\\.command|merge\\..*\\.driver|remote\\..*\\.(proxy|receivepack|uploadpack))$'])).stdout.trim();
-    const unsafe = output.split(/\r?\n/).filter(Boolean).filter((line) => !line.startsWith('command line:'));
-    if (unsafe.length > 0) throw new Error('Git configuration contains executable hooks, filters, diff commands, merge drivers, proxies, or custom transport commands');
+    const output = (await runGit(cwd, [
+      'config',
+      '--show-scope',
+      '--show-origin',
+      '--get-regexp',
+      '^(core\\.(hookspath|sshcommand|gitproxy|fsmonitor|attributesfile|excludesfile)|credential\\..*helper|filter\\..*\\.(clean|smudge|process)|diff\\..*\\.(command|textconv)|merge\\..*\\.driver|gpg\\.(program|ssh\\.program)|remote\\..*\\.(proxy|receivepack|uploadpack))$'
+    ])).stdout.trim();
+    const unsafe = output.split(/\r?\n/).filter(Boolean).filter((line) => /^(local|worktree)\s/.test(line));
+    if (unsafe.length > 0) {
+      throw new Error('Repository-local Git configuration contains executable hooks, helpers, filters, diff/textconv commands, merge drivers, signing programs, proxies, custom transport commands, or external attributes/ignore files');
+    }
   } catch (error) {
     if (!/git exited with 1$/.test(error.message)) throw error;
   }
@@ -400,9 +434,95 @@ async function assertTreeAvoidsDeniedPaths(cwd, treeish) {
   if (denied.length > 0) throw new Error(`Incoming tree contains denied paths: ${denied.join(', ')}`);
 }
 
+async function repositoryRelativePaths(cwd, values) {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 100) throw new Error('paths must contain from 1 through 100 entries');
+  const rules = await policy();
+  return values.map((value) => {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 4096 || /[\0\r\n]/.test(value)) {
+      throw new Error('Each paths entry must be a non-empty string of at most 4096 characters without NUL or line breaks');
+    }
+    const candidate = resolve(isAbsolute(value) ? value : join(cwd, value));
+    if (!within(cwd, candidate)) throw new Error(`Repository path escaped the worktree: ${value}`);
+    assertNotGlobDenied(candidate, 'Git repository path');
+    if (rules.disallowedDirectories.some((root) => within(root, candidate)) || rules.disallowedFiles.some((file) => same(file, candidate))) {
+      throw new Error(`Repository path is denied: ${value}`);
+    }
+    const relativePath = candidate === cwd ? '.' : relative(cwd, candidate).split(sep).join('/');
+    if (relativePath.split('/').includes('.git')) throw new Error(`Direct .git paths are not supported: ${value}`);
+    return relativePath;
+  });
+}
+
+function parseIgnoreDecisions(stdout) {
+  const fields = stdout.split('\0');
+  if (fields.at(-1) === '') fields.pop();
+  if (fields.length % 4 !== 0) throw new Error('Unexpected git check-ignore output');
+  const decisions = [];
+  for (let index = 0; index < fields.length; index += 4) {
+    const [source, lineNumber, pattern, path] = fields.slice(index, index + 4);
+    decisions.push({
+      path,
+      ignored: pattern.length > 0 && !pattern.startsWith('!'),
+      source: source || null,
+      lineNumber: lineNumber ? Number(lineNumber) : null,
+      pattern: pattern || null
+    });
+  }
+  return decisions;
+}
+
+function parseAttributes(stdout) {
+  const fields = stdout.split('\0');
+  if (fields.at(-1) === '') fields.pop();
+  if (fields.length % 3 !== 0) throw new Error('Unexpected git check-attr output');
+  const byPath = new Map();
+  for (let index = 0; index < fields.length; index += 3) {
+    const [path, attribute, value] = fields.slice(index, index + 3);
+    const attributes = byPath.get(path) ?? [];
+    attributes.push({ attribute, value });
+    byPath.set(path, attributes);
+  }
+  return [...byPath].map(([path, attributes]) => ({ path, attributes }));
+}
+
 async function callTool(name, args = {}) {
   switch (name) {
     case 'roots': return { ...(await policy()), workingDirectory: await workingDirectory(), disablePush: cli.disablePush, disablePull: cli.disablePull, disableClone: cli.disableClone };
+    case 'get_policy':
+      return {
+        ignoreRules: {
+          respected: true,
+          ignoredUntrackedFilesShownByStatus: false,
+          ignoredUntrackedFilesStagedByAddAll: false,
+          trackedFilesRemainTrackedWhenIgnoredLater: true
+        },
+        attributes: {
+          repositoryAttributesRespected: true,
+          infoAttributesRespected: true,
+          globalAttributesFileRespected: true,
+          binaryAndTextClassificationRespectedByDiff: true,
+          systemAndGlobalExternalDiffCommandsRespected: true,
+          systemAndGlobalTextconvRespected: true,
+          repositoryExternalDiffAndTextconvRejected: true
+        },
+        gitConfiguration: {
+          systemConfigurationRespected: true,
+          globalConfigurationRespected: true,
+          repositoryOrdinaryConfigurationRespected: true,
+          repositoryExecutableConfigurationRejected: true,
+          repositoryExternalAttributesAndIgnoreFilesRejected: true,
+          lineEndingConversionRespected: true,
+          systemAndGlobalCleanSmudgeFiltersRespected: true,
+          configuredCommitSigningRespected: true
+        },
+        deliberatelyDisabled: {
+          hooks: true,
+          fsmonitor: true,
+          fileProtocol: true,
+          extProtocol: true,
+          interactiveCredentialPrompt: true
+        }
+      };
     case 'get_working_directory': return { workingDirectory: await workingDirectory() };
     case 'set_working_directory': {
       const target = await assertAllowedExisting(args.path);
@@ -417,6 +537,41 @@ async function callTool(name, args = {}) {
     case 'ls_files': {
       const cwd = await repository(args.repositoryPath);
       return { repositoryPath: cwd, files: (await runGit(cwd, ['ls-files', '-z'])).stdout.split('\0').filter(Boolean) };
+    }
+    case 'list_worktree_files': {
+      const cwd = await repository(args.repositoryPath);
+      const files = (await runGit(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).stdout.split('\0').filter(Boolean);
+      files.sort((left, right) => left.localeCompare(right));
+      return { repositoryPath: cwd, files };
+    }
+    case 'check_ignore': {
+      const cwd = await repository(args.repositoryPath);
+      const paths = await repositoryRelativePaths(cwd, args.paths);
+      const result = await runGit(cwd, ['check-ignore', '-z', '-v', '--no-index', '--non-matching', '--stdin'], {
+        input: `${paths.join('\0')}\0`,
+        acceptedExitCodes: [0, 1]
+      });
+      return { repositoryPath: cwd, decisions: parseIgnoreDecisions(result.stdout) };
+    }
+    case 'check_attributes': {
+      const cwd = await repository(args.repositoryPath);
+      const paths = await repositoryRelativePaths(cwd, args.paths);
+      const result = await runGit(cwd, ['check-attr', '-z', '-a', '--stdin'], { input: `${paths.join('\0')}\0` });
+      const attributes = parseAttributes(result.stdout);
+      const present = new Set(attributes.map((entry) => entry.path));
+      for (const path of paths) if (!present.has(path)) attributes.push({ path, attributes: [] });
+      return { repositoryPath: cwd, paths: attributes };
+    }
+    case 'get_effective_config': {
+      const cwd = await repository(args.repositoryPath);
+      const result = await runGit(cwd, [
+        'config',
+        '--show-scope',
+        '--show-origin',
+        '--get-regexp',
+        '^(core\\.(autocrlf|safecrlf|eol|attributesfile|excludesfile|symlinks|fscache)|commit\\.gpgsign|gpg\\.(format|program|ssh\\.program)|user\\.signingkey|filter\\..*\\.(clean|smudge|process|required)|diff\\..*\\.(binary|textconv)|push\\.followtags|pull\\.rebase)$'
+      ], { acceptedExitCodes: [0, 1] });
+      return { repositoryPath: cwd, configuration: result.stdout.trim().split(/\r?\n/).filter(Boolean) };
     }
     case 'branches': {
       const cwd = await repository(args.repositoryPath);
@@ -435,14 +590,13 @@ async function callTool(name, args = {}) {
     }
     case 'diff': {
       const cwd = await repository(args.repositoryPath);
-      const command = ['--no-pager', 'diff', '--no-ext-diff', '--no-textconv'];
+      const command = ['--no-pager', 'diff', '--ext-diff', '--textconv'];
       if (args.staged === true) command.push('--cached');
       command.push('--');
       return { repositoryPath: cwd, staged: args.staged === true, diff: (await runGit(cwd, command)).stdout };
     }
     case 'switch_branch': {
       const cwd = await repository(args.repositoryPath);
-      await assertNoExecutableGitConfiguration(cwd);
       const branch = safeName(args.branch, 'branch');
       if (args.create !== true) await assertTreeAvoidsDeniedPaths(cwd, branch);
       await runGit(cwd, args.create === true ? ['switch', '-c', branch] : ['switch', branch]);
@@ -450,7 +604,6 @@ async function callTool(name, args = {}) {
     }
     case 'add_all': {
       const cwd = await repository(args.repositoryPath);
-      await assertNoExecutableGitConfiguration(cwd);
       const denied = await deniedTrackedPaths(cwd);
       if (denied.length > 0) throw new Error(`Refusing to stage denied paths: ${denied.join(', ')}`);
       await runGit(cwd, ['add', '--all', '--', '.']);
@@ -458,16 +611,14 @@ async function callTool(name, args = {}) {
     }
     case 'commit': {
       const cwd = await repository(args.repositoryPath);
-      await assertNoExecutableGitConfiguration(cwd);
       if (typeof args.message !== 'string' || args.message.length === 0 || /\0/.test(args.message)) throw new Error('message must be a non-empty string without NUL');
       if (Buffer.byteLength(args.message, 'utf8') > MAX_COMMIT_MESSAGE_BYTES) throw new Error('Commit message is too large');
-      await runGit(cwd, ['commit', '--no-verify', '--no-gpg-sign', '-m', args.message]);
+      await runGit(cwd, ['commit', '--no-verify', '-m', args.message]);
       return { repositoryPath: cwd, committed: true };
     }
     case 'push': {
       if (cli.disablePush) throw new Error('push is disabled');
       const cwd = await repository(args.repositoryPath);
-      await assertNoExecutableGitConfiguration(cwd);
       const remote = safeRemote(args.remote ?? 'origin');
       const current = (await runGit(cwd, ['branch', '--show-current'])).stdout.trim();
       if (!current) throw new Error('Detached HEAD cannot be pushed');
@@ -481,7 +632,6 @@ async function callTool(name, args = {}) {
     case 'pull': {
       if (cli.disablePull) throw new Error('pull is disabled');
       const cwd = await repository(args.repositoryPath);
-      await assertNoExecutableGitConfiguration(cwd);
       const current = (await runGit(cwd, ['branch', '--show-current'])).stdout.trim();
       if (!current) throw new Error('Detached HEAD cannot be pulled');
       safeName(current, 'current branch');
@@ -527,7 +677,7 @@ export function createServer() {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
         serverInfo: { name: 'gitmcp', version: '1.0.0' },
-        instructions: 'Allowlisted Git operations only. No shell, arbitrary Git arguments, direct .git editing, hook installation, force push, or arbitrary clone destination paths.'
+        instructions: 'Allowlisted Git operations only. Standard ignore rules, attributes, line-ending conversion, system/global filters, external diff/textconv, and configured commit signing are preserved. Repository-local executable Git configuration, hooks, force push, and arbitrary clone destinations are blocked.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');

@@ -357,6 +357,12 @@ const workingDirectory = async () => {
   return workingDirectoryPromise;
 };
 
+const outsideRootsError = (message, allowed) => new Error([
+  message,
+  `Allowed directories (absolute): ${allowed.length > 0 ? allowed.join(', ') : '(none)'}`,
+  'Allowed files (absolute): (none)'
+].join('\n'));
+
 async function canonicalizeExistingPrefix(path) {
   let cursor = resolve(path);
   const missing = [];
@@ -407,7 +413,7 @@ async function chooseRoot(path) {
   const unresolvedCandidate = resolve(isAbsolute(path) ? path : join(await workingDirectory(), path));
   const candidate = await canonicalizeExistingPrefix(unresolvedCandidate);
   const root = rootFor(allowed, candidate);
-  if (!root) throw new Error('Path is outside all allowed workspace roots');
+  if (!root) throw outsideRootsError('Path is outside all allowed workspace roots', allowed);
   assertSafePath(root, candidate);
   return { root, candidate };
 }
@@ -421,7 +427,7 @@ async function resolveExisting(path) {
 async function resolveExistingUnchecked(path) {
   const { root, candidate } = await chooseRoot(path);
   const actual = await realpath(candidate);
-  if (!within(root, actual)) throw new Error('Resolved path escaped the allowed workspace root');
+  if (!within(root, actual)) throw outsideRootsError('Resolved path escaped the allowed workspace root', await roots());
   assertSafePath(root, actual);
   return { root, path: actual };
 }

@@ -84,6 +84,21 @@ function isWithin(style, directory, candidate) {
   return target === base || target.startsWith(`${base}${api.sep}`);
 }
 
+function scopeError(message, allowed) {
+  const accessScope = {
+    allowedDirectories: allowed.directories.map((entry) => entry.canonical),
+    allowedFiles: allowed.files.map((entry) => entry.canonical)
+  };
+  const error = new Error([
+    message,
+    `Allowed directories (absolute): ${accessScope.allowedDirectories.length > 0 ? accessScope.allowedDirectories.join(', ') : '(none)'}`,
+    `Allowed files (absolute): ${accessScope.allowedFiles.length > 0 ? accessScope.allowedFiles.join(', ') : '(none)'}`
+  ].join('\n'));
+  error.code = 'PATH_ACCESS_SCOPE_REJECTED';
+  error.accessScope = accessScope;
+  return error;
+}
+
 function isProtectedFileTarget(entry, normalized, canonical) {
   const protectedLexical = comparable(entry.style, entry.lexical);
   const protectedCanonical = comparable(entry.style, entry.canonical);
@@ -226,6 +241,35 @@ export class ToolPathPolicy {
     this.cwd = cwd;
   }
 
+  async describe() {
+    const allowed = await this.allowed();
+    const entries = (values) => values.map((entry) => ({
+      configuredPath: entry.lexical,
+      canonicalPath: entry.canonical
+    }));
+    return {
+      serverName: this.serverName,
+      workingDirectory: this.cwd,
+      relativePathBase: this.cwd,
+      configured: {
+        allowedDirectories: [...this.allowedDirectoriesInput],
+        allowedFiles: [...this.allowedFilesInput],
+        disallowedDirectories: [...this.disallowedDirectoriesInput],
+        disallowedFiles: [...this.disallowedFilesInput],
+        protectedFiles: [...this.protectedFilesInput],
+        disallowedPathGlobs: [...this.disallowedPathGlobs]
+      },
+      effective: {
+        allowedDirectories: entries(allowed.directories),
+        allowedFiles: entries(allowed.files),
+        disallowedDirectories: entries(allowed.disallowedDirectories),
+        disallowedFiles: entries(allowed.disallowedFiles),
+        protectedFiles: entries(allowed.protectedFiles),
+        disallowedPathGlobs: [...this.disallowedPathGlobs]
+      }
+    };
+  }
+
   async assertToolArguments(toolName, args) {
     const candidates = collectPathArguments(args, [], false, [], this.platform);
     if (candidates.length === 0) return;
@@ -255,7 +299,10 @@ export class ToolPathPolicy {
       const directoryAllowed = allowed.directories.some((entry) => entry.style === normalized.style
         && isWithin(entry.style, entry.canonical, canonical));
       if (!fileAllowed && !directoryAllowed) {
-        throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is outside allowed_directories and allowed_files: ${normalized.path}`);
+        throw scopeError(
+          `${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is outside allowed_directories and allowed_files: ${normalized.path}`,
+          allowed
+        );
       }
       const fileDenied = allowed.disallowedFiles.some((entry) => entry.style === normalized.style
         && comparable(entry.style, entry.canonical) === comparable(normalized.style, canonical));

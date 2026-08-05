@@ -3,6 +3,9 @@ private_use_only = true
 publish_tool_directory = false
 tool_annotations_path = "tool-annotations.toml"
 
+# Every started child MCP also receives <prefix>__get_gateway_access_scope.
+# It reports the gateway's current relative-path base and configured/effective path policy.
+
 # safe-files uses cwd as its workspace root. The server script path must therefore be absolute.
 [mcp_servers.files]
 command = "node"

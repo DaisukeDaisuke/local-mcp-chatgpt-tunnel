@@ -61,9 +61,11 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 | `safe-files` | `list_files`、`search_text`、`file_info`、`read_text`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、複数ファイル・行範囲読み取り、ファイル情報、読み書き、限定されたパッチ適用 |
 | `safe-images` | `read_image` | PNG、JPEG、WebPをChatGPTの画像コンテンツとして読み取る |
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
-| `gitmcp` | `status`、`diff`、`log`、`branches`、`switch_branch`、`add_all`、`commit`、`push`、`pull`、`clone_repository` | 許可したリポジトリに対する限定されたGit操作 |
+| `gitmcp` | `get_policy`、`get_effective_config`、`check_ignore`、`check_attributes`、`status`、`diff`、`add_all`、`commit`、`push`、`pull` | 許可したリポジトリに対する限定されたGit操作 |
 | `gh-workflow` | `list_runs`、`watch_run`、`view_run`、`view_run_jobs`、`view_failed_logs`、`list_workflows`、`view_workflow_yaml` | 明示的に許可したGitHubリポジトリのActions実行状況を読み取り専用で確認 |
 同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。<br>
+Gatewayは起動したすべての子MCPへ`<prefix>__get_gateway_access_scope`を追加します。このツールは、Gatewayが実際のツール呼び出し検査に使用している現在の作業ディレクトリ、相対パス基準、設定値、正規化済みの許可・拒否パス、保護対象、拒否globを返します。AIは過去チャットや推測から作業ディレクトリを補わず、このツールで現在の許可範囲を確認できます。<br>
+許可範囲外のパスが拒否された場合、エラー本文へ現在許可されているディレクトリとファイルを正規化済みの絶対パスで返します。同梱MCPの共通出力形式では`structuredContent.result.accessScope`にも同じ一覧を返します。拒否後にAIが別の作業ディレクトリを推測して再試行する必要はありません。<br>
 ### safe-files
 `safe-files`で外向きに「MCP root」と呼ぶものは、`gateway.toml`で指定された`cwd`を初期値とする現在の作業ディレクトリです。相対パスはこのMCP rootから解決され、`set_working_directory`で許可ディレクトリ内の別の既存ディレクトリへ変更できます。<br>
 `read_text`はMCP rootからの相対パスと絶対パスの両方を受け付けますが、正規化後および実在パス解決後の対象が設定された許可ディレクトリ内に残る場合だけ読み取ります。<br>
@@ -84,6 +86,9 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 ### gitmcp
 `gitmcp`は、許可されたディレクトリ内のGitリポジトリに対して、固定されたGitサブコマンドとオプションだけを実行します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、force push、任意refspecには対応しません。<br>
 `status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、ブランチ切り替え、`git add --all -- .`、commitを利用できます。`push`、`pull`、cloneは起動引数で個別に無効化でき、設定例では`pull`とcloneを無効にしています。cloneでは固定の`--recurse-submodules`を選択できます。<br>
+`.gitignore`と標準のignore設定を尊重するため、`status`はignoreされた未追跡ファイルを表示せず、`add_all`もforce-addしません。`.gitattributes`、`.git/info/attributes`、グローバルattributes、`core.autocrlf`などの改行変換、システム・グローバル設定のclean/smudge filter、外部diff、textconv、commit署名設定も通常のGitと同様に尊重します。リポジトリ内の`.git/config`またはworktree configに置かれた実行可能な設定は事前に拒否します。<br>
+`list_worktree_files`は追跡ファイルとignoreされていない未追跡ファイルをGit自身のexclude判定で列挙します。`check_ignore`は各パスへ適用されたignoreルールと最終判定、`check_attributes`はtext、binary、diff、merge、filter、改行属性などの実効値を返します。`get_effective_config`は`credential.*`、author名、メールアドレスを照会対象から除外し、`core.autocrlf`、filter、attributes、署名鍵などの挙動に関係する設定をscope・origin付きで返します。<br>
+安全対策はGit設定全体の無効化ではなく、リポジトリ自身の`.git/config`またはworktree configに置かれた実行可能なhook、helper、filter、外部diff/textconv、merge driver、署名program、proxy、独自transport設定の拒否に限定します。フック、fsmonitor、`file`・`ext` protocol、対話的なcredential promptは無効です。`get_policy`で現在の方針を機械可読に確認できます。<br>
 `repositoryPath`へサブモジュールや入れ子のGitリポジトリを直接指定すると、そのリポジトリ自身のstatus、diff、logなどを取得できます。親リポジトリ配下を再帰探索して、すべての入れ子リポジトリを自動列挙するツールは含みません。<br>
 ### gh-workflow
 `gh-workflow`は、起動引数`--repository=OWNER/REPO`で明示的に許可したGitHubリポジトリについて、GitHub Actionsの実行状況だけを読み取ります。`--repository=`は複数回指定でき、指定されていないリポジトリは選択できません。許可リポジトリが1件なら各ツールで省略でき、複数なら対象リポジトリの指定が必須です。設定例では`DaisukeDaisuke/desmume_webassembly`を指定し、MCP自体はデフォルト無効です。<br>
@@ -145,6 +150,7 @@ Gatewayはその設定を読み取り、検証して適用しますが、利用�
 ### パス許可
 `allowed_directories`は指定したディレクトリとその配下を許可し、`allowed_files`は指定したファイルだけを完全一致で許可します。<br>
 Gatewayはすべての子MCPのツール引数を再帰的に検査し、`path`、`filePath`、`files`、`directory`などのキーや絶対パスらしい文字列を許可リストへ照合します。相対パスは対象MCPの`cwd`から解決します。<br>
+各子MCPへ自動追加される`<prefix>__get_gateway_access_scope`は、この検査に使用される設定値と正規化済みの実効範囲を返します。AIが作業ディレクトリや許可パスを過去の会話から推測する代わりに、現在のGateway状態を直接確認するためのツールです。<br>
 ```toml
 allowed_directories = ['C:\work\project']
 allowed_files = ['C:\Users\owner\Downloads\upload.png']

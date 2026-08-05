@@ -135,6 +135,12 @@ const roots = () => {
 
 const workingDirectory = async () => (await roots())[0];
 
+const outsideRootsError = (message, allowed) => new Error([
+  message,
+  `Allowed directories (absolute): ${allowed.length > 0 ? allowed.join(', ') : '(none)'}`,
+  'Allowed files (absolute): (none)'
+].join('\n'));
+
 async function resolveDownloadPath(path) {
   if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
   if (/^(?:\\\\|\/\/)/.test(path)) throw new Error('UNC paths are not supported');
@@ -142,11 +148,11 @@ async function resolveDownloadPath(path) {
   rejectAlternateDataStream(candidate);
   const allowed = await roots();
   const root = allowed.find((entry) => within(entry, candidate));
-  if (!root) throw new Error('Path is outside all configured download roots');
+  if (!root) throw outsideRootsError('Path is outside all configured download roots', allowed);
   const lexicalInfo = await lstat(candidate);
   if (lexicalInfo.isSymbolicLink()) throw new Error('Symbolic-link download paths are not supported');
   const actual = await realpath(candidate);
-  if (!within(root, actual)) throw new Error('Resolved path escaped the configured download root');
+  if (!within(root, actual)) throw outsideRootsError('Resolved path escaped the configured download root', allowed);
   assertNotGlobDenied(actual, 'download_zip path');
   return { root, path: actual, info: await stat(actual) };
 }

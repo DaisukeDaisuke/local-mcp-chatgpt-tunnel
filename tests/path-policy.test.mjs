@@ -25,7 +25,13 @@ test('path policy allows directory descendants and exact files with Windows sepa
   }));
   await assert.rejects(
     policy.assertToolArguments('upload_file', { filePath: 'C:\\Users\\owner\\.ssh\\id_ed25519' }),
-    /outside allowed_directories and allowed_files/
+    (error) => {
+      assert.match(error.message, /outside allowed_directories and allowed_files/);
+      assert.match(error.message, /Allowed directories \(absolute\): C:\\work\\project/);
+      assert.deepEqual(error.accessScope.allowedDirectories, ['C:\\work\\project']);
+      assert.deepEqual(error.accessScope.allowedFiles, ['C:\\Users\\owner\\Downloads\\upload.png']);
+      return true;
+    }
   );
 });
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -106,10 +106,13 @@ test('read_image rejects paths outside the configured root and symbolic-link pat
   const outside = await mkdtemp(join(tmpdir(), 'safe-images-outside-'));
   const outsideImage = join(outside, 'outside.png');
   await writeFile(outsideImage, onePixelPng);
+  const canonicalRoot = await realpath(root);
   const server = await serverFor(root, 'paths');
   const escaped = await server(request(2, 'tools/call', { name: 'read_image', arguments: { path: outsideImage } }));
   assert.equal(escaped.result.isError, true);
   assert.match(escaped.result.structuredContent.error, /outside/);
+  assert.match(escaped.result.structuredContent.error, /Allowed directories \(absolute\):/);
+  assert.match(escaped.result.structuredContent.error, new RegExp(canonicalRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   const linkPath = join(root, 'link.png');
   if (!await createSymlinkOrSkip(t, outsideImage, linkPath)) return;
   const linked = await server(request(3, 'tools/call', { name: 'read_image', arguments: { path: 'link.png' } }));

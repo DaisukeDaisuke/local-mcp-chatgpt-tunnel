@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -158,15 +158,15 @@ process.stdin.on('data', (chunk) => {
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   await nextLine(child.stdout);
-  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=1/g) ?? []).length >= 1);
+  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=2/g) ?? []).length >= 1);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   await nextLine(child.stdout);
-  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=1/g) ?? []).length >= 2);
+  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=2/g) ?? []).length >= 2);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['demo__plain']);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['demo__plain', 'demo__get_gateway_access_scope']);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'demo__runScript', arguments: {} } })}\n`);
   const blockedCall = await nextLine(child.stdout);
@@ -187,6 +187,7 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   const configPath = join(configDirectory, 'gateway.toml');
   const repository = resolve('.');
   await writeFile(join(workspace, 'inside.txt'), 'inside', 'utf8');
+  await mkdir(join(workspace, 'nested'));
   const config = [
     'private_use_only = true',
     '[mcp_servers.files]',
@@ -217,8 +218,38 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   assert.ok(names.includes('files__search_text'));
   assert.ok(names.includes('files__read_file_chunk'));
   assert.ok(names.includes('files__set_working_directory'));
+  assert.ok(names.includes('files__get_gateway_access_scope'));
   assert.ok(names.every((name) => name.startsWith('files__')));
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: {
+    name: 'files__get_gateway_access_scope', arguments: {}
+  } })}\n`);
+  const scope = await nextLine(child.stdout);
+  assert.equal(scope.result.isError, false);
+  assert.equal(scope.result.structuredContent.result.serverName, 'files');
+  assert.equal(scope.result.structuredContent.result.workingDirectory, workspace);
+  assert.equal(scope.result.structuredContent.result.relativePathBase, workspace);
+  assert.deepEqual(scope.result.structuredContent.result.configured.allowedDirectories, [workspace]);
+  assert.deepEqual(scope.result.structuredContent.result.configured.allowedFiles, []);
+  assert.equal(scope.result.structuredContent.result.effective.allowedDirectories[0].canonicalPath, workspace);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: {
+    name: 'files__set_working_directory', arguments: { path: 'nested' }
+  } })}\n`);
+  const changedDirectory = await nextLine(child.stdout);
+  assert.equal(changedDirectory.result.isError, false);
+  assert.equal(changedDirectory.result.structuredContent.result.workingDirectory, join(workspace, 'nested'));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'tools/call', params: {
+    name: 'files__get_gateway_access_scope', arguments: {}
+  } })}\n`);
+  const changedScope = await nextLine(child.stdout);
+  assert.equal(changedScope.result.structuredContent.result.workingDirectory, join(workspace, 'nested'));
+  assert.equal(changedScope.result.structuredContent.result.relativePathBase, join(workspace, 'nested'));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 23, method: 'tools/call', params: {
+    name: 'files__set_working_directory', arguments: { path: workspace }
+  } })}\n`);
+  const restoredDirectory = await nextLine(child.stdout);
+  assert.equal(restoredDirectory.result.isError, false);
+  assert.equal(restoredDirectory.result.structuredContent.result.workingDirectory, workspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
     name: 'files__read_text', arguments: { path: 'inside.txt' }
   } })}\n`);
@@ -231,6 +262,10 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   const outside = await nextLine(child.stdout);
   assert.equal(outside.result.isError, true);
   assert.match(outside.result.content[0].text, /outside allowed_directories/);
+  assert.match(outside.result.content[0].text, /Allowed directories \(absolute\):/);
+  assert.match(outside.result.content[0].text, new RegExp(workspace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.deepEqual(outside.result.structuredContent.result.accessScope.allowedDirectories, [workspace]);
+  assert.deepEqual(outside.result.structuredContent.result.accessScope.allowedFiles, []);
 
   const colonEscape = process.platform === 'win32'
     ? join(tmpdir(), 'outside-colon.txt')
@@ -510,7 +545,11 @@ process.stdin.on('data', (chunk) => {
   await nextLine(child.stdout);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['gateway__list_available_tools', 'demo__plain']);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
+    'gateway__list_available_tools',
+    'demo__plain',
+    'demo__get_gateway_access_scope'
+  ]);
   assert.deepEqual(listed.result.tools[0].annotations, {
     readOnlyHint: true,
     destructiveHint: false,
@@ -535,8 +574,9 @@ process.stdin.on('data', (chunk) => {
     name: 'gateway__list_available_tools', arguments: { prefix: 'no-such-prefix' }
   } })}\n`);
   const fallback = await nextLine(child.stdout);
-  assert.equal(fallback.result.structuredContent.availableToolCount, 2);
+  assert.equal(fallback.result.structuredContent.availableToolCount, 3);
   assert.deepEqual(fallback.result.structuredContent.tools.map((tool) => tool.name), [
+    'demo__get_gateway_access_scope',
     'demo__plain',
     'gateway__list_available_tools'
   ]);

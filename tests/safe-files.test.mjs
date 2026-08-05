@@ -164,6 +164,7 @@ test('read_text accepts relative and absolute paths from the current MCP root an
   await writeFile(insidePath, 'inside\n', 'utf8');
   await writeFile(outsidePath, 'outside\n', 'utf8');
   const canonicalInsidePath = await realpath(insidePath);
+  const canonicalRoot = await realpath(root);
   const server = await serverFor(root, 'read-boundary');
 
   const accepted = await server(request(2, 'tools/call', {
@@ -205,6 +206,8 @@ test('read_text accepts relative and absolute paths from the current MCP root an
     assert.equal(item.ok, false, `escape item ${index} should fail`);
     assert.equal(item.inputPath, escapePaths[index]);
     assert.match(item.error, /outside all allowed workspace roots/);
+    assert.match(item.error, /Allowed directories \(absolute\):/);
+    assert.match(item.error, new RegExp(canonicalRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 });
 
