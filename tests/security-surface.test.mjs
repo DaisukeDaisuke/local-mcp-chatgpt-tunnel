@@ -166,6 +166,8 @@ test('gateway publishes an exact access-scope tool and installation guidance req
   assert.match(install, /過去チャットの記憶で補わない/);
   assert.match(install, /get_gateway_access_scope/);
   assert.match(install, /gateway__list_available_tools/);
+  assert.match(install, /新しいGitHub Actions runを特定して完了まで確認する/);
+  assert.match(install, /全jobの成功を確認する前に「全環境で成功した」と断定しない/);
 });
 
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {
