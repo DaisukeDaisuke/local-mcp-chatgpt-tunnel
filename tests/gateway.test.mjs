@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -183,11 +183,13 @@ process.stdin.on('data', (chunk) => {
 
 gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without model API or HTTP', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-workspace-'));
+  const canonicalWorkspace = await realpath(workspace);
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
   const repository = resolve('.');
   await writeFile(join(workspace, 'inside.txt'), 'inside', 'utf8');
   await mkdir(join(workspace, 'nested'));
+  const canonicalNestedWorkspace = await realpath(join(workspace, 'nested'));
   const config = [
     'private_use_only = true',
     '[mcp_servers.files]',
@@ -227,29 +229,29 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   const scope = await nextLine(child.stdout);
   assert.equal(scope.result.isError, false);
   assert.equal(scope.result.structuredContent.result.serverName, 'files');
-  assert.equal(scope.result.structuredContent.result.workingDirectory, workspace);
-  assert.equal(scope.result.structuredContent.result.relativePathBase, workspace);
+  assert.equal(scope.result.structuredContent.result.workingDirectory, canonicalWorkspace);
+  assert.equal(scope.result.structuredContent.result.relativePathBase, canonicalWorkspace);
   assert.deepEqual(scope.result.structuredContent.result.configured.allowedDirectories, [workspace]);
   assert.deepEqual(scope.result.structuredContent.result.configured.allowedFiles, []);
-  assert.equal(scope.result.structuredContent.result.effective.allowedDirectories[0].canonicalPath, workspace);
+  assert.equal(scope.result.structuredContent.result.effective.allowedDirectories[0].canonicalPath, canonicalWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: {
     name: 'files__set_working_directory', arguments: { path: 'nested' }
   } })}\n`);
   const changedDirectory = await nextLine(child.stdout);
   assert.equal(changedDirectory.result.isError, false);
-  assert.equal(changedDirectory.result.structuredContent.result.workingDirectory, join(workspace, 'nested'));
+  assert.equal(changedDirectory.result.structuredContent.result.workingDirectory, canonicalNestedWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'tools/call', params: {
     name: 'files__get_gateway_access_scope', arguments: {}
   } })}\n`);
   const changedScope = await nextLine(child.stdout);
-  assert.equal(changedScope.result.structuredContent.result.workingDirectory, join(workspace, 'nested'));
-  assert.equal(changedScope.result.structuredContent.result.relativePathBase, join(workspace, 'nested'));
+  assert.equal(changedScope.result.structuredContent.result.workingDirectory, canonicalNestedWorkspace);
+  assert.equal(changedScope.result.structuredContent.result.relativePathBase, canonicalNestedWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 23, method: 'tools/call', params: {
     name: 'files__set_working_directory', arguments: { path: workspace }
   } })}\n`);
   const restoredDirectory = await nextLine(child.stdout);
   assert.equal(restoredDirectory.result.isError, false);
-  assert.equal(restoredDirectory.result.structuredContent.result.workingDirectory, workspace);
+  assert.equal(restoredDirectory.result.structuredContent.result.workingDirectory, canonicalWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
     name: 'files__read_text', arguments: { path: 'inside.txt' }
   } })}\n`);
@@ -263,8 +265,8 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   assert.equal(outside.result.isError, true);
   assert.match(outside.result.content[0].text, /outside allowed_directories/);
   assert.match(outside.result.content[0].text, /Allowed directories \(absolute\):/);
-  assert.match(outside.result.content[0].text, new RegExp(workspace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.deepEqual(outside.result.structuredContent.result.accessScope.allowedDirectories, [workspace]);
+  assert.ok(outside.result.content[0].text.includes(canonicalWorkspace));
+  assert.deepEqual(outside.result.structuredContent.result.accessScope.allowedDirectories, [canonicalWorkspace]);
   assert.deepEqual(outside.result.structuredContent.result.accessScope.allowedFiles, []);
 
   const colonEscape = process.platform === 'win32'

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -133,6 +133,7 @@ test('gitmcp rejects unknown CLI options instead of forwarding them to Git', asy
 
 test('gitmcp reports absolute allowed paths when an existing path is outside its scope', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-allowed-'));
+  const canonicalRoot = await realpath(root);
   const outside = await mkdtemp(join(tmpdir(), 'gitmcp-outside-'));
   const { createServer } = await importGitMcp(root, [], 'outside-scope');
   const server = createServer();
@@ -143,7 +144,7 @@ test('gitmcp reports absolute allowed paths when an existing path is outside its
   assert.equal(refused.result.isError, true);
   assert.match(refused.result.structuredContent.error, /outside allowed_directories and allowed_files/);
   assert.match(refused.result.structuredContent.error, /Allowed directories \(absolute\):/);
-  assert.match(refused.result.structuredContent.error, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.ok(refused.result.structuredContent.error.includes(canonicalRoot));
 });
 
 test('gitmcp status and add_all respect .gitignore without force-adding ignored files', async () => {
