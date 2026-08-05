@@ -321,3 +321,9 @@ npm test
 外部npm依存はありません。<br>
 ## ライセンス
 このリポジトリ本体は[MIT License](./LICENSE)です。<br>公式`tunnel-client.exe`など第三者コンポーネントについては[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)を確認してください。<br>
+
+## 備考
+
+#### ChatGPTからローカルMCPへ接続することは「グレーな裏技」なのか
+
+https://gist.github.com/DaisukeDaisuke/0d0af93dd8cb376a36879702afb176ee
