@@ -404,7 +404,8 @@ async function prohibitedPathStatus(candidate) {
 async function chooseRoot(path) {
   if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
   const allowed = await roots();
-  const candidate = resolve(isAbsolute(path) ? path : join(await workingDirectory(), path));
+  const unresolvedCandidate = resolve(isAbsolute(path) ? path : join(await workingDirectory(), path));
+  const candidate = await canonicalizeExistingPrefix(unresolvedCandidate);
   const root = rootFor(allowed, candidate);
   if (!root) throw new Error('Path is outside all allowed workspace roots');
   assertSafePath(root, candidate);

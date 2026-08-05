@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { windowsIntegrityLevel } from '../app/windows-integrity.mjs';
+
+const integrityLevel = await windowsIntegrityLevel();
+const elevatedWindows = process.platform === 'win32' && (integrityLevel === 'high' || integrityLevel === 'system');
+const gatewayIntegrationTest = elevatedWindows ? test.skip : test;
 
 function nextLine(stream, timeoutMs = 5000) {
   return new Promise((resolvePromise, reject) => {
     let buffer = '';
     const timeout = setTimeout(() => cleanup(new Error('Timed out waiting for gateway output')), timeoutMs);
+    const onClose = () => cleanup(new Error('Gateway output stream closed before a complete JSON line'));
     const onData = (chunk) => {
       buffer += chunk;
       const newline = buffer.indexOf('\n');
@@ -19,10 +26,12 @@ function nextLine(stream, timeoutMs = 5000) {
     const cleanup = (error, value) => {
       clearTimeout(timeout);
       stream.off('data', onData);
+      stream.off('close', onClose);
       if (error) reject(error); else resolvePromise(value);
     };
     stream.setEncoding('utf8');
     stream.on('data', onData);
+    stream.once('close', onClose);
   });
 }
 
@@ -31,6 +40,7 @@ function nextLines(stream, count, timeoutMs = 5000) {
     let buffer = '';
     const lines = [];
     const timeout = setTimeout(() => cleanup(new Error('Timed out waiting for gateway output')), timeoutMs);
+    const onClose = () => cleanup(new Error(`Gateway output stream closed after ${lines.length} of ${count} expected JSON lines`));
     const onData = (chunk) => {
       buffer += chunk;
       while (true) {
@@ -46,10 +56,12 @@ function nextLines(stream, count, timeoutMs = 5000) {
     const cleanup = (error, value) => {
       clearTimeout(timeout);
       stream.off('data', onData);
+      stream.off('close', onClose);
       if (error) reject(error); else resolvePromise(value);
     };
     stream.setEncoding('utf8');
     stream.on('data', onData);
+    stream.once('close', onClose);
   });
 }
 
@@ -70,7 +82,23 @@ function collectText(stream) {
   };
 }
 
-test('gateway excludes exact and substring-matched tools and logs every initialization', async (t) => {
+test('gateway refuses elevated Windows before MCP initialization', { skip: !elevatedWindows }, async () => {
+  const child = spawn(process.execPath, [
+    resolve('app/gateway.mjs'),
+    '--config',
+    resolve('config/gateway.example.toml')
+  ], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const stderr = collectText(child.stderr);
+  const [code] = await once(child, 'close');
+  assert.notEqual(code, 0);
+  assert.match(stderr.value, /Refusing to run local MCP with (high|system) Windows integrity/);
+});
+
+gatewayIntegrationTest('gateway excludes exact and substring-matched tools and logs every initialization', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-tool-filter-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-tool-filter-config-'));
   const serverPath = join(workspace, 'server.mjs');
@@ -153,7 +181,7 @@ process.stdin.on('data', (chunk) => {
   assert.match(log, /tool="dangerous".*blocked_tools exact match/);
 });
 
-test('gateway aggregates a selected local stdio MCP without model API or HTTP', async (t) => {
+gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without model API or HTTP', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
@@ -232,7 +260,7 @@ test('gateway aggregates a selected local stdio MCP without model API or HTTP', 
   }
 });
 
-test('gateway denies direct reads of its loaded configuration by default', async (t) => {
+gatewayIntegrationTest('gateway denies direct reads of its loaded configuration by default', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-protected-config-'));
   const configPath = join(workspace, 'gateway.toml');
   await writeFile(join(workspace, 'public.txt'), 'public', 'utf8');
@@ -262,7 +290,7 @@ test('gateway denies direct reads of its loaded configuration by default', async
   assert.match(denied.result.content[0].text, /targets the gateway configuration/);
 });
 
-test('gateway applies empty allowlists and disallowed path globs to nested read_text batches', async (t) => {
+gatewayIntegrationTest('gateway applies empty allowlists and disallowed path globs to nested read_text batches', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
@@ -327,7 +355,7 @@ test('gateway applies empty allowlists and disallowed path globs to nested read_
   assert.match(disallowedGlob.result.content[0].text, /\.ssh/);
 });
 
-test('gateway preserves safe-download outputSchema and embedded ZIP resource content', async (t) => {
+gatewayIntegrationTest('gateway preserves safe-download outputSchema and embedded ZIP resource content', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-download-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-download-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
@@ -366,7 +394,7 @@ test('gateway preserves safe-download outputSchema and embedded ZIP resource con
   assert.equal(Object.hasOwn(downloaded.result.structuredContent.result, 'blob'), false);
 });
 
-test('gateway initialization survives an unavailable child MCP', async (t) => {
+gatewayIntegrationTest('gateway initialization survives an unavailable child MCP', async (t) => {
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-unavailable-'));
   const configPath = join(configDirectory, 'gateway.toml');
   const missingScript = join(configDirectory, 'missing-server.mjs');
@@ -395,7 +423,7 @@ test('gateway initialization survives an unavailable child MCP', async (t) => {
   assert.deepEqual(listed.result.tools, []);
 });
 
-test('tools/list waits for concurrent initialization when a child MCP is unavailable', async (t) => {
+gatewayIntegrationTest('tools/list waits for concurrent initialization when a child MCP is unavailable', async (t) => {
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-concurrent-init-'));
   const configPath = join(configDirectory, 'gateway.toml');
   const missingScript = join(configDirectory, 'missing-server.mjs');
@@ -424,7 +452,7 @@ test('tools/list waits for concurrent initialization when a child MCP is unavail
   assert.deepEqual(listed.result.tools, []);
 });
 
-test('optional gateway tool directory returns full names, prefix matches, counts, and disabled proxy names', async (t) => {
+gatewayIntegrationTest('optional gateway tool directory returns full names, prefix matches, counts, and disabled proxy names', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-tool-directory-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-tool-directory-config-'));
   const serverPath = join(workspace, 'server.mjs');

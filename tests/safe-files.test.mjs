@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -85,6 +85,8 @@ test('read_text supports single and batched whole-file or ranged reads with opti
   const path = join(root, 'lines.txt');
   await writeFile(path, 'first\r\nsecond\nthird\n', 'utf8');
   await writeFile(join(root, 'empty.txt'), '', 'utf8');
+  const canonicalPath = await realpath(path);
+  const canonicalEmptyPath = await realpath(join(root, 'empty.txt'));
   const server = await serverFor(root, 'read-lines');
 
   const clamped = await server(request(2, 'tools/call', {
@@ -94,7 +96,7 @@ test('read_text supports single and batched whole-file or ranged reads with opti
   assert.deepEqual(clamped.result.structuredContent.result.results[0], {
     ok: true,
     inputPath: 'lines.txt',
-    path,
+    path: canonicalPath,
     startLine: 2,
     endLine: 3,
     requestedEndLine: 999,
@@ -109,7 +111,7 @@ test('read_text supports single and batched whole-file or ranged reads with opti
   assert.equal(impossible.result.isError, false);
   assert.equal(
     impossible.result.structuredContent.result.results[0].error,
-    `Start line is out of range for ${path}: got 4, expected a maximum of 3`
+    `Start line is out of range for ${canonicalPath}: got 4, expected a maximum of 3`
   );
 
   const empty = await server(request(4, 'tools/call', {
@@ -118,7 +120,7 @@ test('read_text supports single and batched whole-file or ranged reads with opti
   assert.equal(empty.result.isError, false);
   assert.equal(
     empty.result.structuredContent.result.results[0].error,
-    `Start line is out of range for ${join(root, 'empty.txt')}: got 1, expected a maximum of 0`
+    `Start line is out of range for ${canonicalEmptyPath}: got 1, expected a maximum of 0`
   );
 
   const fakeRuntimeKey = ['sk', 'proj', 'abcdefghijklmnopqrstuvwxyz123456'].join('-');
@@ -146,7 +148,7 @@ test('read_text supports single and batched whole-file or ranged reads with opti
   assert.equal(batch.result.structuredContent.result.failed, 1);
   assert.equal(batch.result.structuredContent.result.results[0].content, 'first\r\nsecond\nthird\n');
   assert.equal(batch.result.structuredContent.result.results[1].content, 'second');
-  assert.match(batch.result.content[0].text, new RegExp(`----- ${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} -----`));
+  assert.match(batch.result.content[0].text, new RegExp(`----- ${canonicalPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} -----`));
   assert.match(batch.result.content[0].text, /1: first/);
   assert.match(batch.result.content[0].text, /2: second/);
   assert.match(batch.result.content[0].text, /ERROR:/);
@@ -161,6 +163,7 @@ test('read_text accepts relative and absolute paths from the current MCP root an
   await mkdir(join(root, 'nested'));
   await writeFile(insidePath, 'inside\n', 'utf8');
   await writeFile(outsidePath, 'outside\n', 'utf8');
+  const canonicalInsidePath = await realpath(insidePath);
   const server = await serverFor(root, 'read-boundary');
 
   const accepted = await server(request(2, 'tools/call', {
@@ -176,8 +179,8 @@ test('read_text accepts relative and absolute paths from the current MCP root an
   assert.equal(accepted.result.isError, false);
   assert.equal(accepted.result.structuredContent.result.succeeded, 2);
   assert.equal(accepted.result.structuredContent.result.failed, 0);
-  assert.equal(accepted.result.structuredContent.result.results[0].path, insidePath);
-  assert.equal(accepted.result.structuredContent.result.results[1].path, insidePath);
+  assert.equal(accepted.result.structuredContent.result.results[0].path, canonicalInsidePath);
+  assert.equal(accepted.result.structuredContent.result.results[1].path, canonicalInsidePath);
 
   const colonEscape = process.platform === 'win32' ? outsidePath : `${outsidePath}:alternate`;
   const escapePaths = [
