@@ -239,9 +239,9 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   const scope = await nextLine(child.stdout);
   assert.equal(scope.result.isError, false);
   assert.equal(scope.result.structuredContent.result.serverName, 'files');
-  assert.equal(scope.result.structuredContent.result.workingDirectory, workspace);
-  assert.equal(scope.result.structuredContent.result.relativePathBase, workspace);
-  assert.deepEqual(scope.result.structuredContent.result.configured.allowedDirectories, [workspace]);
+  assert.equal(scope.result.structuredContent.result.workingDirectory, canonicalWorkspace);
+  assert.equal(scope.result.structuredContent.result.relativePathBase, canonicalWorkspace);
+  assert.deepEqual(scope.result.structuredContent.result.configured.allowedDirectories, [canonicalWorkspace]);
   assert.deepEqual(scope.result.structuredContent.result.configured.allowedFiles, []);
   assert.equal(scope.result.structuredContent.result.effective.allowedDirectories[0].canonicalPath, canonicalWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: {

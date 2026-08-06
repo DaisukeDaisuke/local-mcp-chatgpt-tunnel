@@ -302,6 +302,7 @@ function assertNotGlobDenied(path, context) {
 }
 
 let policyPromise;
+let workingDirectoryPromise;
 
 async function canonicalExisting(path) {
   if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
@@ -355,7 +356,8 @@ async function policy() {
 async function workingDirectory() {
   const context = isolation.current();
   if (context) return context.base;
-  return (await policy()).allowedDirectories[0];
+  workingDirectoryPromise ??= policy().then(({ allowedDirectories }) => allowedDirectories[0]);
+  return workingDirectoryPromise;
 }
 
 function outsidePolicyError(message, rules) {
@@ -753,6 +755,7 @@ async function callTool(name, args = {}) {
     case 'set_working_directory': {
       const target = await assertAllowedExisting(args.path);
       if (!(await stat(target)).isDirectory()) throw new Error('Path is not a directory');
+      if (!isolation.current()) workingDirectoryPromise = Promise.resolve(target);
       return { workingDirectory: target };
     }
     case 'status': {

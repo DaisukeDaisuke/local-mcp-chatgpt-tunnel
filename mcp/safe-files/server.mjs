@@ -370,6 +370,7 @@ function assertSafePath(root, candidate) {
 
 let rootsPromise;
 let deniedPromise;
+let workingDirectoryPromise;
 const roots = () => {
   const context = isolation.current();
   if (context) return Promise.resolve([...context.roots]);
@@ -382,7 +383,12 @@ const roots = () => {
   }));
   return rootsPromise;
 };
-const workingDirectory = async () => isolation.current()?.base ?? (await roots())[0];
+const workingDirectory = async () => {
+  const context = isolation.current();
+  if (context) return context.base;
+  workingDirectoryPromise ??= roots().then(([first]) => first);
+  return workingDirectoryPromise;
+};
 
 const outsideRootsError = (message, allowed) => new Error([
   message,
@@ -1217,6 +1223,7 @@ async function callTool(name, args = {}) {
     case 'set_working_directory': {
       const target = await resolveExisting(args.path);
       if (!(await stat(target.path)).isDirectory()) throw new Error('Path is not a directory');
+      if (!isolation.current()) workingDirectoryPromise = Promise.resolve(target.path);
       return { workingDirectory: target.path };
     }
     case 'list_directory': {
