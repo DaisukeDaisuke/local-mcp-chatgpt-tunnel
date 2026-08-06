@@ -5,6 +5,9 @@ tool_annotations_path = "tool-annotations.toml"
 
 # Every started child MCP also receives <prefix>__get_gateway_access_scope.
 # It reports the gateway's current relative-path base and configured/effective path policy.
+# Bundled MCP tools require a unique isolatedId created with isolated__create.
+# isolated__create accepts one or more absolute workspaces and intersects them with each MCP allowlist.
+# Gateway-signed roots cannot be replaced by public root, roots, workspace, or workspaces arguments.
 
 # safe-files uses cwd as its workspace root. The server script path must therefore be absolute.
 [mcp_servers.files]
@@ -19,7 +22,7 @@ annotation_config = false
 dangerous_allow_gateway_config_access = false
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
-# Add multiple directories here only when copy or move must cross those workspaces; both paths remain policy-checked.
+# Add every directory that an isolated workspace may select; each isolatedId receives only its requested subset.
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
 allowed_files = []
 disallowed_directories = []
@@ -31,7 +34,8 @@ disallowed_path_globs = ['**.ssh**']
 # --disable-push=true removes push from the published tool list. Default when omitted: false.
 # --disable-pull=true removes pull from the published tool list. Default when omitted: true.
 # --disable-clone=true removes clone_repository from the published tool list. Default when omitted: true.
-# These flags do not disable local tools such as status, diff, show, switch_branch, add_all, or commit.
+# These flags do not disable branch, checkout, worktree, status, diff, show, staging, or commit tools.
+# Branch deletion and forced worktree removal are not exposed.
 [mcp_servers.git]
 command = "node"
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']

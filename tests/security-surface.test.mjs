@@ -81,6 +81,7 @@ test('child MCP environment is allowlisted instead of inheriting credentials', a
   assert.match(child, /LOCAL_MCP_ALLOWED_DIRECTORIES/);
   assert.match(child, /LOCAL_MCP_DISALLOWED_FILES/);
   assert.match(child, /LOCAL_MCP_DISALLOWED_PATH_GLOBS/);
+  assert.match(child, /LOCAL_MCP_GATEWAY_ISOLATION_KEY/);
   assert.doesNotMatch(child, /env:\s*\{\s*\.\.\.process\.env/);
   const policy = await import('../app/child-environment.mjs');
   const environment = policy.buildChildEnvironment({ EXPLICIT: 'yes' }, {
@@ -100,11 +101,35 @@ test('child MCP environment is allowlisted instead of inheriting credentials', a
   assert.equal(environment.NODE_OPTIONS, undefined);
 });
 
+test('bundled isolation uses a private HMAC-signed multi-root context and rejects public root overrides', async () => {
+  const isolation = await readFile(new URL('../app/bundled-isolation.mjs', import.meta.url), 'utf8');
+  const gateway = await readFile(new URL('../app/gateway.mjs', import.meta.url), 'utf8');
+  const config = await readFile(new URL('../app/server-config.mjs', import.meta.url), 'utf8');
+  assert.match(isolation, /createHmac\('sha256'/);
+  assert.match(isolation, /timingSafeEqual/);
+  assert.match(isolation, /workspace roots are controlled only by isolated__create/);
+  assert.match(gateway, /randomBytes\(32\)/);
+  assert.match(gateway, /signBundledIsolationContext/);
+  assert.match(gateway, /workspaces/);
+  assert.match(config, /LOCAL_MCP_GATEWAY_ISOLATION_KEY/);
+  for (const path of [
+    '../mcp/safe-files/server.mjs',
+    '../mcp/safe-images/server.mjs',
+    '../mcp/safe-download/server.mjs',
+    '../mcp/gitmcp/server.mjs',
+    '../mcp/gh-workflow/server.mjs'
+  ]) {
+    const source = await readFile(new URL(path, import.meta.url), 'utf8');
+    assert.match(source, /createBundledIsolation/);
+    assert.match(source, /isolation\.run/);
+  }
+});
+
 test('safe-files uses cwd while the gateway applies generic path allowlists', async () => {
   const filesServer = await readFile(new URL('../mcp/safe-files/server.mjs', import.meta.url), 'utf8');
-  assert.match(filesServer, /process working directory is exposed as the MCP root/i);
-  assert.match(filesServer, /accept both paths relative to the current MCP root and absolute paths/i);
-  assert.match(filesServer, /Every resolved path must remain inside a configured allowed directory/i);
+  assert.match(filesServer, /process working directory is the fallback MCP root/i);
+  assert.match(filesServer, /HMAC-signed isolated base and one or more roots/i);
+  assert.match(filesServer, /Relative and absolute paths must remain inside those roots/i);
   assert.doesNotMatch(filesServer, /--root <path>|parseSafeFilesArgs/);
   assert.doesNotMatch(filesServer, /chatgpt-local-mcp-root|ROOT_MARKER/);
   assert.doesNotMatch(filesServer, /name:\s*['"](?:execute|start_command|without_sandbox|shell)['"]/);
@@ -154,6 +179,10 @@ test('gitmcp preserves normal Git configuration while disabling only executable 
   assert.match(source, /lineEndingConversionRespected: true/);
   assert.match(source, /systemAndGlobalCleanSmudgeFiltersRespected: true/);
   assert.match(source, /\/\^\(local\|worktree\)\\s\//);
+  assert.match(source, /spawn\('git', args, \{[^}]*shell:\s*false/s);
+  assert.match(source, /'worktree', 'add'/);
+  assert.match(source, /'worktree', 'remove', '--'/);
+  assert.doesNotMatch(source, /worktree', 'remove', '--force|branch', '-[dD]/);
 });
 
 test('gateway publishes an exact access-scope tool and installation guidance requires using it instead of remembered paths', async () => {
@@ -162,8 +191,8 @@ test('gateway publishes an exact access-scope tool and installation guidance req
   const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
   assert.match(scope, /get_gateway_access_scope/);
   assert.match(scope, /exact current gateway-enforced allow\/deny path scope/i);
-  assert.match(gateway, /pathPolicy\.describe\(\)/);
-  assert.match(gateway, /call it before assuming a working directory or allowed local path/);
+  assert.match(gateway, /pathPolicy\.describe\(/);
+  assert.match(gateway, /bundled scopes require the same isolatedId/);
   assert.match(install, /過去チャットの記憶で補わない/);
   assert.match(install, /get_gateway_access_scope/);
   assert.match(install, /gateway__list_available_tools/);

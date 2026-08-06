@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { access, copyFile, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const MAX_TEXT_BYTES = Number(process.env.SAFE_FILES_MAX_BYTES ?? 2 * 1024 * 1024);
@@ -26,10 +27,9 @@ Usage:
 Options:
   --help  Print this help and exit.
 
-The process working directory is exposed as the MCP root and is the base for relative paths. Set cwd in gateway.toml instead of passing --root.
-Tools that document it, including read_text, accept both paths relative to the current MCP root and absolute paths. Every resolved path must remain inside a configured allowed directory.
-When exposed through the gateway, add every permitted absolute directory to allowed_directories.
-Use multiple allowed directories in one safe-files entry when copy or move must cross workspaces; use separate entries when isolation is preferred.
+Outside the Gateway, the process working directory is the fallback MCP root. Set cwd in gateway.toml instead of passing --root.
+Through the Gateway, every call receives an HMAC-signed isolated base and one or more roots. Relative and absolute paths must remain inside those roots and the configured allowlist.
+Public root or workspace override arguments are rejected.
 `;
 
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
@@ -44,6 +44,7 @@ const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlo
   JSON.parse(process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS ?? '[]'),
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
 );
+const isolation = createBundledIsolation();
 
 const BLOCKED_SECRET_EXTENSIONS = new Set(['.key', '.kdbx', '.p12', '.pem', '.pfx', '.ppk', '.pub']);
 const BLOCKED_TRANSFER_EXTENSIONS = new Set(['.dsv', '.dst', '.nds', '.sav', ...BLOCKED_SECRET_EXTENSIONS]);
@@ -109,19 +110,19 @@ const toolResult = (value, isError = false, displayText) => ({
 const schemas = [
   {
     name: 'roots',
-    description: 'List configured allowed workspace directories and the current MCP root, which is the process working directory used to resolve relative paths.',
+    description: 'List the signed isolated workspace roots for this call and the current relative-path base. Outside the Gateway, configured roots and the process working directory are used.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'get_working_directory',
-    description: 'Return the current MCP root, which is the working directory used to resolve relative paths.',
+    description: 'Return the current relative-path base for this isolation.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: 'set_working_directory',
-    description: 'Change the current MCP root and relative-path base to an existing directory inside a configured allowed directory.',
+    description: 'Change this isolation\'s relative-path base to an existing directory inside one of its signed roots.',
     inputSchema: {
       type: 'object',
       properties: { path: { type: 'string', minLength: 1 } },
@@ -369,8 +370,9 @@ function assertSafePath(root, candidate) {
 
 let rootsPromise;
 let deniedPromise;
-let workingDirectoryPromise;
 const roots = () => {
+  const context = isolation.current();
+  if (context) return Promise.resolve([...context.roots]);
   if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
     return Promise.reject(new Error('No workspace root is configured'));
   }
@@ -380,10 +382,7 @@ const roots = () => {
   }));
   return rootsPromise;
 };
-const workingDirectory = async () => {
-  workingDirectoryPromise ??= roots().then(([first]) => first);
-  return workingDirectoryPromise;
-};
+const workingDirectory = async () => isolation.current()?.base ?? (await roots())[0];
 
 const outsideRootsError = (message, allowed) => new Error([
   message,
@@ -1004,7 +1003,13 @@ async function runGitApply(patch, dryRun) {
     const args = ['apply', '--whitespace=nowarn'];
     if (checkOnly) args.push('--check');
     args.push('-');
-    const child = spawn('git', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false });
+    const child = spawn('git', args, {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: false,
+      env: environmentWithoutBundledIsolationKey()
+    });
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -1019,7 +1024,13 @@ async function runGitApply(patch, dryRun) {
 
 async function runRipgrep(args) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn('rg', args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: false });
+    const child = spawn('rg', args, {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: false,
+      env: environmentWithoutBundledIsolationKey()
+    });
     const stdout = [];
     const stderr = [];
     let stdoutBytes = 0;
@@ -1206,7 +1217,6 @@ async function callTool(name, args = {}) {
     case 'set_working_directory': {
       const target = await resolveExisting(args.path);
       if (!(await stat(target.path)).isDirectory()) throw new Error('Path is not a directory');
-      workingDirectoryPromise = Promise.resolve(target.path);
       return { workingDirectory: target.path };
     }
     case 'list_directory': {
@@ -1314,7 +1324,7 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-files', version: '4.3.0' },
+        serverInfo: { name: 'safe-files', version: '4.4.0' },
         instructions: 'Current-working-directory UTF-8 editing, fixed ripgrep search, and bounded file transfer. The gateway enforces configured path allowlists before tool calls are forwarded.'
       });
     }
@@ -1324,7 +1334,7 @@ export function createServer() {
     if (request.method === 'tools/call') {
       try {
         const toolName = request.params?.name;
-        const result = await callTool(toolName, request.params?.arguments ?? {});
+        const result = await isolation.run(request.params?.arguments ?? {}, (toolArguments) => callTool(toolName, toolArguments));
         if (toolName === 'read_text' && result?.format === 'annotated') {
           const { annotated, ...structuredResult } = result;
           return response(request.id, toolResult({ ok: true, result: structuredResult }, false, annotated));

@@ -31,7 +31,10 @@ export class StdioMcpChild {
       LOCAL_MCP_ALLOWED_FILES: JSON.stringify(this.config.allowedFiles ?? []),
       LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(this.config.disallowedDirectories ?? []),
       LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(disallowedFiles),
-      LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? [])
+      LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? []),
+      ...(this.config.isBundled && this.config.gatewayIsolationKey
+        ? { LOCAL_MCP_GATEWAY_ISOLATION_KEY: this.config.gatewayIsolationKey }
+        : {})
     };
     this.child = spawn(command, args, {
       cwd,
@@ -52,7 +55,7 @@ export class StdioMcpChild {
     await this.request('initialize', {
       protocolVersion: DEFAULT_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'local-mcp-gateway', version: '0.5.0' }
+      clientInfo: { name: 'local-mcp-gateway', version: '0.6.0' }
     }, this.config.startupTimeoutMs);
     this.notify('notifications/initialized', {});
     await this.refreshTools();

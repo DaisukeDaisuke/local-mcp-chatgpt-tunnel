@@ -1,18 +1,26 @@
 import { readFile, realpath } from 'node:fs/promises';
-import { dirname, posix, resolve, win32 } from 'node:path';
+import { basename, dirname, posix, resolve, win32 } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { normalizeDisallowedPathGlobs } from './path-glob.mjs';
 import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const BUNDLED_SERVER_PATHS = [
+  ['mcp', 'safe-files', 'server.mjs'],
+  ['mcp', 'safe-images', 'server.mjs'],
+  ['mcp', 'safe-download', 'server.mjs'],
+  ['mcp', 'gitmcp', 'server.mjs'],
+  ['mcp', 'gh-workflow', 'server.mjs']
+].map((parts) => resolve(repositoryRoot, ...parts));
 
 const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_ALLOWED_DIRECTORIES',
   'LOCAL_MCP_ALLOWED_FILES',
   'LOCAL_MCP_DISALLOWED_DIRECTORIES',
   'LOCAL_MCP_DISALLOWED_FILES',
-  'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
+  'LOCAL_MCP_DISALLOWED_PATH_GLOBS',
+  'LOCAL_MCP_GATEWAY_ISOLATION_KEY'
 ]);
 
 function platformPath(platform = process.platform) {
@@ -57,6 +65,19 @@ function absolutePathArray(value, name, platform = process.platform) {
   return values;
 }
 
+function comparablePath(value, platform = process.platform) {
+  const normalized = platformPath(platform).normalize(value);
+  return platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function isBundledServer(command, args, cwd, platform = process.platform) {
+  if (platform !== process.platform || args.length === 0) return false;
+  const executable = basename(command).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe') return false;
+  const candidate = comparablePath(absoluteFrom(cwd, args[0], platform), platform);
+  return BUNDLED_SERVER_PATHS.some((path) => comparablePath(path, platform) === candidate);
+}
+
 function normalizeLifecycle(raw, key, serverName) {
   const value = raw[key];
   if (value === undefined) return undefined;
@@ -93,12 +114,15 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
       throw new Error(`mcp_servers.${name}.env may not override reserved path-policy variable ${environmentName}`);
     }
   }
+  const args = stringArray(raw.args, `mcp_servers.${name}.args`);
+  const cwd = absoluteFrom(base, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : '.', platform);
   return {
     name,
     prefix: typeof raw.prefix === 'string' && raw.prefix ? raw.prefix : name,
     command: raw.command,
-    args: stringArray(raw.args, `mcp_servers.${name}.args`),
-    cwd: absoluteFrom(base, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : '.', platform),
+    args,
+    cwd,
+    isBundled: isBundledServer(raw.command, args, cwd, platform),
     env,
     requestTimeoutMs: Math.round(timeoutSeconds * 1000),
     startupTimeoutMs: Math.round(startupTimeoutSeconds * 1000),

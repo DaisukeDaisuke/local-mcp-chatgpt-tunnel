@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { loadGatewayConfig, serverConfigInternals } from '../app/server-config.mjs';
 import { parseToml } from '../app/toml-lite.mjs';
@@ -76,6 +76,49 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].disallowedDirectories, ['C:\\work\\project\\private']);
   assert.deepEqual(config.servers[0].disallowedFiles, ['C:\\work\\project\\.env']);
   assert.deepEqual(config.servers[0].disallowedPathGlobs, ['**.ssh**']);
+});
+
+test('gateway marks only Node-launched bundled server paths as bundled', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-bundled-config-'));
+  const bundledPath = resolve('mcp/safe-files/server.mjs');
+  const cwd = resolve('.');
+  const bundledConfigPath = join(directory, 'bundled.toml');
+  await writeFile(bundledConfigPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    `command = '${process.execPath}'`,
+    `args = ['${bundledPath}']`,
+    `cwd = '${cwd}'`,
+    `allowed_directories = ['${cwd}']`
+  ].join('\n'), 'utf8');
+  const bundled = await loadGatewayConfig(bundledConfigPath);
+  assert.equal(bundled.servers[0].isBundled, true);
+
+  const impersonatedConfigPath = join(directory, 'impersonated.toml');
+  await writeFile(impersonatedConfigPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    "command = 'not-node'",
+    `args = ['${bundledPath}']`,
+    `cwd = '${cwd}'`,
+    `allowed_directories = ['${cwd}']`
+  ].join('\n'), 'utf8');
+  const impersonated = await loadGatewayConfig(impersonatedConfigPath);
+  assert.equal(impersonated.servers[0].isBundled, false);
+});
+
+test('gateway config forbids overriding the private bundled isolation key', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-isolation-key-config-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    "command = 'node'",
+    "args = ['server.mjs']",
+    '[mcp_servers.files.env]',
+    "LOCAL_MCP_GATEWAY_ISOLATION_KEY = 'forged'"
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /may not override reserved path-policy variable LOCAL_MCP_GATEWAY_ISOLATION_KEY/);
 });
 
 test('gateway config validates disallowed_path_globs without treating them as absolute paths', async () => {

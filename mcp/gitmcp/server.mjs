@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const modulePath = fileURLToPath(import.meta.url);
@@ -43,8 +44,10 @@ Options:
   --disable-clone=true|false  Remove the clone_repository tool when true. Default: true.
 
 The disable options affect only push, pull, and clone_repository. Local Git tools such as status,
-diff, show, switch_branch, add_all, and commit remain available while this MCP server is enabled.
+diff, show, branch listing and creation, checkout, worktree creation and removal, add_all, and
+commit remain available while this MCP server is enabled. Branch deletion is intentionally absent.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
+Gateway calls also require an HMAC-signed isolated base and root list; public root or workspace override arguments are rejected.
 Standard Git ignore rules, attributes, line-ending conversion, system/global filters, and configured
 commit signing are preserved. Repository-local executable Git configuration is rejected.
 Git is always spawned with shell=false and fixed subcommands and options.
@@ -68,6 +71,7 @@ const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlo
   pathArray('LOCAL_MCP_DISALLOWED_PATH_GLOBS'),
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
 );
+const isolation = createBundledIsolation();
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const protocolError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
@@ -84,6 +88,7 @@ const toolResult = (value, isError = false) => ({
 });
 const READ_ONLY_ANNOTATIONS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const LOCAL_STATE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const LOCAL_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 const LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
 const LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
 const OPEN_WORLD_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
@@ -129,7 +134,8 @@ const schemas = [
   { name: 'check_ignore', description: 'Ask Git which ignore rule applies to each repository path and whether that rule leaves the path ignored.', inputSchema: repositoryPathsSchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'check_attributes', description: 'Ask Git for all effective attributes on each repository path, including text, binary, diff, merge, filter, and line-ending attributes.', inputSchema: repositoryPathsSchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'get_effective_config', description: 'Return behavior-relevant effective Git configuration with scope and origin, excluding credentials and author name/email.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
-  { name: 'branches', description: 'List local and remote branches and identify the current branch.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'branches', description: 'List local and remote branches with object IDs, upstreams, and the current branch.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'list_worktrees', description: 'List Git worktrees whose paths are inside the configured allowlist. Worktrees outside policy are omitted without exposing their paths.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'remotes', description: 'List configured remote names and URLs.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   {
     name: 'log',
@@ -167,8 +173,81 @@ const schemas = [
   },
   {
     name: 'switch_branch',
-    description: 'Switch to an existing local branch, or create one from the current HEAD.',
-    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, branch: { type: 'string', minLength: 1, maxLength: 255 }, create: { type: 'boolean', default: false } }, required: ['branch'], additionalProperties: false },
+    description: 'Switch to an existing local branch, or create and switch to one from an optional startPoint. startPoint is accepted only when create=true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repositoryPath: { type: 'string', default: '.' },
+        branch: { type: 'string', minLength: 1, maxLength: 255 },
+        create: { type: 'boolean', default: false },
+        startPoint: { type: 'string', minLength: 1, maxLength: 255, description: 'Simple local revision used as the parent when create=true. Defaults to HEAD.' }
+      },
+      required: ['branch'],
+      additionalProperties: false
+    },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
+  },
+  {
+    name: 'create_branch',
+    description: 'Create a local branch from an optional startPoint and optionally switch to it. Branch deletion is not supported.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repositoryPath: { type: 'string', default: '.' },
+        branch: { type: 'string', minLength: 1, maxLength: 255 },
+        startPoint: { type: 'string', minLength: 1, maxLength: 255, default: 'HEAD' },
+        switch: { type: 'boolean', default: true }
+      },
+      required: ['branch'],
+      additionalProperties: false
+    },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
+  },
+  {
+    name: 'checkout',
+    description: 'Move HEAD to an existing local branch, or detach HEAD at a verified commit when detach=true. File/path checkout is not supported.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repositoryPath: { type: 'string', default: '.' },
+        target: { type: 'string', minLength: 1, maxLength: 255 },
+        detach: { type: 'boolean', default: false }
+      },
+      required: ['target'],
+      additionalProperties: false
+    },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
+  },
+  {
+    name: 'create_worktree',
+    description: 'Create one Git worktree as a new child directory inside an allowed parent. It can use an existing local branch or create a new branch from startPoint.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repositoryPath: { type: 'string', default: '.' },
+        parentDirectory: { type: 'string', default: '.' },
+        destinationDirectory: { type: 'string', minLength: 1, maxLength: 255 },
+        branch: { type: 'string', minLength: 1, maxLength: 255 },
+        createBranch: { type: 'boolean', default: false },
+        startPoint: { type: 'string', minLength: 1, maxLength: 255, description: 'Simple local revision used only when createBranch=true. Defaults to HEAD.' }
+      },
+      required: ['destinationDirectory', 'branch'],
+      additionalProperties: false
+    },
+    annotations: LOCAL_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS
+  },
+  {
+    name: 'remove_worktree',
+    description: 'Remove one registered non-primary Git worktree inside the configured allowlist. Dirty or locked worktrees are not forced, and branch deletion is not performed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repositoryPath: { type: 'string', default: '.' },
+        worktreePath: { type: 'string', minLength: 1 }
+      },
+      required: ['worktreePath'],
+      additionalProperties: false
+    },
     annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
   { name: 'add_all', description: 'Stage all non-ignored changes with the fixed command git add --all -- . Standard Git ignore, attributes, clean filters, and line-ending conversion are respected.', inputSchema: repositorySchema(), annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS },
@@ -223,7 +302,6 @@ function assertNotGlobDenied(path, context) {
 }
 
 let policyPromise;
-let workingDirectoryPromise;
 
 async function canonicalExisting(path) {
   if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
@@ -264,12 +342,20 @@ async function policy() {
       disallowedPathGlobs: configuredDisallowedPathGlobs
     };
   })();
-  return policyPromise;
+  const configured = await policyPromise;
+  const context = isolation.current();
+  if (!context) return configured;
+  return {
+    ...configured,
+    allowedDirectories: [...context.roots],
+    allowedFiles: []
+  };
 }
 
 async function workingDirectory() {
-  workingDirectoryPromise ??= policy().then(({ allowedDirectories }) => allowedDirectories[0]);
-  return workingDirectoryPromise;
+  const context = isolation.current();
+  if (context) return context.base;
+  return (await policy()).allowedDirectories[0];
 }
 
 function outsidePolicyError(message, rules) {
@@ -297,7 +383,7 @@ async function assertAllowedExisting(path) {
   return actual;
 }
 
-async function assertAllowedNewDirectory(parentDirectory, destinationDirectory) {
+async function assertAllowedNewDirectory(parentDirectory, destinationDirectory, context = 'Git destination') {
   const parent = await assertAllowedExisting(parentDirectory);
   if (!(await stat(parent)).isDirectory()) throw new Error('parentDirectory is not a directory');
   if (typeof destinationDirectory !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._ -]{0,254}$/.test(destinationDirectory)) {
@@ -305,12 +391,12 @@ async function assertAllowedNewDirectory(parentDirectory, destinationDirectory) 
   }
   if (destinationDirectory === '.' || destinationDirectory === '..' || destinationDirectory.toLowerCase() === '.git') throw new Error('Unsafe destinationDirectory');
   const destination = resolve(parent, destinationDirectory);
-  assertNotGlobDenied(destination, 'Git clone destination');
-  if (!within(parent, destination)) throw new Error('Clone destination escaped parentDirectory');
+  assertNotGlobDenied(destination, context);
+  if (!within(parent, destination)) throw new Error(`${context} escaped parentDirectory`);
   const rules = await policy();
-  if (!rules.allowedDirectories.some((root) => within(root, destination))) throw outsidePolicyError('Clone destination is outside allowed_directories', rules);
-  if (rules.disallowedDirectories.some((root) => within(root, destination)) || rules.disallowedFiles.some((file) => same(file, destination))) throw new Error('Clone destination is denied');
-  try { await lstat(destination); throw new Error('Clone destination already exists'); }
+  if (!rules.allowedDirectories.some((root) => within(root, destination))) throw outsidePolicyError(`${context} is outside allowed_directories`, rules);
+  if (rules.disallowedDirectories.some((root) => within(root, destination)) || rules.disallowedFiles.some((file) => same(file, destination))) throw new Error(`${context} is denied`);
+  try { await lstat(destination); throw new Error(`${context} already exists`); }
   catch (error) { if (error?.code !== 'ENOENT') throw error; }
   return { parent, destination };
 }
@@ -326,9 +412,9 @@ function safeRemote(value) {
   return value;
 }
 
-function safeCommit(value) {
+function safeCommit(value, label = 'commit') {
   if (typeof value !== 'string' || value.length === 0 || value.length > 255 || /[\0\r\n]/.test(value) || value.startsWith('-')) {
-    throw new Error('commit is invalid');
+    throw new Error(`${label} is invalid`);
   }
   if (!/^[A-Za-z0-9][A-Za-z0-9._/~^+-]{0,254}$/.test(value)
       || value.includes('..')
@@ -336,9 +422,24 @@ function safeCommit(value) {
       || value.endsWith('/')
       || value.endsWith('.')
       || value.endsWith('.lock')) {
-    throw new Error('commit is invalid');
+    throw new Error(`${label} is invalid`);
   }
   return value;
+}
+
+async function safeBranchName(cwd, value, label = 'branch') {
+  const branch = safeName(value, label);
+  const checked = (await runGit(cwd, ['check-ref-format', '--branch', branch])).stdout.trim();
+  if (checked !== branch) throw new Error(`${label} is invalid`);
+  return branch;
+}
+
+async function resolveCommit(cwd, value, label = 'commit') {
+  const requested = safeCommit(value, label);
+  const objectId = (await runGit(cwd, ['rev-parse', '--verify', '--end-of-options', `${requested}^{commit}`])).stdout.trim();
+  if (!/^[0-9A-Fa-f]{40,64}$/.test(objectId)) throw new Error('Git returned an invalid commit object ID');
+  await assertTreeAvoidsDeniedPaths(cwd, objectId);
+  return { requested, objectId };
 }
 
 function safeShowFormat(value = 'patch') {
@@ -356,7 +457,7 @@ async function runGit(cwd, args, { input, acceptedExitCodes = [0] } = {}) {
   return new Promise((resolvePromise, reject) => {
     const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
     const environment = {
-      ...process.env,
+      ...environmentWithoutBundledIsolationKey(),
       GIT_TERMINAL_PROMPT: '0',
       GIT_OPTIONAL_LOCKS: '0',
       GIT_CONFIG_COUNT: '7',
@@ -527,6 +628,89 @@ function parseAttributes(stdout) {
   return [...byPath].map(([path, attributes]) => ({ path, attributes }));
 }
 
+function parseBranches(stdout) {
+  return stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+    const [fullName, branch, objectId, head, upstream] = line.split('\0');
+    if (!fullName || !branch || !/^[0-9A-Fa-f]{40,64}$/.test(objectId ?? '')) throw new Error('Unexpected git for-each-ref output');
+    const type = fullName.startsWith('refs/heads/') ? 'local' : fullName.startsWith('refs/remotes/') ? 'remote' : 'other';
+    return {
+      branch,
+      fullName,
+      type,
+      objectId,
+      current: head === '*',
+      upstream: upstream || null
+    };
+  });
+}
+
+function parseWorktrees(stdout) {
+  const worktrees = [];
+  let current = null;
+  const finish = () => {
+    if (current === null) return;
+    if (typeof current.path !== 'string' || current.path.length === 0) throw new Error('Unexpected git worktree output');
+    worktrees.push(current);
+    current = null;
+  };
+  for (const field of stdout.split('\0')) {
+    if (field === '') {
+      finish();
+      continue;
+    }
+    const separator = field.indexOf(' ');
+    const key = separator < 0 ? field : field.slice(0, separator);
+    const value = separator < 0 ? '' : field.slice(separator + 1);
+    if (key === 'worktree') {
+      finish();
+      current = {
+        path: value,
+        head: null,
+        branch: null,
+        detached: false,
+        bare: false,
+        locked: false,
+        lockReason: null,
+        prunable: false,
+        pruneReason: null
+      };
+      continue;
+    }
+    if (current === null) throw new Error('Unexpected git worktree output');
+    if (key === 'HEAD') current.head = value;
+    else if (key === 'branch') current.branch = value.startsWith('refs/heads/') ? value.slice('refs/heads/'.length) : value;
+    else if (key === 'detached') current.detached = true;
+    else if (key === 'bare') current.bare = true;
+    else if (key === 'locked') {
+      current.locked = true;
+      current.lockReason = value || null;
+    } else if (key === 'prunable') {
+      current.prunable = true;
+      current.pruneReason = value || null;
+    }
+  }
+  finish();
+  return worktrees;
+}
+
+async function visibleWorktreePath(path) {
+  try {
+    const actual = await realpath(resolve(path));
+    if (!(await stat(actual)).isDirectory()) return null;
+    assertNotGlobDenied(actual, 'Git worktree path');
+    const rules = await policy();
+    if (!rules.allowedDirectories.some((root) => within(root, actual))) return null;
+    if (rules.disallowedDirectories.some((root) => within(root, actual)) || rules.disallowedFiles.some((file) => same(file, actual))) return null;
+    return actual;
+  } catch {
+    return null;
+  }
+}
+
+async function worktreesForRepository(cwd) {
+  return parseWorktrees((await runGit(cwd, ['worktree', 'list', '--porcelain', '-z'])).stdout);
+}
+
 async function callTool(name, args = {}) {
   switch (name) {
     case 'roots': return { ...(await policy()), workingDirectory: await workingDirectory(), disablePush: cli.disablePush, disablePull: cli.disablePull, disableClone: cli.disableClone };
@@ -569,7 +753,6 @@ async function callTool(name, args = {}) {
     case 'set_working_directory': {
       const target = await assertAllowedExisting(args.path);
       if (!(await stat(target)).isDirectory()) throw new Error('Path is not a directory');
-      workingDirectoryPromise = Promise.resolve(target);
       return { workingDirectory: target };
     }
     case 'status': {
@@ -617,8 +800,23 @@ async function callTool(name, args = {}) {
     }
     case 'branches': {
       const cwd = await repository(args.repositoryPath);
-      const branches = (await runGit(cwd, ['for-each-ref', '--format=%(refname:short)%00%(HEAD)', 'refs/heads', 'refs/remotes'])).stdout;
-      return { repositoryPath: cwd, branches: branches.split('\n').filter(Boolean).map((line) => { const [branch, head] = line.split('\0'); return { branch, current: head === '*' }; }) };
+      const branches = (await runGit(cwd, [
+        'for-each-ref',
+        '--format=%(refname)%00%(refname:short)%00%(objectname)%00%(HEAD)%00%(upstream:short)',
+        'refs/heads',
+        'refs/remotes'
+      ])).stdout;
+      return { repositoryPath: cwd, branches: parseBranches(branches) };
+    }
+    case 'list_worktrees': {
+      const cwd = await repository(args.repositoryPath);
+      const worktrees = [];
+      for (const item of await worktreesForRepository(cwd)) {
+        const path = await visibleWorktreePath(item.path);
+        if (path === null) continue;
+        worktrees.push({ ...item, path, current: same(path, cwd) });
+      }
+      return { repositoryPath: cwd, worktrees };
     }
     case 'remotes': {
       const cwd = await repository(args.repositoryPath);
@@ -662,10 +860,92 @@ async function callTool(name, args = {}) {
     }
     case 'switch_branch': {
       const cwd = await repository(args.repositoryPath);
-      const branch = safeName(args.branch, 'branch');
-      if (args.create !== true) await assertTreeAvoidsDeniedPaths(cwd, branch);
-      await runGit(cwd, args.create === true ? ['switch', '-c', branch] : ['switch', branch]);
-      return { repositoryPath: cwd, branch, created: args.create === true };
+      const branch = await safeBranchName(cwd, args.branch);
+      if (args.create === true) {
+        const startPoint = await resolveCommit(cwd, args.startPoint ?? 'HEAD', 'startPoint');
+        await runGit(cwd, ['switch', '-c', branch, startPoint.objectId]);
+        return { repositoryPath: cwd, branch, created: true, startPoint: startPoint.requested, objectId: startPoint.objectId };
+      }
+      if (args.startPoint !== undefined) throw new Error('startPoint is accepted only when create=true');
+      const target = await resolveCommit(cwd, `refs/heads/${branch}`, 'branch');
+      await runGit(cwd, ['switch', branch]);
+      return { repositoryPath: cwd, branch, created: false, objectId: target.objectId };
+    }
+    case 'create_branch': {
+      const cwd = await repository(args.repositoryPath);
+      const branch = await safeBranchName(cwd, args.branch);
+      const startPoint = await resolveCommit(cwd, args.startPoint ?? 'HEAD', 'startPoint');
+      if (args.switch === false) await runGit(cwd, ['branch', branch, startPoint.objectId]);
+      else await runGit(cwd, ['switch', '-c', branch, startPoint.objectId]);
+      return {
+        repositoryPath: cwd,
+        branch,
+        startPoint: startPoint.requested,
+        objectId: startPoint.objectId,
+        switched: args.switch !== false
+      };
+    }
+    case 'checkout': {
+      const cwd = await repository(args.repositoryPath);
+      if (args.detach === true) {
+        const target = await resolveCommit(cwd, args.target, 'target');
+        await runGit(cwd, ['checkout', '--detach', target.objectId]);
+        return { repositoryPath: cwd, target: target.requested, objectId: target.objectId, detached: true };
+      }
+      const branch = await safeBranchName(cwd, args.target, 'target');
+      const target = await resolveCommit(cwd, `refs/heads/${branch}`, 'target');
+      await runGit(cwd, ['checkout', branch]);
+      return { repositoryPath: cwd, target: branch, objectId: target.objectId, detached: false };
+    }
+    case 'create_worktree': {
+      const cwd = await repository(args.repositoryPath);
+      const branch = await safeBranchName(cwd, args.branch);
+      const { parent, destination } = await assertAllowedNewDirectory(
+        args.parentDirectory ?? '.',
+        args.destinationDirectory,
+        'Git worktree destination'
+      );
+      let startPoint = null;
+      let command;
+      if (args.createBranch === true) {
+        startPoint = await resolveCommit(cwd, args.startPoint ?? 'HEAD', 'startPoint');
+        command = ['worktree', 'add', '-b', branch, '--', destination, startPoint.objectId];
+      } else {
+        if (args.startPoint !== undefined) throw new Error('startPoint is accepted only when createBranch=true');
+        await resolveCommit(cwd, `refs/heads/${branch}`, 'branch');
+        command = ['worktree', 'add', '--', destination, branch];
+      }
+      await runGit(cwd, command);
+      const actualDestination = await realpath(destination);
+      if (!same(actualDestination, destination)) throw new Error('Git created the worktree at an unexpected path');
+      return {
+        repositoryPath: cwd,
+        parentDirectory: parent,
+        worktreePath: actualDestination,
+        branch,
+        createdBranch: args.createBranch === true,
+        ...(startPoint === null ? {} : { startPoint: startPoint.requested, objectId: startPoint.objectId })
+      };
+    }
+    case 'remove_worktree': {
+      const cwd = await repository(args.repositoryPath);
+      const target = await assertAllowedExisting(args.worktreePath);
+      if (!(await stat(target)).isDirectory()) throw new Error('worktreePath is not a directory');
+      const registered = await worktreesForRepository(cwd);
+      let matchIndex = -1;
+      for (const [index, item] of registered.entries()) {
+        const path = await visibleWorktreePath(item.path);
+        if (path !== null && same(path, target)) {
+          matchIndex = index;
+          break;
+        }
+      }
+      if (matchIndex < 0) throw new Error('worktreePath is not a registered allowed worktree');
+      if (matchIndex === 0) throw new Error('The primary worktree cannot be removed');
+      if (same(target, cwd)) throw new Error('The current worktree cannot remove itself');
+      if (registered[matchIndex].locked) throw new Error('Locked worktrees are not removed');
+      await runGit(cwd, ['worktree', 'remove', '--', target]);
+      return { repositoryPath: cwd, worktreePath: target, removed: true, branchDeleted: false, forced: false };
     }
     case 'add_all': {
       const cwd = await repository(args.repositoryPath);
@@ -741,15 +1021,21 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'gitmcp', version: '1.1.0' },
-        instructions: 'Allowlisted Git operations only. Standard ignore rules, attributes, line-ending conversion, system/global filters, external diff/textconv, and configured commit signing are preserved. Repository-local executable Git configuration, hooks, force push, and arbitrary clone destinations are blocked.'
+        serverInfo: { name: 'gitmcp', version: '1.2.0' },
+        instructions: 'Allowlisted Git operations only. Branch listing, creation, switching, checkout, and allowed-path worktree creation/removal are supported; branch deletion and forced worktree removal are not. Standard ignore rules, attributes, line-ending conversion, system/global filters, external diff/textconv, and configured commit signing are preserved. Repository-local executable Git configuration, hooks, force push, and arbitrary clone destinations are blocked.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
     if (request.method === 'ping') return response(request.id, {});
     if (request.method === 'tools/list') return response(request.id, { tools: schemas });
     if (request.method === 'tools/call') {
-      try { return response(request.id, toolResult({ ok: true, result: await callTool(request.params?.name, request.params?.arguments ?? {}) })); }
+      try {
+        const result = await isolation.run(
+          request.params?.arguments ?? {},
+          (toolArguments) => callTool(request.params?.name, toolArguments)
+        );
+        return response(request.id, toolResult({ ok: true, result }));
+      }
       catch (error) { return response(request.id, toolResult({ ok: false, error: error instanceof Error ? error.message : String(error) }, true)); }
     }
     return protocolError(request.id, -32601, 'Method not found');

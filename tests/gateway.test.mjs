@@ -221,10 +221,20 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   assert.ok(names.includes('files__read_file_chunk'));
   assert.ok(names.includes('files__set_working_directory'));
   assert.ok(names.includes('files__get_gateway_access_scope'));
-  assert.ok(names.every((name) => name.startsWith('files__')));
+  assert.ok(names.includes('isolated__create'));
+  assert.ok(names.includes('isolated__list'));
+  assert.ok(names.includes('isolated__close'));
+  assert.ok(names.every((name) => name.startsWith('files__') || name.startsWith('isolated__')));
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
+  const isolatedId = 'gateway-files-test';
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 19, method: 'tools/call', params: {
+    name: 'isolated__create', arguments: { isolatedId, workspaces: [workspace] }
+  } })}\n`);
+  const createdIsolation = await nextLine(child.stdout);
+  assert.equal(createdIsolation.result.isError, false);
+  assert.equal(createdIsolation.result.structuredContent.result.workspaceCount, 1);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: {
-    name: 'files__get_gateway_access_scope', arguments: {}
+    name: 'files__get_gateway_access_scope', arguments: { isolatedId }
   } })}\n`);
   const scope = await nextLine(child.stdout);
   assert.equal(scope.result.isError, false);
@@ -235,31 +245,31 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   assert.deepEqual(scope.result.structuredContent.result.configured.allowedFiles, []);
   assert.equal(scope.result.structuredContent.result.effective.allowedDirectories[0].canonicalPath, canonicalWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: {
-    name: 'files__set_working_directory', arguments: { path: 'nested' }
+    name: 'files__set_working_directory', arguments: { isolatedId, path: 'nested' }
   } })}\n`);
   const changedDirectory = await nextLine(child.stdout);
   assert.equal(changedDirectory.result.isError, false);
   assert.equal(changedDirectory.result.structuredContent.result.workingDirectory, canonicalNestedWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'tools/call', params: {
-    name: 'files__get_gateway_access_scope', arguments: {}
+    name: 'files__get_gateway_access_scope', arguments: { isolatedId }
   } })}\n`);
   const changedScope = await nextLine(child.stdout);
   assert.equal(changedScope.result.structuredContent.result.workingDirectory, canonicalNestedWorkspace);
   assert.equal(changedScope.result.structuredContent.result.relativePathBase, canonicalNestedWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 23, method: 'tools/call', params: {
-    name: 'files__set_working_directory', arguments: { path: workspace }
+    name: 'files__set_working_directory', arguments: { isolatedId, path: workspace }
   } })}\n`);
   const restoredDirectory = await nextLine(child.stdout);
   assert.equal(restoredDirectory.result.isError, false);
   assert.equal(restoredDirectory.result.structuredContent.result.workingDirectory, canonicalWorkspace);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
-    name: 'files__read_text', arguments: { path: 'inside.txt' }
+    name: 'files__read_text', arguments: { isolatedId, path: 'inside.txt' }
   } })}\n`);
   const inside = await nextLine(child.stdout);
   assert.equal(inside.result.isError, false);
   assert.equal(inside.result.structuredContent.result.results[0].content, 'inside');
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
-    name: 'files__read_text', arguments: { path: join(tmpdir(), 'outside.txt') }
+    name: 'files__read_text', arguments: { isolatedId, path: join(tmpdir(), 'outside.txt') }
   } })}\n`);
   const outside = await nextLine(child.stdout);
   assert.equal(outside.result.isError, true);
@@ -283,6 +293,7 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5 + index, method: 'tools/call', params: {
       name: 'files__read_text',
       arguments: {
+        isolatedId,
         reads: [
           { path, startLine: 1, endLine: 10 },
           { path: 'inside.txt' }
@@ -295,6 +306,124 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
     assert.match(escaped.result.content[0].text, /files\.read_text path argument reads\[0\]\.path/);
     assert.match(escaped.result.content[0].text, /outside allowed_directories and allowed_files/);
   }
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 30, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId, root: workspace, path: 'inside.txt' }
+  } })}\n`);
+  const rootOverride = await nextLine(child.stdout);
+  assert.equal(rootOverride.result.isError, true);
+  assert.match(rootOverride.result.content[0].text, /workspace roots are controlled only by isolated__create/);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 31, method: 'tools/call', params: {
+    name: 'isolated__list', arguments: {}
+  } })}\n`);
+  const isolatedList = await nextLine(child.stdout);
+  assert.deepEqual(isolatedList.result.structuredContent.result.isolated.map((entry) => entry.isolatedId), [isolatedId]);
+  assert.equal(isolatedList.result.structuredContent.result.isolated[0].workspaceCount, 1);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 32, method: 'tools/call', params: {
+    name: 'isolated__close', arguments: { isolatedId }
+  } })}\n`);
+  const closed = await nextLine(child.stdout);
+  assert.equal(closed.result.isError, false);
+  assert.equal(closed.result.structuredContent.result.reusable, false);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 33, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId, path: 'inside.txt' }
+  } })}\n`);
+  const closedUse = await nextLine(child.stdout);
+  assert.equal(closedUse.result.isError, true);
+  assert.match(closedUse.result.content[0].text, /Unknown or closed isolatedId/);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 34, method: 'tools/call', params: {
+    name: 'isolated__create', arguments: { isolatedId, workspaces: [workspace] }
+  } })}\n`);
+  const reused = await nextLine(child.stdout);
+  assert.equal(reused.result.isError, true);
+  assert.match(reused.result.structuredContent.error, /cannot be reused until Gateway restart/);
+});
+
+gatewayIntegrationTest('gateway keeps multiple bundled workspaces isolated by unique ID', async (t) => {
+  const workspaceA = await mkdtemp(join(tmpdir(), 'gateway-isolated-a-'));
+  const workspaceB = await mkdtemp(join(tmpdir(), 'gateway-isolated-b-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-isolated-config-'));
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(join(workspaceA, 'a.txt'), 'alpha', 'utf8');
+  await writeFile(join(workspaceB, 'b.txt'), 'bravo', 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/safe-files/server.mjs')}']`,
+    `cwd = '${workspaceA}'`,
+    `allowed_directories = ['${workspaceA}', '${workspaceB}']`,
+    'enabled = true',
+    'prefix = "files"',
+    '[mcp_servers.git]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/gitmcp/server.mjs')}', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']`,
+    `cwd = '${workspaceB}'`,
+    `allowed_directories = ['${workspaceB}']`,
+    'enabled = true',
+    'prefix = "git"',
+    'annotation_config = false'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+
+  for (const [id, isolatedId, workspaces] of [
+    [2, 'multi', [workspaceA, workspaceB]],
+    [3, 'only-b', [workspaceB]]
+  ]) {
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: {
+      name: 'isolated__create', arguments: { isolatedId, workspaces }
+    } })}\n`);
+    const created = await nextLine(child.stdout);
+    assert.equal(created.result.isError, false);
+  }
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 35, method: 'tools/call', params: {
+    name: 'isolated__list', arguments: {}
+  } })}\n`);
+  const isolatedList = await nextLine(child.stdout);
+  const multiEntry = isolatedList.result.structuredContent.result.isolated.find((entry) => entry.isolatedId === 'multi');
+  const multiByPrefix = new Map(multiEntry.bundledMcp.map((entry) => [entry.prefix, entry]));
+  assert.equal(multiByPrefix.get('files').workspaceCount, 2);
+  assert.equal(multiByPrefix.get('git').workspaceCount, 1);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 36, method: 'tools/call', params: {
+    name: 'git__get_gateway_access_scope', arguments: { isolatedId: 'multi' }
+  } })}\n`);
+  const gitScope = await nextLine(child.stdout);
+  assert.equal(gitScope.result.isError, false);
+  assert.deepEqual(gitScope.result.structuredContent.result.isolationRoots, [await realpath(workspaceB)]);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId: 'multi', path: join(workspaceB, 'b.txt') }
+  } })}\n`);
+  const crossWorkspace = await nextLine(child.stdout);
+  assert.equal(crossWorkspace.result.isError, false);
+  assert.equal(crossWorkspace.result.structuredContent.result.results[0].content, 'bravo');
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId: 'only-b', path: 'b.txt' }
+  } })}\n`);
+  const relativeB = await nextLine(child.stdout);
+  assert.equal(relativeB.result.isError, false);
+  assert.equal(relativeB.result.structuredContent.result.results[0].content, 'bravo');
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId: 'only-b', path: join(workspaceA, 'a.txt') }
+  } })}\n`);
+  const escapedIsolation = await nextLine(child.stdout);
+  assert.equal(escapedIsolation.result.isError, true);
+  assert.match(escapedIsolation.result.content[0].text, /outside allowed_directories and allowed_files/);
 });
 
 gatewayIntegrationTest('gateway denies direct reads of its loaded configuration by default', async (t) => {
@@ -320,14 +449,19 @@ gatewayIntegrationTest('gateway denies direct reads of its loaded configuration 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   await nextLine(child.stdout);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
-    name: 'files__read_text', arguments: { path: configPath }
+    name: 'isolated__create', arguments: { isolatedId: 'protected-config', workspaces: [workspace] }
+  } })}\n`);
+  const created = await nextLine(child.stdout);
+  assert.equal(created.result.isError, false);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId: 'protected-config', path: configPath }
   } })}\n`);
   const denied = await nextLine(child.stdout);
   assert.equal(denied.result.isError, true);
   assert.match(denied.result.content[0].text, /targets the gateway configuration/);
 });
 
-gatewayIntegrationTest('gateway applies empty allowlists and disallowed path globs to nested read_text batches', async (t) => {
+gatewayIntegrationTest('gateway refuses isolated workspaces when a bundled MCP has an empty allowlist', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-read-text-policy-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
@@ -358,38 +492,11 @@ gatewayIntegrationTest('gateway applies empty allowlists and disallowed path glo
   await nextLine(child.stdout);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
-    name: 'files__read_text',
-    arguments: {
-      reads: [
-        { path: 'public.txt', startLine: 1, endLine: 999 },
-        { path: 'second.txt' },
-        { path: 'nested/third.md', startLine: 30, endLine: 60 }
-      ],
-      format: 'annotated'
-    }
+    name: 'isolated__create', arguments: { isolatedId: 'empty-allowlist', workspaces: [workspace] }
   } })}\n`);
   const noAllowlist = await nextLine(child.stdout);
   assert.equal(noAllowlist.result.isError, true);
-  assert.match(noAllowlist.result.content[0].text, /files\.read_text path argument reads\[0\]\.path/);
-  assert.match(noAllowlist.result.content[0].text, /outside allowed_directories and allowed_files/);
-  assert.match(noAllowlist.result.content[0].text, /public\.txt/);
-
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
-    name: 'files__read_text',
-    arguments: {
-      reads: [
-        { path: '.ssh/project-notes.txt', startLine: 1, endLine: 20 },
-        { path: 'public.txt' }
-      ],
-      format: 'annotated'
-    }
-  } })}\n`);
-  const disallowedGlob = await nextLine(child.stdout);
-  assert.equal(disallowedGlob.result.isError, true);
-  assert.match(disallowedGlob.result.content[0].text, /files\.read_text path argument reads\[0\]\.path/);
-  assert.match(disallowedGlob.result.content[0].text, /glob filter disallowed_path_globs/);
-  assert.match(disallowedGlob.result.content[0].text, /\*\*\.ssh\*\*/);
-  assert.match(disallowedGlob.result.content[0].text, /\.ssh/);
+  assert.match(noAllowlist.result.structuredContent.error, /outside every bundled MCP allowlist or is denied/);
 });
 
 gatewayIntegrationTest('gateway preserves safe-download outputSchema and embedded ZIP resource content', async (t) => {
@@ -421,7 +528,12 @@ gatewayIntegrationTest('gateway preserves safe-download outputSchema and embedde
   const tool = listed.result.tools.find((candidate) => candidate.name === 'downloads__download_zip');
   assert.equal(tool.outputSchema.type, 'object');
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
-    name: 'downloads__download_zip', arguments: { path: 'server.mjs', archiveName: 'server.zip' }
+    name: 'isolated__create', arguments: { isolatedId: 'download-test', workspaces: [workspace] }
+  } })}\n`);
+  const created = await nextLine(child.stdout);
+  assert.equal(created.result.isError, false);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'downloads__download_zip', arguments: { isolatedId: 'download-test', path: 'server.mjs', archiveName: 'server.zip' }
   } })}\n`);
   const downloaded = await nextLine(child.stdout);
   assert.equal(downloaded.result.isError, false);

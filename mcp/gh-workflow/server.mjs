@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
 
 const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
@@ -17,6 +18,7 @@ function boundedIntegerEnvironment(name, fallback, minimum, maximum) {
 }
 
 const MAX_OUTPUT_BYTES = boundedIntegerEnvironment('GH_WORKFLOW_MCP_MAX_OUTPUT_BYTES', 8 * 1024 * 1024, 1024, 128 * 1024 * 1024);
+const isolation = createBundledIsolation();
 
 function validateRepository(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 201 || /[\0\r\n]/.test(value)) {
@@ -61,6 +63,7 @@ Usage:
 GitHub Actions inspection and explicit run cancellation for a repository allowlist.
 The server spawns gh directly with shell=false, a fixed subcommand allowlist,
 validated arguments, ignored stdin, bounded output, and an explicit cwd.
+Gateway calls require an HMAC-signed isolated context, and public root or workspace overrides are rejected.
 `;
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
@@ -210,6 +213,8 @@ function selectedRepository(value) {
 let executionDirectoryPromise;
 
 async function executionDirectory() {
+  const context = isolation.current();
+  if (context) return context.base;
   executionDirectoryPromise ??= (async () => {
     const cwd = await realpath(process.cwd());
     if (!(await stat(cwd)).isDirectory()) throw new Error('The configured cwd is not a directory');
@@ -226,7 +231,7 @@ export async function runGh(args) {
   const cwd = await executionDirectory();
   return new Promise((resolvePromise, reject) => {
     const environment = {
-      ...process.env,
+      ...environmentWithoutBundledIsolationKey(),
       GH_PAGER: '',
       GH_PROMPT_DISABLED: '1',
       NO_COLOR: '1',
@@ -322,7 +327,7 @@ export function createServer(options = {}) {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'gh-workflow', version: '1.1.0' },
+        serverInfo: { name: 'gh-workflow', version: '1.2.0' },
         instructions: `GitHub Actions inspection and explicit run cancellation for this repository allowlist: ${cli.repositories.join(', ')}. No shell, arbitrary gh arguments, workflow dispatch, rerun, delete, artifact download, or other repository mutation.`
       });
     }
@@ -331,7 +336,10 @@ export function createServer(options = {}) {
     if (request.method === 'tools/list') return response(request.id, { tools: schemas });
     if (request.method === 'tools/call') {
       try {
-        const result = await callTool(request.params?.name, request.params?.arguments ?? {}, execute);
+        const result = await isolation.run(
+          request.params?.arguments ?? {},
+          (toolArguments) => callTool(request.params?.name, toolArguments, execute)
+        );
         return response(request.id, toolResult({ ok: true, result }));
       } catch (error) {
         return response(request.id, toolResult({ ok: false, error: error instanceof Error ? error.message : String(error) }, true));

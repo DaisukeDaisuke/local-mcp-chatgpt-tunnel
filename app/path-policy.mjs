@@ -1,4 +1,4 @@
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from './path-glob.mjs';
 
@@ -241,7 +241,35 @@ export class ToolPathPolicy {
     this.cwd = cwd;
   }
 
-  async describe() {
+  async selectAllowedDirectories(values, cwd = this.cwd) {
+    if (!Array.isArray(values) || values.length < 1) throw new Error('Workspace list must contain at least one directory');
+    const allowed = await this.allowed();
+    const selected = [];
+    for (const value of values) {
+      if (typeof value !== 'string' || value.length === 0 || /[\0\r\n]/.test(value)) throw new Error('Workspace paths must be non-empty strings without NUL or line breaks');
+      const normalized = normalizeLexical(value, cwd, this.platform);
+      const canonical = await canonicalizeExistingPrefix(normalized.style, normalized.path);
+      const nativeStyle = this.platform === 'win32' ? 'windows' : 'posix';
+      if (normalized.style === nativeStyle && !(await stat(canonical)).isDirectory()) throw new Error(`Workspace is not a directory: ${value}`);
+      const protectedFile = allowed.protectedFiles.some((entry) => entry.style === normalized.style
+        && isProtectedFileTarget(entry, normalized, canonical));
+      if (protectedFile) continue;
+      const globMatch = findDisallowedPathGlob(canonical, this.disallowedPathGlobs, this.platform);
+      if (globMatch) continue;
+      const directoryAllowed = allowed.directories.some((entry) => entry.style === normalized.style
+        && isWithin(entry.style, entry.canonical, canonical));
+      if (!directoryAllowed) continue;
+      const fileDenied = allowed.disallowedFiles.some((entry) => entry.style === normalized.style
+        && comparable(entry.style, entry.canonical) === comparable(normalized.style, canonical));
+      const directoryDenied = allowed.disallowedDirectories.some((entry) => entry.style === normalized.style
+        && isWithin(entry.style, entry.canonical, canonical));
+      if (fileDenied || directoryDenied) continue;
+      if (!selected.some((entry) => comparable(normalized.style, entry) === comparable(normalized.style, canonical))) selected.push(canonical);
+    }
+    return selected;
+  }
+
+  async describe(cwd = this.cwd) {
     const allowed = await this.allowed();
     const entries = (values) => values.map((entry) => ({
       configuredPath: entry.lexical,
@@ -249,8 +277,8 @@ export class ToolPathPolicy {
     }));
     return {
       serverName: this.serverName,
-      workingDirectory: this.cwd,
-      relativePathBase: this.cwd,
+      workingDirectory: cwd,
+      relativePathBase: cwd,
       configured: {
         allowedDirectories: [...this.allowedDirectoriesInput],
         allowedFiles: [...this.allowedFilesInput],
@@ -270,14 +298,51 @@ export class ToolPathPolicy {
     };
   }
 
-  async assertToolArguments(toolName, args) {
+  async describeForAllowedDirectories(values, cwd = this.cwd) {
+    const selectedPaths = await this.selectAllowedDirectories(values, cwd);
+    const style = this.platform === 'win32' ? 'windows' : 'posix';
+    const selected = selectedPaths.map((canonical) => ({ lexical: canonical, canonical, style }));
+    const allowed = await this.allowed();
+    const insideSelection = (entry) => selected.some((root) => entry.style === root.style
+      && isWithin(root.style, root.canonical, entry.canonical));
+    const selectedDisallowedDirectories = allowed.disallowedDirectories.filter(insideSelection);
+    const selectedDisallowedFiles = allowed.disallowedFiles.filter(insideSelection);
+    const selectedProtectedFiles = allowed.protectedFiles.filter(insideSelection);
+    const entries = (items) => items.map((entry) => ({
+      configuredPath: entry.lexical,
+      canonicalPath: entry.canonical
+    }));
+    return {
+      serverName: this.serverName,
+      workingDirectory: cwd,
+      relativePathBase: cwd,
+      configured: {
+        allowedDirectories: [...selectedPaths],
+        allowedFiles: [],
+        disallowedDirectories: selectedDisallowedDirectories.map((entry) => entry.canonical),
+        disallowedFiles: selectedDisallowedFiles.map((entry) => entry.canonical),
+        protectedFiles: selectedProtectedFiles.map((entry) => entry.canonical),
+        disallowedPathGlobs: [...this.disallowedPathGlobs]
+      },
+      effective: {
+        allowedDirectories: entries(selected),
+        allowedFiles: [],
+        disallowedDirectories: entries(selectedDisallowedDirectories),
+        disallowedFiles: entries(selectedDisallowedFiles),
+        protectedFiles: entries(selectedProtectedFiles),
+        disallowedPathGlobs: [...this.disallowedPathGlobs]
+      }
+    };
+  }
+
+  async assertToolArguments(toolName, args, cwd = this.cwd) {
     const candidates = collectPathArguments(args, [], false, [], this.platform);
     if (candidates.length === 0) return;
     const allowed = await this.allowed();
     for (const candidate of candidates) {
       let normalized;
       try {
-        normalized = normalizeLexical(candidate.value, this.cwd, this.platform);
+        normalized = normalizeLexical(candidate.value, cwd, this.platform);
       } catch (error) {
         throw new Error(`${this.serverName}.${toolName} path argument ${displayKeyPath(candidate.keyPath)} is invalid: ${error.message}`);
       }

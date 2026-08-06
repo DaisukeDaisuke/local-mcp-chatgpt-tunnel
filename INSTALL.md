@@ -494,6 +494,13 @@ ChatGPTで作成したカスタムアプリを有効にし、表示されたツ�
 このTunnelは自分専用として扱い、公開申請、第三者共有、共有Workspaceへの追加は行いません。
 ### 12.3 動作確認する
 ChatGPTに、作成したカスタムアプリのツールが利用可能になったか確認させてください。
+### 12.4 内蔵MCP用のisolated workspaceを作成する
+Gateway同梱MCPの公開ツールは`isolatedId`を必須とします。最初に`isolated__create`へ、そのGatewayプロセス内で一度も使用していないIDと、操作対象の絶対ディレクトリを`workspaces`配列で渡します。複数Workspaceをまたぐ必要がある場合は、すべて同じ配列へ指定できます。Gatewayは各MCPの`allowed_directories`と拒否設定を適用し、そのMCPで許可される範囲だけを使用します。<br>
+```json
+{"isolatedId":"chat-20260806-a","workspaces":["C:\\work\\project-a","C:\\work\\shared"]}
+```
+同じ`isolatedId`を同時に別用途へ使わず、`isolated__close`後もGatewayを再起動するまで再利用しません。現在開いているIDは`isolated__list`で確認できます。各内蔵MCP呼び出しと`get_gateway_access_scope`には同じ`isolatedId`を渡します。通常ツールへ`root`、`roots`、`workspace`、`workspaces`などを渡して分離範囲を上書きすることはできません。<br>
+Gatewayは起動時に内蔵MCPごとのランダム鍵を生成し、正規化済みの基準パスと複数rootをHMAC-SHA-256で署名して子MCPへ渡します。子MCPは未署名、改ざん済み、構造不正な分離コンテキストを拒否します。鍵を`gateway.toml`や環境変数へ手動設定する必要はありません。<br>
 > [!IMPORTANT]
 > お疲れさまでした。ChatGPTからローカルMCPを使用できるようになりました。
 
@@ -546,8 +553,9 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
 以下はツール選択を補助する指示であり、安全規則、ユーザーの明示的な指示、既存の作業手順を上書きしない。
 `gateway__list_available_tools`は`config/gateway.toml`のトップレベルで`publish_tool_directory = true`にすると有効化でき、ユーザーの意向で無効化される場合もある。ローカルMCPで直接処理できる可能性がある場合は、推測、一般論、Web検索、別手段へ進む前に完全名を起点に探索し、利用可能なら必ず実際に呼び出して完全なツール名と説明を確認すること。呼び出さずに無効、未公開、利用不能、不存在と判断してはならず、実際に探索しても利用できない場合だけ現在表示されているツールで判断すること。
 `prefix`は既知の完全名または先頭文字列がある場合だけ指定し、不明なら省略すること。0件でも全件が返るため別のprefixを推測して繰り返さず、返された完全名と説明から最も直接的なツールを選ぶこと。ツール探索だけを目的にWeb検索しないこと。
-使用するMCPグループの作業ディレクトリ、相対パス基準、許可範囲、拒否範囲のいずれかが不明な場合は、推測や過去チャットの記憶で補わないこと。まず現在のツール一覧から同じprefixの`get_gateway_access_scope`を探して実際に呼び出し、Gatewayが現在適用している`workingDirectory`、`relativePathBase`、`configured.allowedDirectories`、`configured.allowedFiles`、`configured.disallowedDirectories`、`configured.disallowedFiles`、`configured.protectedFiles`、`configured.disallowedPathGlobs`と、正規化済みの`effective.*`を確認すること。完全名が不明なら`gateway__list_available_tools`をprefix付きまたは引数なしで呼んで探すこと。
-使用するMCPグループ（`files__`、`git__`など）に`get_working_directory`または`roots`がある場合は、そのチャットで同グループを初めて操作する直前に現在の作業ディレクトリを確認すること。返却値がユーザー指定の対象と異なっても直ちに同期不良と判断しないこと。対象が許可範囲内で`set_working_directory`がある場合は、まず対象へ変更し、変更後に作業ディレクトリを再確認すること。一致すれば作業を続けること。`set_working_directory`がない、変更が拒否された、変更後も一致しない、または許可範囲と実際の操作結果が矛盾する場合だけ、設定またはMCPの同期不良として停止し報告すること。対象が許可範囲外なら別の場所を操作せず、`allowed_directories`または`allowed_files`への追加を提案すること。
+公開ツールの入力スキーマで`isolatedId`が必須なら、その内蔵MCPを初めて呼ぶ前に`isolated__create`を1回呼び、そのGatewayプロセス内で一度も使用していないIDと、今回の対象となる絶対ディレクトリを`workspaces`配列で渡すこと。複数Workspaceをまたぐ必要がある場合は同じ配列へ列挙し、通常ツールへ`root`、`roots`、`workspace`、`workspaces`やGateway専用の非公開引数を渡して上書きしないこと。同じIDを別用途へ流用せず、不要になったら`isolated__close`で閉じること。閉じたIDはGateway再起動まで再利用せず、現在のIDが不明なら`isolated__list`で確認すること。
+使用するMCPグループの作業ディレクトリ、相対パス基準、許可・拒否範囲が不明な場合は、推測や過去チャットの記憶で補わないこと。同じ`isolatedId`を付けて同じprefixの`get_gateway_access_scope`を実際に呼び、`workingDirectory`、`relativePathBase`、`isolationRoots`、設定値、正規化済みの`effective.*`を確認すること。完全名が不明なら`gateway__list_available_tools`で探すこと。
+使用するMCPグループに`get_working_directory`または`roots`がある場合は、そのチャットで同グループを初めて操作する直前に同じ`isolatedId`で現在の基準ディレクトリを確認すること。対象が同じIDのWorkspace内で`set_working_directory`がある場合は変更後に再確認し、対象が分離範囲外なら別の場所を試さず`isolated__create`時の`workspaces`または`gateway.toml`の許可設定を見直すこと。
 パスが許可範囲外として拒否された場合は、エラー本文または`structuredContent.result.accessScope`に返された絶対パスの許可ディレクトリ・許可ファイルだけを現在の候補として扱うこと。拒否後に過去チャット、既定値、よくあるパスから別の作業ディレクトリを捏造して再試行しないこと。
 `gitmcp`を使用するときは、`.gitignore`、`.gitattributes`、改行変換、filter、署名などのGit標準設定を無視して独自にファイル集合やtext/binary判定を作らないこと。判断に必要なら、現在のツール一覧から同じprefixの`list_worktree_files`、`check_ignore`、`check_attributes`、`get_effective_config`、`get_policy`を探してGit自身の判定を確認すること。
 コード変更の検証で、ファイル編集、Gitのcommit・push、GitHub Actionsの実行確認に対応する各ツールがすべて利用可能であり、ユーザーがcommitとpushを明示的に指示または許可している場合は、ローカルまたは利用可能な実行環境のテストだけで完了とせず、変更をcommitしてpushした後、対象リポジトリとブランチの新しいGitHub Actions runを特定して完了まで確認すること。Windows、macOS、Linuxなどworkflowが定義する全jobの成否を確認し、失敗時はfailed logsまたはrun logsを読んで修正、再commit、再push、再確認を行うこと。全jobの成功を確認する前に「全環境で成功した」と断定しないこと。commitやpushの明示的な許可がない場合は実行しないこと。

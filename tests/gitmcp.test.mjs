@@ -55,6 +55,13 @@ test('gitmcp hides pull and clone by default', async () => {
   assert.ok(names.includes('check_attributes'));
   assert.ok(names.includes('get_effective_config'));
   assert.ok(names.includes('show'));
+  assert.ok(names.includes('branches'));
+  assert.ok(names.includes('create_branch'));
+  assert.ok(names.includes('checkout'));
+  assert.ok(names.includes('list_worktrees'));
+  assert.ok(names.includes('create_worktree'));
+  assert.ok(names.includes('remove_worktree'));
+  assert.ok(!names.includes('delete_branch'));
 });
 
 test('gitmcp reports which standard Git behaviors are preserved', async () => {
@@ -260,6 +267,87 @@ test('gitmcp show returns one commit with optional path selection and bounded su
   }));
   assert.equal(escaped.result.isError, true);
   assert.match(escaped.result.structuredContent.error, /escaped the worktree/);
+});
+
+test('gitmcp manages branches and allowed worktrees without branch deletion or forced removal', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gitmcp-worktrees-'));
+  const repository = join(workspace, 'repository');
+  const worktreePath = join(workspace, 'feature-tree');
+  await mkdir(repository);
+  await exec('git', ['init'], { cwd: repository });
+  await exec('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repository });
+  await exec('git', ['config', 'user.name', 'Test User'], { cwd: repository });
+  await writeFile(join(repository, 'fixture.txt'), 'fixture\n', 'utf8');
+  await exec('git', ['add', '--', 'fixture.txt'], { cwd: repository });
+  await exec('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'], { cwd: repository });
+  const primaryBranch = (await exec('git', ['branch', '--show-current'], { cwd: repository })).stdout.trim();
+
+  const { createServer } = await importGitMcp(workspace, [], 'worktrees');
+  const server = createServer();
+  await server(request(1, 'initialize'));
+
+  const created = await server(request(2, 'tools/call', {
+    name: 'create_branch',
+    arguments: { repositoryPath: repository, branch: 'feature', startPoint: 'HEAD', switch: false }
+  }));
+  assert.equal(created.result.isError, false);
+  assert.equal(created.result.structuredContent.result.switched, false);
+
+  const branches = await server(request(3, 'tools/call', {
+    name: 'branches', arguments: { repositoryPath: repository }
+  }));
+  assert.equal(branches.result.isError, false);
+  const feature = branches.result.structuredContent.result.branches.find((entry) => entry.branch === 'feature');
+  assert.equal(feature.type, 'local');
+  assert.match(feature.objectId, /^[0-9a-f]{40,64}$/i);
+
+  const added = await server(request(4, 'tools/call', {
+    name: 'create_worktree',
+    arguments: {
+      repositoryPath: repository,
+      parentDirectory: workspace,
+      destinationDirectory: 'feature-tree',
+      branch: 'feature'
+    }
+  }));
+  assert.equal(added.result.isError, false);
+  const canonicalWorktreePath = await realpath(worktreePath);
+  assert.equal(added.result.structuredContent.result.worktreePath, canonicalWorktreePath);
+
+  const listed = await server(request(5, 'tools/call', {
+    name: 'list_worktrees', arguments: { repositoryPath: repository }
+  }));
+  assert.equal(listed.result.isError, false);
+  assert.ok(listed.result.structuredContent.result.worktrees.some((entry) => entry.path === canonicalWorktreePath && entry.branch === 'feature'));
+
+  await writeFile(join(worktreePath, 'dirty.txt'), 'dirty\n', 'utf8');
+  const dirtyRemoval = await server(request(6, 'tools/call', {
+    name: 'remove_worktree', arguments: { repositoryPath: repository, worktreePath }
+  }));
+  assert.equal(dirtyRemoval.result.isError, true);
+
+  await exec('git', ['clean', '-fd'], { cwd: worktreePath });
+  const removed = await server(request(7, 'tools/call', {
+    name: 'remove_worktree', arguments: { repositoryPath: repository, worktreePath }
+  }));
+  assert.equal(removed.result.isError, false);
+  assert.equal(removed.result.structuredContent.result.branchDeleted, false);
+  assert.equal(removed.result.structuredContent.result.forced, false);
+
+  const switched = await server(request(8, 'tools/call', {
+    name: 'switch_branch', arguments: { repositoryPath: repository, branch: 'feature' }
+  }));
+  assert.equal(switched.result.isError, false);
+  const detached = await server(request(9, 'tools/call', {
+    name: 'checkout', arguments: { repositoryPath: repository, target: 'HEAD', detach: true }
+  }));
+  assert.equal(detached.result.isError, false);
+  assert.equal(detached.result.structuredContent.result.detached, true);
+  const restored = await server(request(10, 'tools/call', {
+    name: 'checkout', arguments: { repositoryPath: repository, target: primaryBranch }
+  }));
+  assert.equal(restored.result.isError, false);
+  assert.equal(restored.result.structuredContent.result.detached, false);
 });
 
 test('gitmcp add_all preserves configured line-ending conversion', async () => {

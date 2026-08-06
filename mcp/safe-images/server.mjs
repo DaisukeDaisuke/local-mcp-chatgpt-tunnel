@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBundledIsolation } from '../../app/bundled-isolation.mjs';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const DEFAULT_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -18,7 +19,8 @@ Usage:
 Options:
   --help  Print this help and exit.
 
-The process working directory is the image root. Set cwd in gateway.toml instead of passing --root.
+Outside the Gateway, the process working directory is the fallback image root. Through the Gateway, every call requires an HMAC-signed isolated base and root list.
+Public root or workspace override arguments are rejected.
 Supported formats are PNG, JPEG, and WebP. SVG, HEIC, executable formats, and arbitrary binary files are rejected.
 The default maximum image size is 8 MiB. Override it with SAFE_IMAGES_MAX_BYTES when necessary.
 `;
@@ -29,6 +31,7 @@ const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlo
   JSON.parse(process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS ?? '[]'),
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
 );
+const isolation = createBundledIsolation();
 const MAX_IMAGE_BYTES = readPositiveInteger('SAFE_IMAGES_MAX_BYTES', DEFAULT_MAX_IMAGE_BYTES);
 const MAX_IMAGE_PIXELS = readPositiveInteger('SAFE_IMAGES_MAX_PIXELS', DEFAULT_MAX_IMAGE_PIXELS);
 
@@ -112,9 +115,9 @@ function rejectAlternateDataStream(path) {
 }
 
 let rootsPromise;
-let workingDirectoryPromise;
-
 const roots = () => {
+  const context = isolation.current();
+  if (context) return Promise.resolve([...context.roots]);
   if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) {
     return Promise.reject(new Error('No image root is configured'));
   }
@@ -128,10 +131,7 @@ const roots = () => {
   return rootsPromise;
 };
 
-const workingDirectory = async () => {
-  workingDirectoryPromise ??= roots().then(([first]) => first);
-  return workingDirectoryPromise;
-};
+const workingDirectory = async () => isolation.current()?.base ?? (await roots())[0];
 
 const outsideRootsError = (message, allowed) => new Error([
   message,
@@ -281,7 +281,7 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-images', version: '1.0.0' },
+        serverInfo: { name: 'safe-images', version: '1.1.0' },
         instructions: 'Read-only transfer of bounded PNG, JPEG, and WebP files as MCP image content. The server independently enforces configured roots, file type, file size, and image dimensions.'
       });
     }
@@ -291,7 +291,7 @@ export function createServer() {
     if (request.method === 'tools/call') {
       try {
         if (request.params?.name !== 'read_image') throw new Error(`Unknown tool: ${request.params?.name}`);
-        const result = await readImage(validateReadImageArguments(request.params?.arguments ?? {}));
+        const result = await isolation.run(request.params?.arguments ?? {}, (toolArguments) => readImage(validateReadImageArguments(toolArguments)));
         return response(request.id, result);
       } catch (error) {
         return response(request.id, errorToolResult(error));

@@ -5,6 +5,7 @@ import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
+import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 
 const DEFAULT_MAX_FILES = 500;
@@ -22,7 +23,8 @@ Usage:
 Options:
   --help  Print this help and exit.
 
-The process working directory is the independent download root. Set a separate cwd and allowed_directories entry in gateway.toml.
+Outside the Gateway, the process working directory is the fallback download root. Through the Gateway, every call requires an HMAC-signed isolated base and root list.
+Public root or workspace override arguments are rejected.
 download_zip always returns a ZIP, including when the requested path is one source file.
 Directory enumeration uses fixed ripgrep arguments. Arbitrary ripgrep arguments and shell execution are not supported.
 `;
@@ -33,6 +35,7 @@ const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlo
   JSON.parse(process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS ?? '[]'),
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
 );
+const isolation = createBundledIsolation();
 const MAX_FILES = readPositiveInteger('SAFE_DOWNLOAD_MAX_FILES', DEFAULT_MAX_FILES);
 const MAX_INPUT_BYTES = readPositiveInteger('SAFE_DOWNLOAD_MAX_INPUT_BYTES', DEFAULT_MAX_INPUT_BYTES);
 const MAX_ZIP_BYTES = readPositiveInteger('SAFE_DOWNLOAD_MAX_ZIP_BYTES', DEFAULT_MAX_ZIP_BYTES);
@@ -121,6 +124,8 @@ function rejectAlternateDataStream(path) {
 
 let rootsPromise;
 const roots = () => {
+  const context = isolation.current();
+  if (context) return Promise.resolve([...context.roots]);
   if (!Array.isArray(configuredRoots) || configuredRoots.length === 0) return Promise.reject(new Error('No download root is configured'));
   rootsPromise ??= Promise.all(configuredRoots.map(async (root) => {
     if (typeof root !== 'string' || root.length === 0 || /[\0\r\n]/.test(root)) throw new Error('Download roots must be valid strings');
@@ -133,7 +138,7 @@ const roots = () => {
   return rootsPromise;
 };
 
-const workingDirectory = async () => (await roots())[0];
+const workingDirectory = async () => isolation.current()?.base ?? (await roots())[0];
 
 const outsideRootsError = (message, allowed) => new Error([
   message,
@@ -206,7 +211,8 @@ function runRipgrep(args) {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      shell: false
+      shell: false,
+      env: environmentWithoutBundledIsolationKey()
     });
     const stdout = [];
     const stderr = [];
@@ -474,7 +480,7 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-download', version: '1.0.0' },
+        serverInfo: { name: 'safe-download', version: '1.1.0' },
         instructions: 'Read-only ZIP transfer from an independently configured cwd and root allowlist. Directory listing uses fixed ripgrep arguments; output limits, blocked file types, credentials, and path boundaries are enforced locally.'
       });
     }
@@ -484,7 +490,10 @@ export function createServer() {
     if (request.method === 'tools/call') {
       try {
         if (request.params?.name !== 'download_zip') throw new Error(`Unknown tool: ${request.params?.name}`);
-        return response(request.id, await downloadZip(validateArguments(request.params?.arguments ?? {})));
+        return response(request.id, await isolation.run(
+          request.params?.arguments ?? {},
+          (toolArguments) => downloadZip(validateArguments(toolArguments))
+        ));
       } catch (error) {
         return response(request.id, errorToolResult(error));
       }
