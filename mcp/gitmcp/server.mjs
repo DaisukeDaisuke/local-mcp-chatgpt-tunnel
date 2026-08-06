@@ -44,8 +44,9 @@ Options:
   --disable-clone=true|false  Remove the clone_repository tool when true. Default: true.
 
 The disable options affect only push, pull, and clone_repository. Local Git tools such as status,
-diff, show, branch listing and creation, checkout, worktree creation and removal, add_all, and
-commit remain available while this MCP server is enabled. Branch deletion is intentionally absent.
+diff, show, branch listing and creation, checkout, worktree creation and removal, add_all,
+stage_paths, unstage_paths, and commit remain available while this MCP server is enabled.
+Branch deletion is intentionally absent.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
 Gateway calls also require an HMAC-signed isolated base and root list; public root or workspace override arguments are rejected.
 Standard Git ignore rules, attributes, line-ending conversion, system/global filters, and configured
@@ -251,6 +252,18 @@ const schemas = [
     annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
   { name: 'add_all', description: 'Stage all non-ignored changes with the fixed command git add --all -- . Standard Git ignore, attributes, clean filters, and line-ending conversion are respected.', inputSchema: repositorySchema(), annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS },
+  {
+    name: 'stage_paths',
+    description: 'Stage only the selected repository files or directories with literal pathspecs. Deletions below selected directories are included; unrelated changes remain unstaged.',
+    inputSchema: repositoryPathsSchema(),
+    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
+  },
+  {
+    name: 'unstage_paths',
+    description: 'Remove only the selected repository files or directories from the index without changing working-tree files. Literal pathspecs are used, including before the first commit.',
+    inputSchema: repositoryPathsSchema(),
+    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
+  },
   {
     name: 'commit',
     description: 'Commit already staged changes using a literal message. Configured commit signing is respected; Git hooks remain disabled. This tool does not stage files.',
@@ -957,6 +970,29 @@ async function callTool(name, args = {}) {
       await runGit(cwd, ['add', '--all', '--', '.']);
       return { repositoryPath: cwd, staged: true };
     }
+    case 'stage_paths': {
+      const cwd = await repository(args.repositoryPath);
+      const paths = await repositoryRelativePaths(cwd, args.paths);
+      const denied = await deniedTrackedPaths(cwd);
+      if (denied.length > 0) throw new Error(`Refusing to stage denied paths: ${denied.join(', ')}`);
+      await runGit(cwd, ['--literal-pathspecs', 'add', '--all', '--', ...paths]);
+      return { repositoryPath: cwd, paths, staged: true };
+    }
+    case 'unstage_paths': {
+      const cwd = await repository(args.repositoryPath);
+      const paths = await repositoryRelativePaths(cwd, args.paths);
+      const stagedDiff = await runGit(cwd, ['--literal-pathspecs', 'diff', '--cached', '--quiet', '--', ...paths], { acceptedExitCodes: [0, 1] });
+      if (stagedDiff.exitCode === 0) {
+        return { repositoryPath: cwd, paths, unstaged: true, changed: false, unbornHead: false };
+      }
+      const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { acceptedExitCodes: [0, 1] });
+      if (head.exitCode === 0) {
+        await runGit(cwd, ['--literal-pathspecs', 'restore', '--staged', '--source=HEAD', '--', ...paths]);
+      } else {
+        await runGit(cwd, ['--literal-pathspecs', 'rm', '--cached', '-r', '--ignore-unmatch', '--', ...paths]);
+      }
+      return { repositoryPath: cwd, paths, unstaged: true, changed: true, unbornHead: head.exitCode !== 0 };
+    }
     case 'commit': {
       const cwd = await repository(args.repositoryPath);
       if (typeof args.message !== 'string' || args.message.length === 0 || /\0/.test(args.message)) throw new Error('message must be a non-empty string without NUL');
@@ -1024,8 +1060,8 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'gitmcp', version: '1.2.0' },
-        instructions: 'Allowlisted Git operations only. Branch listing, creation, switching, checkout, and allowed-path worktree creation/removal are supported; branch deletion and forced worktree removal are not. Standard ignore rules, attributes, line-ending conversion, system/global filters, external diff/textconv, and configured commit signing are preserved. Repository-local executable Git configuration, hooks, force push, and arbitrary clone destinations are blocked.'
+        serverInfo: { name: 'gitmcp', version: '1.3.0' },
+        instructions: 'Allowlisted Git operations only. Branch listing, creation, switching, checkout, allowed-path worktree creation/removal, and literal path-scoped staging/unstaging are supported; branch deletion and forced worktree removal are not. Standard ignore rules, attributes, line-ending conversion, system/global filters, external diff/textconv, and configured commit signing are preserved. Repository-local executable Git configuration, hooks, force push, and arbitrary clone destinations are blocked.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
