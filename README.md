@@ -279,27 +279,42 @@ tool = "stop_browser"
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。<br>
 Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。<br>
 ## SDK
-[mainブランチのZIP](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)をダウンロードしてChatGPTへ添付し、次のプロンプトを送信すると、このリポジトリをSDK兼参照実装として使った、単一の`.mjs`ファイルで完結する独立のstdio MCPを作成させられます。<br>
+[mainブランチのZIP](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)をダウンロードしてChatGPTへ添付し、次のプロンプトを送信すると、このリポジトリへ追加する署名対応の同梱stdio MCPを作成させられます。<br>
+生成したMCPを通常の外部MCPとして登録しただけでは、Gatewayの署名付きisolated workspaceは送信されません。`mcp/<name>/server.mjs`として配置し、`app/server-config.mjs`の`BUNDLED_SERVER_PATHS`へ登録する差分も適用してください。<br>
 `<Describe the MCP tools you need here.>`は、作成したいツールと操作対象の具体的な説明へ置き換えてください。<br>
 ```text
 The attached local-mcp-chatgpt-tunnel-main.zip is the SDK and reference implementation. Inspect it before writing code.
-Create an independent stdio MCP implemented as one self-contained Node.js ESM .mjs file for the following purpose:
+Create a new bundled stdio MCP at mcp/<name>/server.mjs for the following purpose:
 
 <Describe the MCP tools you need here.>
 
 Requirements:
-- Return the complete .mjs file and the minimal config/gateway.toml entry needed to run it through local-mcp-chatgpt-tunnel.
-- Do not modify the attached repository. The generated stdio MCP must not depend on files inside the repository at runtime and must use only Node.js built-in modules unless I explicitly permit an external dependency.
+- Return the complete mcp/<name>/server.mjs file, the exact app/server-config.mjs BUNDLED_SERVER_PATHS patch required to mark it as bundled, and the minimal config/gateway.toml entry.
+- Do not modify the attached archive directly. Return complete replacement content or an exact patch for every required file.
+- Use only Node.js built-in modules and the repository's existing local helpers unless I explicitly permit another dependency.
 - Follow the repository's MCP protocol handling, JSON Schema conventions, outputSchema declarations, tool annotations, error handling, stdout/stderr separation, timeouts, and bounded-output design.
 - Write only JSON-RPC protocol messages to stdout. Write diagnostics and logs to stderr.
+- Import createBundledIsolation and environmentWithoutBundledIsolationKey from ../../app/bundled-isolation.mjs. Every tools/call operation must run through createBundledIsolation().run(arguments, operation) before any side effect or path access.
+- In Gateway mode, LOCAL_MCP_GATEWAY_ISOLATION_KEY is present. Every call must require and verify the private __localMcpIsolation envelope. Missing, malformed, unsupported-version, unsigned, or incorrectly signed envelopes must fail closed before the public tool executes. Do not implement an unsigned fallback while the key is present.
+- The Gateway sends the signature and the paths permitted for that call together in this private argument. This is the envelope shape; the signature placeholder below is not a valid signature:
+  {
+    "__localMcpIsolation": {
+      "version": 1,
+      "roots": ["C:\\work\\project"],
+      "base": "C:\\work\\project",
+      "signature": "<64 hexadecimal HMAC-SHA-256 characters>"
+    }
+  }
+- Verify HMAC-SHA-256 over exactly JSON.stringify({ base, roots }) using LOCAL_MCP_GATEWAY_ISOLATION_KEY, compare signatures in constant time, require one or more absolute roots, and require base to be an absolute path inside at least one root. Prefer the repository helper instead of duplicating the cryptographic code.
+- Treat the verified roots and base as the only authoritative path context in Gateway mode. roots are the directories the operation may access; base is the current relative-path base. Never replace them with process.cwd(), a public argument, a cached global root, or a path remembered from another call.
+- Reject public arguments named root, roots, workspace, workspaces, or equivalent nested variants. Public tool input must not override the signed path context.
+- Never expose LOCAL_MCP_GATEWAY_ISOLATION_KEY or pass it to subprocesses. When spawning a child process, use environmentWithoutBundledIsolationKey() or an equivalent explicit environment filter.
 - Shell injection must be impossible under all circumstances. Treat every MCP argument, path, filename, identifier, option, and environment-derived value as untrusted input.
 - Never pass a constructed or user-controlled command string to a shell. Do not use child_process.exec, execSync, spawn with shell: true, cmd.exe /c, powershell -Command, bash -c, or sh -c.
 - When a native program is genuinely required, invoke a fixed executable directly with spawn or execFile, shell: false, a fixed subcommand, and individually validated arguments. Use an explicit allowlist and a -- separator where the target program supports it.
 - Do not expose a general-purpose command runner, arbitrary script execution, arbitrary executable selection, arbitrary environment-variable injection, or unrestricted native-program arguments.
-- If the stdio MCP performs any filesystem operation, it must implement all of the following tools: `get_current_root`, `get_working_directory`, and `set_working_directory`. These tools are mandatory, not optional.
-- `get_current_root` must return the canonical absolute path of the allowed workspace root currently in use. It must not enumerate arbitrary filesystem roots or expose unrelated paths.
-- `get_working_directory` must return the canonical absolute path of the current working directory, matching the behavior of `mcp/safe-files/server.mjs`. It must not return a path relative to `get_current_root`.
-- `set_working_directory` must accept a path relative to `get_current_root`, resolve it to an existing directory inside that root, apply the complete path policy, then store and return its canonical absolute path. The relative-only input rule is an intentional restriction for generated MCPs; the returned working directory remains absolute.
+- Implement `roots`, `get_working_directory`, and `set_working_directory` only when the MCP has a real filesystem, repository, workspace, current-directory, input-directory, or output-directory concept. If the capability has no directory concept, do not add these tools and do not invent a meaningless root.
+- When those directory tools are applicable, `roots` must return only the verified signed roots and current base, `get_working_directory` must return the verified base, and `set_working_directory` must accept an absolute path or a path relative to the current base, resolve it to an existing directory inside one signed root, apply every deny rule, and return the canonical absolute path. Gateway interception and direct standalone behavior must both remain safe.
 - Any stdio MCP that performs filesystem operations must support and enforce these exact configuration arrays:
   `allowed_directories = []`
   `allowed_files = []`
@@ -307,9 +322,9 @@ Requirements:
   `disallowed_files = []`
   `disallowed_path_globs = []`
 - Apply the allowlist and denylist to every filesystem operation, including working-directory changes. Deny rules must take precedence over allow rules.
-- Every filesystem tool must accept paths relative to `get_current_root` by default. Absolute paths are forbidden unless the stated operation genuinely requires them and the tool documents and validates that exception explicitly.
-- Reject `..`, parent traversal, root-relative paths, drive-relative paths, UNC paths, NTFS alternate data streams, and any other syntax that could escape or reinterpret the current root. Normalize and validate the relative path before resolving it, then verify the resolved real path remains inside the current root and passes every allowlist and denylist check.
-- Do not require callers to provide redundant absolute paths when the same target can be identified safely by a path relative to `get_current_root`.
+- Resolve relative filesystem paths from the verified base. Absolute paths may be accepted only when they remain inside a verified root and pass the complete configured allow/deny policy.
+- Reject parent traversal that escapes a signed root, root-relative ambiguity, drive-relative paths, UNC paths unless explicitly required and safely constrained, NTFS alternate data streams, and any syntax that could reinterpret the target. Canonicalize existing paths and verify the real target remains inside a signed root after symlink resolution.
+- Do not require callers to provide redundant absolute paths when the same target can be identified safely relative to the verified base.
 - A tool that accepts input files must accept multiple files as an array unless the underlying operation can inherently and safely operate on exactly one file. Validate every file independently and enforce bounded file counts, sizes, and output sizes.
 - For build-related tools, require the caller to select a narrow project, target, package, configuration, or input-file set. Do not default to building an entire workspace or repository when a narrower target is possible. Keep the executable, subcommand, and build options fixed or allowlisted.
 - This stdio MCP is not executed inside the ChatGPT sandbox. It runs on the user's real Windows PC with the permissions of the current Windows user. Remove unsafe capabilities by design instead of relying on the model to ask for confirmation.
