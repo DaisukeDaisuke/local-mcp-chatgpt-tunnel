@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises';
+import { access, copyFile, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
@@ -28,8 +28,8 @@ Options:
 
 The process working directory is exposed as the MCP root and is the base for relative paths. Set cwd in gateway.toml instead of passing --root.
 Tools that document it, including read_text, accept both paths relative to the current MCP root and absolute paths. Every resolved path must remain inside a configured allowed directory.
-When exposed through the gateway, add the same absolute directory to allowed_directories.
-Run one safe-files entry per workspace when you need multiple roots.
+When exposed through the gateway, add every permitted absolute directory to allowed_directories.
+Use multiple allowed directories in one safe-files entry when copy or move must cross workspaces; use separate entries when isolation is preferred.
 `;
 
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
@@ -311,6 +311,34 @@ const schemas = [
     annotations: LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS
   },
   {
+    name: 'copy',
+    description: 'Copy one regular file between configured allowed workspace directories. Source and destination may be absolute or relative to the current MCP root. The destination must not already exist, and paths are handled literally without a shell.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourcePath: { type: 'string', minLength: 1 },
+        destinationPath: { type: 'string', minLength: 1 }
+      },
+      required: ['sourcePath', 'destinationPath'],
+      additionalProperties: false
+    },
+    annotations: LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS
+  },
+  {
+    name: 'move',
+    description: 'Move one regular file between configured allowed workspace directories. Source and destination may be absolute or relative to the current MCP root. The destination must not already exist, and paths are handled literally without a shell.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sourcePath: { type: 'string', minLength: 1 },
+        destinationPath: { type: 'string', minLength: 1 }
+      },
+      required: ['sourcePath', 'destinationPath'],
+      additionalProperties: false
+    },
+    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
+  },
+  {
     name: 'apply_patch',
     description: 'Apply a structured patch or unified Git diff in the workspace. Every file path inside the patch must be workspace-relative; absolute paths and parent traversal are rejected. This invokes only the built-in parser or fixed git apply command.',
     inputSchema: {
@@ -449,6 +477,59 @@ async function resolveWritable(path) {
   }
   await assertNotDenied(candidate);
   return { root, path: candidate };
+}
+
+async function resolveTransferSource(path) {
+  if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) {
+    throw new Error('Source path must be a non-empty string without NUL or line breaks');
+  }
+  const allowed = await roots();
+  const unresolved = resolve(isAbsolute(path) ? path : join(await workingDirectory(), path));
+  const parent = await realpath(dirname(unresolved));
+  const candidate = join(parent, basename(unresolved));
+  const root = rootFor(allowed, candidate);
+  if (!root) throw outsideRootsError('Source path is outside all allowed workspace roots', allowed);
+  assertSafePath(root, candidate);
+  const sourceInfo = await lstat(candidate);
+  if (sourceInfo.isSymbolicLink()) throw new Error('Moving or copying symbolic links is not allowed');
+  const actual = await realpath(candidate);
+  if (!within(root, actual)) throw outsideRootsError('Resolved source path escaped the allowed workspace root', allowed);
+  assertSafePath(root, actual);
+  await assertNotDenied(actual, 'Source path');
+  const info = await stat(actual);
+  if (!info.isFile()) throw new Error('Source path must be a regular file');
+  return { path: actual, bytes: info.size };
+}
+
+async function resolveTransferDestination(path) {
+  const target = await resolveWritable(path);
+  try {
+    await lstat(target.path);
+    throw new Error('Destination already exists');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  return target.path;
+}
+
+async function copyWorkspaceFile(sourcePath, destinationPath) {
+  const source = await resolveTransferSource(sourcePath);
+  const destination = await resolveTransferDestination(destinationPath);
+  await copyFile(source.path, destination, constants.COPYFILE_EXCL);
+  return { sourcePath: source.path, destinationPath: destination, bytes: source.bytes };
+}
+
+async function moveWorkspaceFile(sourcePath, destinationPath) {
+  const source = await resolveTransferSource(sourcePath);
+  const destination = await resolveTransferDestination(destinationPath);
+  await copyFile(source.path, destination, constants.COPYFILE_EXCL);
+  try {
+    await unlink(source.path);
+  } catch (error) {
+    await rm(destination, { force: true }).catch(() => {});
+    throw error;
+  }
+  return { sourcePath: source.path, destinationPath: destination, bytes: source.bytes };
 }
 
 function decodeUtf8(bytes) {
@@ -1207,6 +1288,10 @@ async function callTool(name, args = {}) {
       }
       return { path: candidate };
     }
+    case 'copy':
+      return copyWorkspaceFile(args.sourcePath, args.destinationPath);
+    case 'move':
+      return moveWorkspaceFile(args.sourcePath, args.destinationPath);
     case 'apply_patch': {
       const encoded = new TextEncoder().encode(args.patch);
       if (encoded.length > MAX_PATCH_BYTES) throw new Error(`Patch exceeds ${MAX_PATCH_BYTES} bytes`);
@@ -1229,7 +1314,7 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'safe-files', version: '4.2.0' },
+        serverInfo: { name: 'safe-files', version: '4.3.0' },
         instructions: 'Current-working-directory UTF-8 editing, fixed ripgrep search, and bounded file transfer. The gateway enforces configured path allowlists before tool calls are forwarded.'
       });
     }

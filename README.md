@@ -58,11 +58,11 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 ## 同梱MCP
 | MCP | 公開ツールの例 | 用途 |
 | --- | --- | --- |
-| `safe-files` | `list_files`、`search_text`、`file_info`、`read_text`、`write_text_file`、`replace_text`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、複数ファイル・行範囲読み取り、ファイル情報、読み書き、限定されたパッチ適用 |
+| `safe-files` | `list_files`、`search_text`、`file_info`、`read_text`、`write_text_file`、`replace_text`、`copy`、`move`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、複数ファイル・行範囲読み取り、ファイル情報、読み書き、Workspace間のファイル移動・複製、限定されたパッチ適用 |
 | `safe-images` | `read_image` | PNG、JPEG、WebPをChatGPTの画像コンテンツとして読み取る |
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
-| `gitmcp` | `get_policy`、`get_effective_config`、`check_ignore`、`check_attributes`、`status`、`diff`、`add_all`、`commit`、`push`、`pull` | 許可したリポジトリに対する限定されたGit操作 |
-| `gh-workflow` | `list_runs`、`watch_run`、`view_run`、`view_run_jobs`、`view_failed_logs`、`list_workflows`、`view_workflow_yaml` | 明示的に許可したGitHubリポジトリのActions実行状況を読み取り専用で確認 |
+| `gitmcp` | `get_policy`、`get_effective_config`、`check_ignore`、`check_attributes`、`status`、`diff`、`show`、`add_all`、`commit`、`push`、`pull` | 許可したリポジトリに対する限定されたGit操作 |
+| `gh-workflow` | `list_runs`、`watch_run`、`cancel_run`、`view_run`、`view_run_jobs`、`view_failed_logs`、`list_workflows`、`view_workflow_yaml` | 明示的に許可したGitHubリポジトリのActions実行状況確認とrunキャンセル |
 同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。<br>
 Gatewayは起動したすべての子MCPへ`<prefix>__get_gateway_access_scope`を追加します。このツールは、Gatewayが実際のツール呼び出し検査に使用している現在の作業ディレクトリ、相対パス基準、設定値、正規化済みの許可・拒否パス、保護対象、拒否globを返します。AIは過去チャットや推測から作業ディレクトリを補わず、このツールで現在の許可範囲を確認できます。<br>
 許可範囲外のパスが拒否された場合、エラー本文へ現在許可されているディレクトリとファイルを正規化済みの絶対パスで返します。同梱MCPの共通出力形式では`structuredContent.result.accessScope`にも同じ一覧を返します。拒否後にAIが別の作業ディレクトリを推測して再試行する必要はありません。<br>
@@ -75,8 +75,9 @@ Gatewayは起動したすべての子MCPへ`<prefix>__get_gateway_access_scope`�
 - UTF-8テキストの読み書きと完全一致置換
 - サイズを制限したbase64ファイル転送
 - ディレクトリ作成
+- 設定された許可Workspace間での通常ファイルの複製と移動
 - 内蔵パーサーまたは固定された`git apply`によるパッチ適用<br>
-再帰一覧では`.git`内部を常に除外し、パッチでは`.git`内部を対象にできません。許可ルート外、シンボリックリンクによる脱出、高確度で資格情報らしい内容なども拒否します。<br>一般シェル、PowerShell、任意コマンド実行ツールは含みません。
+`copy`と`move`は、現在のMCP rootからの相対パスと絶対パスを受け付け、複数の`allowed_directories`間でも通常ファイルを転送できます。送信元と送信先の両方へ許可・拒否ポリシーを適用し、シンボリックリンク、ディレクトリ、既存送信先への上書きを拒否します。移動は別ドライブ間でも動作するよう、排他的な複製に成功してから送信元を削除し、削除失敗時は送信先を戻します。パス文字列はシェルへ渡さず、記号を命令として解釈しません。<br>再帰一覧では`.git`内部を常に除外し、パッチでは`.git`内部を対象にできません。許可ルート外、シンボリックリンクによる脱出、高確度で資格情報らしい内容なども拒否します。<br>一般シェル、PowerShell、任意コマンド実行ツールは含みません。
 ### safe-images
 `safe-images`は読み取り専用です。PNG、JPEG、WebPの拡張子とマジックバイトを照合し、初期状態では8 MiB、50メガピクセルまでに制限します。<br>
 SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク、UNCパス、NTFS代替データストリームを拒否します。<br>
@@ -85,14 +86,14 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。`disallowed_path_globs`が設定されている場合は、利用者指定の`globs`や`excludePaths`を適用する前に対象ディレクトリ全体を確認し、拒否パターンへ一致するファイルまたはフォルダが1件でもあればZIP作成全体を拒否します。エラーには一致した設定パターンと対象パスを含めます。<br>
 ### gitmcp
 `gitmcp`は、許可されたディレクトリ内のGitリポジトリに対して、固定されたGitサブコマンドとオプションだけを実行します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、force push、任意refspecには対応しません。<br>
-`status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、ブランチ切り替え、`git add --all -- .`、commitを利用できます。`push`、`pull`、cloneは起動引数で個別に無効化でき、設定例では`pull`とcloneを無効にしています。cloneでは固定の`--recurse-submodules`を選択できます。<br>
+`status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、特定commitの`show`、ブランチ切り替え、`git add --all -- .`、commitを利用できます。`show`は任意のリポジトリ内パスで絞り込め、commit patch、diffstat付き概要、patchなし概要を選択できます。`push`、`pull`、cloneは起動引数で個別に無効化でき、設定例では`pull`とcloneを無効にしています。cloneでは固定の`--recurse-submodules`を選択できます。<br>
 `.gitignore`と標準のignore設定を尊重するため、`status`はignoreされた未追跡ファイルを表示せず、`add_all`もforce-addしません。`.gitattributes`、`.git/info/attributes`、グローバルattributes、`core.autocrlf`などの改行変換、システム・グローバル設定のclean/smudge filter、外部diff、textconv、commit署名設定も通常のGitと同様に尊重します。リポジトリ内の`.git/config`またはworktree configに置かれた実行可能な設定は事前に拒否します。<br>
 `list_worktree_files`は追跡ファイルとignoreされていない未追跡ファイルをGit自身のexclude判定で列挙します。`check_ignore`は各パスへ適用されたignoreルールと最終判定、`check_attributes`はtext、binary、diff、merge、filter、改行属性などの実効値を返します。`get_effective_config`は`credential.*`、author名、メールアドレスを照会対象から除外し、`core.autocrlf`、filter、attributes、署名鍵などの挙動に関係する設定をscope・origin付きで返します。<br>
 安全対策はGit設定全体の無効化ではなく、リポジトリ自身の`.git/config`またはworktree configに置かれた実行可能なhook、helper、filter、外部diff/textconv、merge driver、署名program、proxy、独自transport設定の拒否に限定します。フック、fsmonitor、`file`・`ext` protocol、対話的なcredential promptは無効です。`get_policy`で現在の方針を機械可読に確認できます。<br>
 `repositoryPath`へサブモジュールや入れ子のGitリポジトリを直接指定すると、そのリポジトリ自身のstatus、diff、logなどを取得できます。親リポジトリ配下を再帰探索して、すべての入れ子リポジトリを自動列挙するツールは含みません。<br>
 ### gh-workflow
-`gh-workflow`は、起動引数`--repository=OWNER/REPO`で明示的に許可したGitHubリポジトリについて、GitHub Actionsの実行状況だけを読み取ります。`--repository=`は複数回指定でき、指定されていないリポジトリは選択できません。許可リポジトリが1件なら各ツールで省略でき、複数なら対象リポジトリの指定が必須です。設定例では`DaisukeDaisuke/desmume_webassembly`を指定し、MCP自体はデフォルト無効です。<br>
-`gh run list --branch main --limit 3`、`gh run watch RUN_ID --exit-status`、`gh run view RUN_ID`に相当するツールに加え、job一覧、全ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLを取得できます。workflow dispatch、rerun、cancel、delete、artifact download、`gh api`は公開しません。<br>
+`gh-workflow`は、起動引数`--repository=OWNER/REPO`で明示的に許可したGitHubリポジトリについて、GitHub Actionsの実行状況を確認し、明示されたrunをキャンセルします。`--repository=`は複数回指定でき、指定されていないリポジトリは選択できません。許可リポジトリが1件なら各ツールで省略でき、複数なら対象リポジトリの指定が必須です。設定例では`DaisukeDaisuke/desmume_webassembly`を指定し、MCP自体はデフォルト無効です。<br>
+`gh run list --branch main --limit 3`、`gh run watch RUN_ID --exit-status`、`gh run cancel RUN_ID`、`gh run view RUN_ID`に相当するツールに加え、job一覧、全ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLを取得できます。`cancel_run`は検証済みの10進run IDと許可リポジトリだけを固定引数で渡します。workflow dispatch、rerun、delete、artifact download、`gh api`は公開しません。<br>
 `gh`は`spawn`から`shell=false`で直接起動し、サブコマンドとオプションを固定しています。run ID、branch、workflow識別子は個別に検証し、標準入力を閉じ、出力サイズを制限します。子プロセスの`cwd`は必ず`gateway.toml`で明示してください。認証にはローカルの`gh auth login`で保存されたGitHub CLI設定を利用できます。<br>
 ## 任意のstdio MCPを追加する
 接続するMCPの起動コマンドや引数は、Gateway本体ではなく`config/gateway.toml`の`[mcp_servers.<name>]`へ記述します。<br>

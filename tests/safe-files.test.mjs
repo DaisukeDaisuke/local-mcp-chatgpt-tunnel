@@ -7,7 +7,7 @@ import test from 'node:test';
 const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
 
 async function serverFor(root, suffix, options = {}) {
-  process.env.SAFE_FILES_ROOTS = JSON.stringify([root]);
+  process.env.SAFE_FILES_ROOTS = JSON.stringify(options.roots ?? [root]);
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = JSON.stringify(options.disallowedDirectories ?? []);
   process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
@@ -30,14 +30,14 @@ async function createSymlinkOrSkip(t, target, path) {
   }
 }
 
-test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
+test('safe-files exposes only bounded workspace file and patch tools', async () => {
   const root = await mkdtemp(join(tmpdir(), 'safe-files-'));
   const server = await serverFor(root, 'surface');
   const listed = await server(request(2, 'tools/list', {}));
   const names = listed.result.tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
-    'apply_patch', 'create_directory', 'file_info', 'get_working_directory', 'list_directory',
-    'list_files', 'read_file_chunk', 'read_text', 'replace_text', 'roots', 'search_text',
+    'apply_patch', 'copy', 'create_directory', 'file_info', 'get_working_directory', 'list_directory',
+    'list_files', 'move', 'read_file_chunk', 'read_text', 'replace_text', 'roots', 'search_text',
     'set_working_directory', 'write_file', 'write_text_file'
   ]);
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
@@ -57,13 +57,13 @@ test('safe-files exposes only bounded UTF-8 and patch tools', async () => {
     'read_text', 'file_info', 'read_file_chunk'
   ], { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
   expectAnnotations([
-    'set_working_directory', 'create_directory'
+    'set_working_directory', 'create_directory', 'copy'
   ], { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
   expectAnnotations([
     'write_file', 'write_text_file'
   ], { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
   expectAnnotations([
-    'replace_text', 'apply_patch'
+    'replace_text', 'move', 'apply_patch'
   ], { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false });
   assert.ok(!names.some((name) => ['execute', 'shell', 'start_command', 'without_sandbox'].includes(name)));
   const applyPatch = listed.result.tools.find((tool) => tool.name === 'apply_patch');
@@ -489,6 +489,59 @@ test('the explicit workspace is not name-blacklisted, while detected credential 
   const outsideRefused = await server(request(4, 'tools/call', { name: 'search_text', arguments: { query: 'anything', path: join(tmpdir(), 'outside.txt') } }));
   assert.equal(outsideRefused.result.isError, true);
   assert.match(outsideRefused.result.structuredContent.error, /outside/);
+});
+
+test('copy and move transfer only regular files between configured roots without overwriting destinations or interpreting punctuation', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'safe-files-transfer-roots-'));
+  const sourceRoot = join(parent, 'source-root');
+  const destinationRoot = join(parent, 'destination-root');
+  await mkdir(sourceRoot);
+  await mkdir(destinationRoot);
+  const copySource = join(sourceRoot, 'literal ; & source.txt');
+  const moveSource = join(sourceRoot, 'move ; & source.txt');
+  const copyDestination = join(destinationRoot, 'literal ; & copied.txt');
+  const moveDestination = join(destinationRoot, 'move ; & destination.txt');
+  await writeFile(copySource, 'copy payload', 'utf8');
+  await writeFile(moveSource, 'move payload', 'utf8');
+  const server = await serverFor(sourceRoot, 'copy-move', { roots: [sourceRoot, destinationRoot] });
+
+  const copied = await server(request(2, 'tools/call', {
+    name: 'copy',
+    arguments: { sourcePath: 'literal ; & source.txt', destinationPath: copyDestination }
+  }));
+  assert.equal(copied.result.isError, false);
+  assert.equal(await readFile(copySource, 'utf8'), 'copy payload');
+  assert.equal(await readFile(copyDestination, 'utf8'), 'copy payload');
+
+  const moved = await server(request(3, 'tools/call', {
+    name: 'move',
+    arguments: { sourcePath: moveSource, destinationPath: moveDestination }
+  }));
+  assert.equal(moved.result.isError, false);
+  await assert.rejects(access(moveSource));
+  assert.equal(await readFile(moveDestination, 'utf8'), 'move payload');
+
+  const overwrite = await server(request(4, 'tools/call', {
+    name: 'copy',
+    arguments: { sourcePath: copySource, destinationPath: copyDestination }
+  }));
+  assert.equal(overwrite.result.isError, true);
+  assert.match(overwrite.result.structuredContent.error, /Destination already exists/);
+
+  const outside = await server(request(5, 'tools/call', {
+    name: 'copy',
+    arguments: { sourcePath: copySource, destinationPath: join(parent, 'outside.txt') }
+  }));
+  assert.equal(outside.result.isError, true);
+  assert.match(outside.result.structuredContent.error, /outside all allowed workspace roots/);
+
+  const directory = await server(request(6, 'tools/call', {
+    name: 'copy',
+    arguments: { sourcePath: sourceRoot, destinationPath: join(destinationRoot, 'directory-copy') }
+  }));
+  assert.equal(directory.result.isError, true);
+  assert.match(directory.result.structuredContent.error, /regular file/);
+  await assert.rejects(access(join(parent, 'injected')));
 });
 
 test('working directory changes relative path resolution', async () => {

@@ -19,6 +19,7 @@ annotation_config = false
 dangerous_allow_gateway_config_access = false
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
+# Add multiple directories here only when copy or move must cross those workspaces; both paths remain policy-checked.
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
 allowed_files = []
 disallowed_directories = []
@@ -30,7 +31,7 @@ disallowed_path_globs = ['**.ssh**']
 # --disable-push=true removes push from the published tool list. Default when omitted: false.
 # --disable-pull=true removes pull from the published tool list. Default when omitted: true.
 # --disable-clone=true removes clone_repository from the published tool list. Default when omitted: true.
-# These flags do not disable local tools such as status, diff, switch_branch, add_all, or commit.
+# These flags do not disable local tools such as status, diff, show, switch_branch, add_all, or commit.
 [mcp_servers.git]
 command = "node"
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']
@@ -49,8 +50,8 @@ disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']
 
-# Read-only GitHub Actions workflow inspection for an explicit repository allowlist.
-# The MCP never invokes a shell and does not expose dispatch, rerun, cancel, delete, or download commands.
+# GitHub Actions inspection and explicit run cancellation for a repository allowlist.
+# The MCP never invokes a shell and does not expose dispatch, rerun, delete, artifact download, or arbitrary gh commands.
 # Repeat --repository=OWNER/REPO to allow multiple repositories. No other repository can be selected.
 # cwd is mandatory here even though every GitHub repository argument is allowlisted by --repository.
 [mcp_servers.gh_workflow]

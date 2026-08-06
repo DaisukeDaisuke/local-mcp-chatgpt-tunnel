@@ -119,7 +119,7 @@ allowed_directories = ['C:\Users\owner\Documents\my-project']
 allowed_files = []
 disallowed_path_globs = ['**.ssh**']
 ```
-`safe-files`は`cwd`をWorkspaceのルートとして使います。<br>複数のWorkspaceを扱う場合は、`files_project_a`と`files_project_b`のようにMCPエントリを分け、それぞれに別の`cwd`と`prefix`を指定します。
+`safe-files`は`cwd`を相対パスの初期基準として使い、`allowed_directories`に列挙したWorkspaceだけを操作できます。<br>`copy`または`move`でWorkspace間のファイル転送が必要な場合は、同じMCPエントリの`allowed_directories`へ送信元と送信先を明示します。両方のパスに許可・拒否設定が適用され、既存ファイルの上書き、ディレクトリ、シンボリックリンクは拒否されます。分離を優先する場合は、`files_project_a`と`files_project_b`のようにMCPエントリを分け、それぞれに別の`cwd`と`prefix`を指定します。
 `list_files`は固定された`rg --files --hidden`経路で再帰一覧を返します。<br>
 `excludePaths`へ無視するファイルまたはフォルダーを複数指定でき、`globs`は相対globだけを受け付けます。<br>任意のrg引数、親ディレクトリへ出るglob、改行、NUL、オプションに見える先頭`-`は拒否します。<br>
 `.git`内部は常に除外します。<br>
@@ -169,7 +169,7 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 ```
 ChatGPTからは`downloads__download_zip`へ`path`を渡します。<br>単一の`.js`や`.mjs`を指定してもZIPで返します。<br>ディレクトリでは固定された`rg --files`で列挙し、`globs`、`excludePaths`、`includeIgnored`を使用できます。<br>`disallowed_path_globs`へ一致するファイルまたはフォルダが対象ディレクトリ内に1件でもある場合、これらの絞り込みや除外より前にダウンロード全体を拒否し、エラーへ一致したglobと対象パスを表示します。<br>ROM、Save、State、秘密鍵形式、資格情報らしい内容、シンボリックリンク、許可ルート外は拒否します。<br>
 ### 4.6 gh-workflowを必要な場合だけ有効にする
-GitHub Actionsの実行状況をChatGPTから確認する場合は、読み取り専用の`gh-workflow`を追加または有効化します。<br>
+GitHub Actionsの実行状況確認と、実行中runの明示的なキャンセルをChatGPTから行う場合は、`gh-workflow`を追加または有効化します。<br>
 事前に通常権限のPowerShellで`gh auth login`を済ませ、対象リポジトリを読めるGitHubアカウントで認証してください。<br>
 gitmcpでコミット後、デプロイ完了まで待機することを想定しています。依存関係として`GitHub cli`が必要です。<br>
 ```toml
@@ -189,7 +189,7 @@ disallowed_path_globs = ['**.ssh**']
 `--repository=OWNER/REPO`は複数回指定できます。指定したリポジトリだけがツールの選択肢になり、許可リスト外のリポジトリ名は子プロセスへ渡りません。<br>
 許可リポジトリが1件の場合は各ツールの`repository`を省略できます。複数の場合は、呼び出すたびに許可リスト内の`repository`を指定します。<br>
 `cwd`は省略せず、実在する安全な作業ディレクトリを必ず明示します。設定例は`enabled = false`であり、内容を確認してから有効化します。<br>
-公開するのはrun一覧、run待機、run概要、job一覧、ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLだけです。workflow実行、再実行、cancel、delete、artifact download、`gh api`は公開しません。<br>
+公開するのはrun一覧、run待機、runキャンセル、run概要、job一覧、ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLだけです。`cancel_run`は検証済みのrun IDと許可リポジトリを`gh run cancel`の固定引数へ渡し、シェルを使用しません。workflow実行、再実行、delete、artifact download、`gh api`は公開しません。<br>
 ### 4.7 gitmcpを必要な場合だけ有効にする
 ローカルGitリポジトリの状態確認、差分確認、ブランチ操作、ステージ、コミットなどをChatGPTから行う場合は、同梱の`gitmcp`を有効化します。<br>
 使用しない場合は`enabled = false`のままにしてください。<br>
@@ -212,7 +212,7 @@ disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 ```
 `enabled = false`では`gitmcp`自体を起動せず、Gitツールを一つも公開しません。パスと操作範囲を確認した後、必要な場合だけ`enabled = true`へ変更します。<br>
-`gitmcp`を有効にすると、`roots`、`get_working_directory`、`set_working_directory`、`status`、`ls_files`、`branches`、`remotes`、`log`、`diff`、`switch_branch`、`add_all`、`commit`を公開します。<br>
+`gitmcp`を有効にすると、`roots`、`get_working_directory`、`set_working_directory`、`status`、`ls_files`、`branches`、`remotes`、`log`、`diff`、`show`、`switch_branch`、`add_all`、`commit`を公開します。<br>`show`はcommit IDまたは`HEAD`などの単純なローカルrevisionを受け付け、任意のリポジトリ内ファイルで絞り込めます。`format`はcommit patchの`patch`、diffstat付き概要の`stat`、patchなし概要の`summary`から選択します。<br>
 `push`、`pull`、`clone_repository`は、次の起動引数で個別にツール一覧から除外できます。<br>
 `--disable-push=true`は`push`を除外します。`false`にすると現在のブランチを指定済みremoteへpushできますが、force pushと任意refspecは公開しません。省略時は`false`です。<br>
 `--disable-pull=true`は`pull`を除外します。`false`にすると設定済みupstreamを取得し、拒否対象パスを検査してからfast-forward onlyで反映します。省略時は`true`です。<br>
@@ -547,7 +547,7 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
 `gateway__list_available_tools`は`config/gateway.toml`のトップレベルで`publish_tool_directory = true`にすると有効化でき、ユーザーの意向で無効化される場合もある。ローカルMCPで直接処理できる可能性がある場合は、推測、一般論、Web検索、別手段へ進む前に完全名を起点に探索し、利用可能なら必ず実際に呼び出して完全なツール名と説明を確認すること。呼び出さずに無効、未公開、利用不能、不存在と判断してはならず、実際に探索しても利用できない場合だけ現在表示されているツールで判断すること。
 `prefix`は既知の完全名または先頭文字列がある場合だけ指定し、不明なら省略すること。0件でも全件が返るため別のprefixを推測して繰り返さず、返された完全名と説明から最も直接的なツールを選ぶこと。ツール探索だけを目的にWeb検索しないこと。
 使用するMCPグループの作業ディレクトリ、相対パス基準、許可範囲、拒否範囲のいずれかが不明な場合は、推測や過去チャットの記憶で補わないこと。まず現在のツール一覧から同じprefixの`get_gateway_access_scope`を探して実際に呼び出し、Gatewayが現在適用している`workingDirectory`、`relativePathBase`、`configured.allowedDirectories`、`configured.allowedFiles`、`configured.disallowedDirectories`、`configured.disallowedFiles`、`configured.protectedFiles`、`configured.disallowedPathGlobs`と、正規化済みの`effective.*`を確認すること。完全名が不明なら`gateway__list_available_tools`をprefix付きまたは引数なしで呼んで探すこと。
-使用するMCPグループ（`files__`、`git__`など）に`get_working_directory`または`roots`がある場合は、そのチャットで同グループを初めて呼ぶ直前に現在の作業ディレクトリを確認すること。`get_gateway_access_scope`と値が食い違う場合は操作を止め、設定またはMCPの同期不良としてユーザーへ報告すること。ユーザー指定の対象と異なる場合は、`set_working_directory`があれば変更可能か確かめ、許可範囲外などで変更できない場合は別の場所を操作せず、対象パスを`allowed_directories`へ追加するよう提案すること。
+使用するMCPグループ（`files__`、`git__`など）に`get_working_directory`または`roots`がある場合は、そのチャットで同グループを初めて操作する直前に現在の作業ディレクトリを確認すること。返却値がユーザー指定の対象と異なっても直ちに同期不良と判断しないこと。対象が許可範囲内で`set_working_directory`がある場合は、まず対象へ変更し、変更後に作業ディレクトリを再確認すること。一致すれば作業を続けること。`set_working_directory`がない、変更が拒否された、変更後も一致しない、または許可範囲と実際の操作結果が矛盾する場合だけ、設定またはMCPの同期不良として停止し報告すること。対象が許可範囲外なら別の場所を操作せず、`allowed_directories`または`allowed_files`への追加を提案すること。
 パスが許可範囲外として拒否された場合は、エラー本文または`structuredContent.result.accessScope`に返された絶対パスの許可ディレクトリ・許可ファイルだけを現在の候補として扱うこと。拒否後に過去チャット、既定値、よくあるパスから別の作業ディレクトリを捏造して再試行しないこと。
 `gitmcp`を使用するときは、`.gitignore`、`.gitattributes`、改行変換、filter、署名などのGit標準設定を無視して独自にファイル集合やtext/binary判定を作らないこと。判断に必要なら、現在のツール一覧から同じprefixの`list_worktree_files`、`check_ignore`、`check_attributes`、`get_effective_config`、`get_policy`を探してGit自身の判定を確認すること。
 コード変更の検証で、ファイル編集、Gitのcommit・push、GitHub Actionsの実行確認に対応する各ツールがすべて利用可能であり、ユーザーがcommitとpushを明示的に指示または許可している場合は、ローカルまたは利用可能な実行環境のテストだけで完了とせず、変更をcommitしてpushした後、対象リポジトリとブランチの新しいGitHub Actions runを特定して完了まで確認すること。Windows、macOS、Linuxなどworkflowが定義する全jobの成否を確認し、失敗時はfailed logsまたはrun logsを読んで修正、再commit、再push、再確認を行うこと。全jobの成功を確認する前に「全環境で成功した」と断定しないこと。commitやpushの明示的な許可がない場合は実行しないこと。
@@ -555,7 +555,7 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
 任意コード、コマンド、シェル、スクリプト、プロセスを実行できるMCPは、このチャット履歴に今回の目的と対象への明示的な許可がある場合だけ呼ぶこと。許可がなければそのターンは許可を求めて終了し、許可前に別の任意コード実行ツールへ切り替えず、過去の許可を別目的や対象へ流用しないこと。
 `files__roots`や`files__get_gateway_access_scope`が見えなくても、`gateway__list_available_tools`で確認する前に`files__`が無効、利用不能、不存在と断定しないこと。確認後も`files__`がなく、他の公開ツールにもファイル編集機能がない場合だけ編集不能と判断し、推測で代替せず理由を説明すること。
 MCPの有効状態、公開ツール、`allowed_directories`、`allowed_files`などの許可設定は、ユーザーの明示的な指示なく変更、回避、緩和しないこと。変更方法を尋ねられた場合は`config/gateway.example.toml`を参照し、`config/gateway.toml`の該当設定、GatewayとTunnelの再起動、ChatGPT側のカスタムアプリ更新が必要と説明すること。明示的に変更を指示された場合だけ、安全なファイル編集手段で`config/gateway.toml`を編集すること。
-`files__`の代表例は`roots`、`get_working_directory`、`set_working_directory`、`list_files`、`search_text`、`file_info`、`read_text`、`apply_patch`である。`read_text`は単一または複数ファイルの全体・行範囲読み取りに対応する。
+`files__`の代表例は`roots`、`get_working_directory`、`set_working_directory`、`list_files`、`search_text`、`file_info`、`read_text`、`copy`、`move`、`apply_patch`である。`read_text`は単一または複数ファイルの全体・行範囲読み取りに対応する。
 ===終了ローカルmcpプラグイン指示===
 ```
 この指示では、Git、画像、ブラウザー、デバッガー、GitHub ActionsなどのMCP名を固定列挙しません。<br>追加または削除されたMCPをカスタム指示へ毎回反映せず、実際に公開されているツールをGatewayから確認します。<br>

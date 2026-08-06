@@ -73,7 +73,7 @@ test('gh-workflow accepts repeated repository allowlist entries and requires sel
   ]]);
 });
 
-test('gh-workflow exposes only read-only workflow inspection tools', async () => {
+test('gh-workflow exposes read-only inspection tools and one explicit cancel operation', async () => {
   const { createServer } = await importGhWorkflow(['--repository=DaisukeDaisuke/desmume_webassembly'], 'tools');
   const server = createServer({ execute: async () => ({ stdout: '', stderr: '', exitCode: 0 }) });
   await server(request(1, 'initialize'));
@@ -82,6 +82,7 @@ test('gh-workflow exposes only read-only workflow inspection tools', async () =>
   assert.deepEqual(names, [
     'list_runs',
     'watch_run',
+    'cancel_run',
     'view_run',
     'view_run_jobs',
     'view_run_logs',
@@ -90,7 +91,7 @@ test('gh-workflow exposes only read-only workflow inspection tools', async () =>
     'view_workflow',
     'view_workflow_yaml'
   ]);
-  for (const tool of listed.result.tools) {
+  for (const tool of listed.result.tools.filter((entry) => entry.name !== 'cancel_run')) {
     assert.deepEqual(tool.annotations, {
       readOnlyHint: true,
       destructiveHint: false,
@@ -98,6 +99,12 @@ test('gh-workflow exposes only read-only workflow inspection tools', async () =>
       openWorldHint: true
     });
   }
+  assert.deepEqual(listed.result.tools.find((entry) => entry.name === 'cancel_run').annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true
+  });
   for (const tool of listed.result.tools.filter((entry) => entry.inputSchema.properties.runId)) {
     assert.equal(
       tool.inputSchema.properties.runId.description,
@@ -118,10 +125,12 @@ test('gh-workflow builds the requested fixed gh run commands without a shell', a
   await server(request(1, 'initialize'));
   await server(request(2, 'tools/call', { name: 'list_runs', arguments: {} }));
   await server(request(3, 'tools/call', { name: 'watch_run', arguments: { runId: '123456789' } }));
-  await server(request(4, 'tools/call', { name: 'view_run', arguments: { runId: '123456789' } }));
+  await server(request(4, 'tools/call', { name: 'cancel_run', arguments: { runId: '123456789' } }));
+  await server(request(5, 'tools/call', { name: 'view_run', arguments: { runId: '123456789' } }));
   assert.deepEqual(commands, [
     ['run', 'list', '--repo', 'DaisukeDaisuke/desmume_webassembly', '--branch', 'main', '--limit', '3'],
     ['run', 'watch', '123456789', '--repo', 'DaisukeDaisuke/desmume_webassembly', '--exit-status'],
+    ['run', 'cancel', '123456789', '--repo', 'DaisukeDaisuke/desmume_webassembly'],
     ['run', 'view', '123456789', '--repo', 'DaisukeDaisuke/desmume_webassembly']
   ]);
 });
@@ -143,9 +152,14 @@ test('gh-workflow rejects option-looking and shell-like tool arguments before ex
     name: 'watch_run',
     arguments: { runId: '1 & marker' }
   }));
+  const cancelRunId = await server(request(5, 'tools/call', {
+    name: 'cancel_run',
+    arguments: { runId: '1; marker' }
+  }));
   assert.equal(branch.result.isError, true);
   assert.equal(workflow.result.isError, true);
   assert.equal(runId.result.isError, true);
+  assert.equal(cancelRunId.result.isError, true);
   assert.equal(executions, 0);
 });
 

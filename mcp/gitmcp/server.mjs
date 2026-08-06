@@ -43,7 +43,7 @@ Options:
   --disable-clone=true|false  Remove the clone_repository tool when true. Default: true.
 
 The disable options affect only push, pull, and clone_repository. Local Git tools such as status,
-diff, switch_branch, add_all, and commit remain available while this MCP server is enabled.
+diff, show, switch_branch, add_all, and commit remain available while this MCP server is enabled.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
 Standard Git ignore rules, attributes, line-ending conversion, system/global filters, and configured
 commit signing are preserved. Repository-local executable Git configuration is rejected.
@@ -141,6 +141,28 @@ const schemas = [
     name: 'diff',
     description: 'Return a working-tree or staged diff while respecting Git binary/text attributes and trusted system/global external diff and textconv configuration. Repository-local executable diff configuration is rejected.',
     inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, staged: { type: 'boolean', default: false } }, additionalProperties: false },
+    annotations: READ_ONLY_ANNOTATIONS
+  },
+  {
+    name: 'show',
+    description: 'Show one commit with an optional repository-relative file selection. format=patch returns the commit patch, stat returns its diffstat and summary, and summary returns commit metadata without a patch.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repositoryPath: { type: 'string', default: '.' },
+        commit: { type: 'string', minLength: 1, maxLength: 255, description: 'Commit object ID or a simple local revision such as HEAD, main, or HEAD~1.' },
+        paths: {
+          type: 'array',
+          items: { type: 'string', minLength: 1, maxLength: 4096 },
+          minItems: 1,
+          maxItems: 100,
+          description: 'Optional repository-relative or absolute paths inside the selected worktree.'
+        },
+        format: { type: 'string', enum: ['patch', 'stat', 'summary'], default: 'patch' }
+      },
+      required: ['commit'],
+      additionalProperties: false
+    },
     annotations: READ_ONLY_ANNOTATIONS
   },
   {
@@ -301,6 +323,26 @@ function safeName(value, label) {
 
 function safeRemote(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._-]{1,255}$/.test(value) || value.startsWith('-')) throw new Error('remote is invalid');
+  return value;
+}
+
+function safeCommit(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 255 || /[\0\r\n]/.test(value) || value.startsWith('-')) {
+    throw new Error('commit is invalid');
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/~^+-]{0,254}$/.test(value)
+      || value.includes('..')
+      || value.includes('//')
+      || value.endsWith('/')
+      || value.endsWith('.')
+      || value.endsWith('.lock')) {
+    throw new Error('commit is invalid');
+  }
+  return value;
+}
+
+function safeShowFormat(value = 'patch') {
+  if (!['patch', 'stat', 'summary'].includes(value)) throw new Error('format must be patch, stat, or summary');
   return value;
 }
 
@@ -595,6 +637,29 @@ async function callTool(name, args = {}) {
       command.push('--');
       return { repositoryPath: cwd, staged: args.staged === true, diff: (await runGit(cwd, command)).stdout };
     }
+    case 'show': {
+      const cwd = await repository(args.repositoryPath);
+      const requestedCommit = safeCommit(args.commit);
+      const objectId = (await runGit(cwd, ['rev-parse', '--verify', '--end-of-options', `${requestedCommit}^{commit}`])).stdout.trim();
+      if (!/^[0-9A-Fa-f]{40,64}$/.test(objectId)) throw new Error('Git returned an invalid commit object ID');
+      await assertTreeAvoidsDeniedPaths(cwd, objectId);
+      const paths = args.paths === undefined ? [] : await repositoryRelativePaths(cwd, args.paths);
+      const format = safeShowFormat(args.format ?? 'patch');
+      const command = ['--no-pager', '--literal-pathspecs', 'show', '--format=fuller'];
+      if (format === 'patch') command.push('--ext-diff', '--textconv');
+      else if (format === 'stat') command.push('--stat', '--summary');
+      else command.push('--summary', '--no-patch');
+      command.push(objectId);
+      if (paths.length > 0) command.push('--', ...paths);
+      return {
+        repositoryPath: cwd,
+        commit: requestedCommit,
+        objectId,
+        format,
+        paths,
+        show: (await runGit(cwd, command)).stdout
+      };
+    }
     case 'switch_branch': {
       const cwd = await repository(args.repositoryPath);
       const branch = safeName(args.branch, 'branch');
@@ -676,7 +741,7 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'gitmcp', version: '1.0.0' },
+        serverInfo: { name: 'gitmcp', version: '1.1.0' },
         instructions: 'Allowlisted Git operations only. Standard ignore rules, attributes, line-ending conversion, system/global filters, external diff/textconv, and configured commit signing are preserved. Repository-local executable Git configuration, hooks, force push, and arbitrary clone destinations are blocked.'
       });
     }

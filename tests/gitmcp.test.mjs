@@ -54,6 +54,7 @@ test('gitmcp hides pull and clone by default', async () => {
   assert.ok(names.includes('check_ignore'));
   assert.ok(names.includes('check_attributes'));
   assert.ok(names.includes('get_effective_config'));
+  assert.ok(names.includes('show'));
 });
 
 test('gitmcp reports which standard Git behaviors are preserved', async () => {
@@ -203,6 +204,62 @@ test('gitmcp diff respects .gitattributes binary classification', async () => {
   assert.equal(values.get('diff'), 'unset');
   assert.equal(values.get('merge'), 'unset');
   assert.equal(values.get('text'), 'unset');
+});
+
+test('gitmcp show returns one commit with optional path selection and bounded summary formats', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitmcp-show-'));
+  await exec('git', ['init'], { cwd: root });
+  await exec('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
+  await exec('git', ['config', 'user.name', 'Test User'], { cwd: root });
+  await writeFile(join(root, 'a.txt'), 'alpha\n', 'utf8');
+  await writeFile(join(root, 'b.txt'), 'bravo\n', 'utf8');
+  await exec('git', ['add', '--', 'a.txt', 'b.txt'], { cwd: root });
+  await exec('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'initial'], { cwd: root });
+  await writeFile(join(root, 'a.txt'), 'alpha changed\n', 'utf8');
+  await writeFile(join(root, 'b.txt'), 'bravo changed\n', 'utf8');
+  await exec('git', ['add', '--', 'a.txt', 'b.txt'], { cwd: root });
+  await exec('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'change both'], { cwd: root });
+  const { createServer } = await importGitMcp(root, [], 'show');
+  const server = createServer();
+  await server(request(1, 'initialize'));
+
+  const selected = await server(request(2, 'tools/call', {
+    name: 'show', arguments: { repositoryPath: root, commit: 'HEAD', paths: ['a.txt'] }
+  }));
+  assert.equal(selected.result.isError, false);
+  const selectedResult = selected.result.structuredContent.result;
+  assert.match(selectedResult.objectId, /^[0-9a-f]{40,64}$/i);
+  assert.deepEqual(selectedResult.paths, ['a.txt']);
+  assert.match(selectedResult.show, /a\.txt/);
+  assert.doesNotMatch(selectedResult.show, /b\.txt/);
+
+  const statResult = await server(request(3, 'tools/call', {
+    name: 'show', arguments: { repositoryPath: root, commit: 'HEAD', format: 'stat' }
+  }));
+  assert.equal(statResult.result.isError, false);
+  assert.equal(statResult.result.structuredContent.result.format, 'stat');
+  assert.match(statResult.result.structuredContent.result.show, /2 files changed/);
+
+  const summary = await server(request(4, 'tools/call', {
+    name: 'show', arguments: { repositoryPath: root, commit: 'HEAD~1', format: 'summary' }
+  }));
+  assert.equal(summary.result.isError, false);
+  assert.equal(summary.result.structuredContent.result.format, 'summary');
+  assert.match(summary.result.structuredContent.result.show, /initial/);
+  assert.doesNotMatch(summary.result.structuredContent.result.show, /^diff --git/m);
+
+  for (const [id, commit] of [[5, '--help'], [6, 'HEAD;marker']]) {
+    const refused = await server(request(id, 'tools/call', {
+      name: 'show', arguments: { repositoryPath: root, commit }
+    }));
+    assert.equal(refused.result.isError, true);
+    assert.match(refused.result.structuredContent.error, /commit is invalid/);
+  }
+  const escaped = await server(request(7, 'tools/call', {
+    name: 'show', arguments: { repositoryPath: root, commit: 'HEAD', paths: ['../outside.txt'] }
+  }));
+  assert.equal(escaped.result.isError, true);
+  assert.match(escaped.result.structuredContent.error, /escaped the worktree/);
 });
 
 test('gitmcp add_all preserves configured line-ending conversion', async () => {

@@ -58,7 +58,7 @@ export const GH_WORKFLOW_MCP_HELP = `gh-workflow
 Usage:
   node mcp/gh-workflow/server.mjs --repository=OWNER/REPO [--repository=OWNER/REPO ...]
 
-Read-only GitHub Actions inspection for an explicit repository allowlist.
+GitHub Actions inspection and explicit run cancellation for a repository allowlist.
 The server spawns gh directly with shell=false, a fixed subcommand allowlist,
 validated arguments, ignored stdin, bounded output, and an explicit cwd.
 `;
@@ -77,6 +77,7 @@ const toolResult = (value, isError = false) => ({
   isError
 });
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
+const cancelRunAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
 const runIdSchema = {
   type: 'string',
   pattern: '^[1-9][0-9]{0,19}$',
@@ -110,6 +111,12 @@ const schemas = [
     description: 'Watch one workflow run until completion and return an error when the run fails.',
     inputSchema: toolInput({ runId: runIdSchema }, ['runId']),
     annotations: readOnly
+  },
+  {
+    name: 'cancel_run',
+    description: 'Immediately request cancellation of one in-progress GitHub Actions run.',
+    inputSchema: toolInput({ runId: runIdSchema }, ['runId']),
+    annotations: cancelRunAnnotations
   },
   {
     name: 'view_run',
@@ -276,6 +283,8 @@ function commandForTool(name, args = {}) {
       return ['run', 'list', '--repo', repository, '--branch', safeBranch(args.branch ?? 'main'), '--limit', safeLimit(args.limit, 3)];
     case 'watch_run':
       return ['run', 'watch', safeRunId(args.runId), '--repo', repository, '--exit-status'];
+    case 'cancel_run':
+      return ['run', 'cancel', safeRunId(args.runId), '--repo', repository];
     case 'view_run':
       return ['run', 'view', safeRunId(args.runId), '--repo', repository];
     case 'view_run_jobs':
@@ -313,8 +322,8 @@ export function createServer(options = {}) {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'gh-workflow', version: '1.0.0' },
-        instructions: `Read-only GitHub Actions inspection for this repository allowlist: ${cli.repositories.join(', ')}. No shell, arbitrary gh arguments, workflow dispatch, rerun, cancel, delete, artifact download, or repository mutation.`
+        serverInfo: { name: 'gh-workflow', version: '1.1.0' },
+        instructions: `GitHub Actions inspection and explicit run cancellation for this repository allowlist: ${cli.repositories.join(', ')}. No shell, arbitrary gh arguments, workflow dispatch, rerun, delete, artifact download, or other repository mutation.`
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
