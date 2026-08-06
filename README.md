@@ -279,7 +279,7 @@ tool = "stop_browser"
 Gatewayは管理者権限での起動を拒否し、子MCPへ親プロセスの秘密情報らしい環境変数をそのまま継承しません。ただし、同じWindowsユーザーが読めるファイルをOSレベルで隔離するものではありません。<br>
 Tunnelは自分のPlatform Organizationと自分のChatGPT Workspaceだけへ関連付け、runtime API keyには`Tunnels Read + Use`以外の権限を与えない構成を推奨します。詳細は[SECURITY.md](./SECURITY.md)と[INSTALL.md](./INSTALL.md)を確認してください。<br>
 ## SDK
-[mainブランチのZIP](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)をダウンロードしてChatGPTへ添付し、次のプロンプトを送信すると、このリポジトリへ追加する署名対応の同梱stdio MCPを作成させられます。<br>
+[mainブランチのZIP](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)、[tunnel-client-source](https://github.com/openai/tunnel-client/archive/refs/heads/master.zip)をダウンロードしてChatGPTへ添付し、次のプロンプトを送信すると、このリポジトリへ追加する署名対応の同梱stdio MCPを作成させられます。<br>
 生成したMCPを通常の外部MCPとして登録しただけでは、Gatewayの署名付きisolated workspaceは送信されません。`mcp/<name>/server.mjs`として配置し、`app/server-config.mjs`の`BUNDLED_SERVER_PATHS`へ登録する差分も適用してください。<br>
 `<Describe the MCP tools you need here.>`は、作成したいツールと操作対象の具体的な説明へ置き換えてください。<br>
 ```text
