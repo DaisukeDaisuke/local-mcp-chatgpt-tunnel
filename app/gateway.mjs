@@ -60,10 +60,11 @@ class SerialQueues {
     if (!group) return operation();
     const previous = this.tails.get(group) ?? Promise.resolve();
     const current = previous.catch(() => {}).then(operation);
-    const tracked = current.finally(() => {
-      if (this.tails.get(group) === tracked) this.tails.delete(group);
+    const tail = current.then(() => undefined, () => undefined);
+    this.tails.set(group, tail);
+    void tail.then(() => {
+      if (this.tails.get(group) === tail) this.tails.delete(group);
     });
-    this.tails.set(group, tracked);
     return current;
   }
 }
