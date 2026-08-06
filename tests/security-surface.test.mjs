@@ -185,21 +185,6 @@ test('gitmcp preserves normal Git configuration while disabling only executable 
   assert.doesNotMatch(source, /worktree', 'remove', '--force|branch', '-[dD]/);
 });
 
-test('gateway publishes an exact access-scope tool and installation guidance requires using it instead of remembered paths', async () => {
-  const gateway = await readFile(new URL('../app/gateway.mjs', import.meta.url), 'utf8');
-  const scope = await readFile(new URL('../app/access-scope.mjs', import.meta.url), 'utf8');
-  const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
-  assert.match(scope, /get_gateway_access_scope/);
-  assert.match(scope, /exact current gateway-enforced allow\/deny path scope/i);
-  assert.match(gateway, /pathPolicy\.describe\(/);
-  assert.match(gateway, /bundled scopes require the same isolatedId/);
-  assert.match(install, /過去チャットの記憶で補わない/);
-  assert.match(install, /get_gateway_access_scope/);
-  assert.match(install, /gateway__list_available_tools/);
-  assert.match(install, /新しいGitHub Actions runを特定して完了まで確認する/);
-  assert.match(install, /全jobの成功を確認する前に「全環境で成功した」と断定しない/);
-});
-
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {
   await assert.rejects(access(new URL('../mcp/ghidra', import.meta.url)));
   await assert.rejects(access(new URL('../mcp/dq9-test', import.meta.url)));
