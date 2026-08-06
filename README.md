@@ -63,6 +63,9 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
 | `gitmcp` | `get_policy`、`branches`、`create_branch`、`checkout`、`list_worktrees`、`create_worktree`、`remove_worktree`、`status`、`diff`、`commit`、`push` | 許可したリポジトリに対する限定されたGit操作 |
 | `gh-workflow` | `list_runs`、`watch_run`、`cancel_run`、`view_run`、`view_run_jobs`、`view_failed_logs`、`list_workflows`、`view_workflow_yaml` | 明示的に許可したGitHubリポジトリのActions実行状況確認とrunキャンセル |
+
+<br>
+
 同梱MCPは外部npm依存を持ちません。すべてのツールが`outputSchema`を宣言します。<br>
 Gatewayは`isolated__create`、`isolated__list`、`isolated__close`を公開し、同梱MCPの全ツールへ一意な`isolatedId`を必須化します。`isolated__create`は1件以上の絶対ディレクトリを`workspaces`配列で受け取り、IDごとに複数WorkspaceとMCP別の相対パス基準を保持します。同梱MCPプロセス自体は複製せず、呼び出しごとに対象IDのroot群を渡すため、ツール定義の重複や共有cwdの競合は発生しません。<br>
 Gatewayは起動時に同梱MCPごとのランダム鍵を生成し、正規化済みの基準パスとroot群をHMAC-SHA-256で署名して非公開引数として渡します。同梱MCPは未署名、改ざん済み、構造不正なコンテキストを拒否し、公開引数からの`root`、`roots`、`workspace`、`workspaces`上書きも拒否します。<br>
