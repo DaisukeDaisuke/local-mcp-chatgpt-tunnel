@@ -237,6 +237,9 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | `[mcp_servers.<name>.start_after]` | `server`と`tool`で指定した別MCPのツールが成功した後、このMCPを起動します。通常は`deferred = true`と組み合わせます。 |
 | `[mcp_servers.<name>.stop_after]` | `server`と`tool`で指定した別MCPのツールが成功した後、このMCPを停止します。 |
 | `[mcp_servers.<name>.env]` | 子MCPへ追加で渡す環境変数です。値には文字列、数値、真偽値を指定できます。Gatewayのパスポリシー用に予約された環境変数は上書きできません。 |
+
+<br>
+
 通常のMCPは`deferred = false`または省略で起動します。その場合、`start_after`は不要です。<br>
 `url`によるリモートMCP設定は拒否されます。Codex固有の`tool_output_token_limit`は読み取られても使用されず、このGateway上では効果を持ちません。<br>
 ### 内蔵ツールディレクトリ
