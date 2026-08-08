@@ -27,6 +27,10 @@ winget install -e --id Git.Git
 
 Chrome、Ghidra、その他の外部MCPは、実際に使うものだけを各プロジェクトの公式手順で導入します。<br>安全上の理由から、このスクリプトで一括導入はしません。<br>
 
+## nodejsのインストール
+nodejsをインストールしてください。
+https://nodejs.org/ja/download
+
 ## 1.2 このリポジトリをクローンし展開する
 更新の利便性から、git経由をお勧めしますが、[zip経由](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)でのダウンロード後展開でもかまいません。<br>
 
