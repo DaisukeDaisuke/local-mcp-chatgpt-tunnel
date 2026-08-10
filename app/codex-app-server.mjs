@@ -206,7 +206,11 @@ export class CodexAppServerSandboxedProcess {
       const timeout = timeoutMs === null ? null : setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${this.config.name} codex app-server timed out handling ${method}`));
-      }
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timeout });
+      this.appServer.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+    });
+  }
 
   #enqueueWrite(params, timeoutMs) {
     const operation = this.writeQueue.then(() => {
@@ -219,10 +223,6 @@ export class CodexAppServerSandboxedProcess {
     });
     void this.writeQueue.catch(() => {});
     return operation;
-  }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timeout });
-      this.appServer.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
-    });
   }
 
   #notify(method, params = {}) {

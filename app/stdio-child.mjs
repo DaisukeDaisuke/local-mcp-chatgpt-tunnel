@@ -48,13 +48,13 @@ export class StdioMcpChild {
     if (this.config.sandbox && this.config.sandbox !== 'never' && !this.config.sandboxDelegated) {
       this.sandboxedChild = new CodexAppServerSandboxedProcess(this.config, {
         env: childEnvironment,
-        onStdout: (chunk) => this.#accept(chunk),
-        onStderr: (chunk) => this.#writeStderr(chunk),
+        onStdout: (chunk) => this.accept(chunk),
+        onStderr: (chunk) => this.writeStderr(chunk),
         onExit: (code, signal) => {
-          if (!this.closed) this.#failAll(new Error(`${this.config.name} exited (${signal ?? code ?? 'unknown'})`));
+          if (!this.closed) this.failAll(new Error(`${this.config.name} exited (${signal ?? code ?? 'unknown'})`));
         },
         onFailure: (error) => {
-          if (!this.closed) this.#failAll(error);
+          if (!this.closed) this.failAll(error);
         },
         stderr: this.stderr
       });
@@ -68,12 +68,12 @@ export class StdioMcpChild {
         shell: false
       });
       this.child.stdout.setEncoding('utf8');
-      this.child.stdout.on('data', (chunk) => this.#accept(chunk));
+      this.child.stdout.on('data', (chunk) => this.accept(chunk));
       this.child.stderr.setEncoding('utf8');
-      this.child.stderr.on('data', (chunk) => this.#writeStderr(chunk));
-      this.child.once('error', (error) => this.#failAll(error));
+      this.child.stderr.on('data', (chunk) => this.writeStderr(chunk));
+      this.child.once('error', (error) => this.failAll(error));
       this.child.once('exit', (code, signal) => {
-        if (!this.closed) this.#failAll(new Error(`${this.config.name} exited (${signal ?? code ?? 'unknown'})`));
+        if (!this.closed) this.failAll(new Error(`${this.config.name} exited (${signal ?? code ?? 'unknown'})`));
       });
     }
 
@@ -93,7 +93,7 @@ export class StdioMcpChild {
   }
 
   request(method, params = {}, timeoutOverrideMs) {
-    if (!this.#isWritable()) return Promise.reject(new Error(`${this.config.name} is not running`));
+    if (!this.isWritable()) return Promise.reject(new Error(`${this.config.name} is not running`));
     const id = this.nextId++;
     const payload = { jsonrpc: '2.0', id, method, params };
     return new Promise((resolve, reject) => {
@@ -102,12 +102,12 @@ export class StdioMcpChild {
         reject(new Error(`${this.config.name} timed out handling ${method}`));
       }, timeoutOverrideMs ?? this.config.requestTimeoutMs ?? 30 * 60 * 1000);
       this.pending.set(id, { resolve, reject, timeout });
-      this.#writeStdin(`${JSON.stringify(payload)}\n`);
+      this.writeStdin(`${JSON.stringify(payload)}\n`);
     });
   }
 
   notify(method, params = {}) {
-    if (this.#isWritable()) this.#writeStdin(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
+    if (this.isWritable()) this.writeStdin(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
   }
 
   async close() {
@@ -117,19 +117,19 @@ export class StdioMcpChild {
       this.child.stdin.end();
       if (this.child.exitCode === null && !this.child.killed) this.child.kill();
     }
-    this.#failAll(new Error(`${this.config.name} closed`));
+    this.failAll(new Error(`${this.config.name} closed`));
   }
 
-  #isWritable() {
+  isWritable() {
     return this.sandboxedChild ? this.sandboxedChild.writable : Boolean(this.child?.stdin?.writable);
   }
 
-  #writeStdin(chunk) {
+  writeStdin(chunk) {
     if (this.sandboxedChild) this.sandboxedChild.write(chunk);
     else this.child.stdin.write(chunk);
   }
 
-  #accept(chunk) {
+  accept(chunk) {
     this.buffer += chunk;
     while (true) {
       const newline = this.buffer.indexOf('\n');
@@ -141,14 +141,14 @@ export class StdioMcpChild {
       try {
         message = JSON.parse(line);
       } catch {
-        this.#writeStderr(`invalid JSON on stdout: ${line}\n`);
+        this.writeStderr(`invalid JSON on stdout: ${line}\n`);
         continue;
       }
-      this.#handleMessage(message);
+      this.handleMessage(message);
     }
   }
 
-  #handleMessage(message) {
+  handleMessage(message) {
     if (message && Object.hasOwn(message, 'id')) {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -159,18 +159,18 @@ export class StdioMcpChild {
       return;
     }
     if (message?.method === 'notifications/tools/list_changed') {
-      void this.refreshTools().then(() => this.onToolsChanged?.(this)).catch((error) => this.#writeStderr(`${error.message}\n`));
+      void this.refreshTools().then(() => this.onToolsChanged?.(this)).catch((error) => this.writeStderr(`${error.message}\n`));
     }
   }
 
-  #writeStderr(chunk) {
+  writeStderr(chunk) {
     const prefix = `[${this.config.name}] `;
     for (const line of String(chunk).split(/(?<=\n)/)) {
       if (line) this.stderr.write(`${prefix}${line}`);
     }
   }
 
-  #failAll(error) {
+  failAll(error) {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(error);

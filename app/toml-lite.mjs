@@ -23,7 +23,7 @@ function stripComment(line) {
       quote = character;
       continue;
     }
-    if (character === '#') return line.slice(0, index);
+    if (character === '') return line.slice(0, index);
   }
   return line;
 }
