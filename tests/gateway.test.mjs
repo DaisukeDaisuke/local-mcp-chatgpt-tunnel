@@ -181,6 +181,43 @@ process.stdin.on('data', (chunk) => {
   assert.match(log, /tool="dangerous".*blocked_tools exact match/);
 });
 
+gatewayIntegrationTest('gateway rejects sandbox policy holes before launching Codex', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-sandbox-hole-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-hole-config-'));
+  const configPath = join(configDirectory, 'gateway.toml');
+  const deniedFile = join(workspace, 'denied.txt');
+  await writeFile(deniedFile, 'blocked', 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.demo]',
+    `command = '${process.execPath}'`,
+    `cwd = '${workspace}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${join(configDirectory, 'codex.exe')}'`,
+    `allowed_directories = ['${workspace}']`,
+    `disallowed_files = ['${deniedFile}']`,
+    'enabled = true',
+    'prefix = "demo"'
+  ].join('\n'), 'utf8');
+
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const stderr = collectText(child.stderr);
+  t.after(() => child.kill());
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  const initialized = await nextLine(child.stdout);
+  assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
+  await stderr.waitFor((text) => text.includes('sandboxed MCPs cannot express disallowed/protected holes inside a workspaceWrite root'));
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
+  const listed = await nextLine(child.stdout);
+  assert.equal(listed.result.tools.some((tool) => tool.name.startsWith('demo__')), false);
+});
+
 gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without model API or HTTP', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-workspace-'));
   const canonicalWorkspace = await realpath(workspace);

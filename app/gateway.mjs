@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { isAbsolute } from 'node:path';
+import { realpath, stat } from 'node:fs/promises';
+import { isAbsolute, relative, sep } from 'node:path';
 import {
   ACCESS_SCOPE_TOOL_NAME,
   accessScopeMcpResult,
@@ -43,6 +44,34 @@ await assertNotElevatedWindows();
 const MAX_TOOL_NAME = 64;
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
+
+function pathInside(directory, candidate) {
+  const path = relative(directory, candidate);
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+function assertSandboxHasNoPolicyHoles(childConfig, allowedPolicy) {
+  if (!childConfig.sandbox || childConfig.sandbox === 'never') return;
+  if (childConfig.sandboxDelegated) return;
+  if ((childConfig.disallowedPathGlobs ?? []).length > 0) {
+    throw new Error(`${childConfig.name}: sandboxed MCPs cannot enforce disallowed_path_globs against arbitrary internal file access; narrow allowed_directories instead`);
+  }
+  const deniedEntries = [
+    ...allowedPolicy.disallowedDirectories,
+    ...allowedPolicy.disallowedFiles,
+    ...allowedPolicy.protectedFiles
+  ];
+  const deniedInsideWritableRoot = deniedEntries.find((denied) => allowedPolicy.directories.some((allowed) => pathInside(allowed.canonical, denied.canonical)));
+  if (deniedInsideWritableRoot) {
+    throw new Error(`${childConfig.name}: sandboxed MCPs cannot express disallowed/protected holes inside a workspaceWrite root; narrow or split allowed_directories`);
+  }
+}
+
+async function canonicalExecutable(path, label) {
+  const actual = await realpath(path);
+  if (!(await stat(actual)).isFile()) throw new Error(`${label} must point to a regular file`);
+  return actual;
+}
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const warn = (message) => process.stderr.write(`[gateway] ${message}\n`);
 const info = (message) => process.stderr.write(`[gateway] INFO ${message}\n`);
@@ -272,7 +301,20 @@ async function startChild(childConfig) {
       disallowedPathGlobs: childConfig.disallowedPathGlobs
     });
     try {
-      await child.pathPolicy.allowed();
+      const allowedPolicy = await child.pathPolicy.allowed();
+      assertSandboxHasNoPolicyHoles(childConfig, allowedPolicy);
+      if (childConfig.sandbox && childConfig.sandbox !== 'never') {
+        childConfig.allowedDirectories = allowedPolicy.directories.map((entry) => entry.canonical);
+        childConfig.allowedFiles = allowedPolicy.files.map((entry) => entry.canonical);
+        childConfig.command = await canonicalExecutable(childConfig.command, `${childConfig.name} command`);
+        childConfig.codexExecutable = await canonicalExecutable(childConfig.codexExecutable, `${childConfig.name} codex_executable`);
+        if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.command))) {
+          throw new Error(`${childConfig.name}: command resolves inside a writable sandbox root`);
+        }
+        if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.codexExecutable))) {
+          throw new Error(`${childConfig.name}: codex_executable resolves inside a writable sandbox root`);
+        }
+      }
       await child.start();
       if (childConfig.manageAnnotations) {
         await syncDiscoveredToolAnnotations(toolAnnotationConfig, childConfig.prefix, child.tools.map((tool) => tool.name));

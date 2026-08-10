@@ -119,6 +119,14 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # Path-looking tool arguments are denied unless they match allowed_directories
 # or allowed_files. Directory entries include descendants. File entries are exact.
 # `enabled = false` keeps an entry without starting it.
+# `sandbox = "elevated"` or `sandbox = "unelevated"` starts that MCP through Codex app-server workspaceWrite sandbox.
+# `sandbox = "never"` keeps the old direct stdio behavior. Do not enable arbitrary script runners with sandbox="never".
+# Sandboxed MCPs require absolute native executable paths. The gateway does not call where.exe or search PATH.
+# `codex_executable` must be the native Codex executable itself (codex.exe on Windows), not a .cmd/.bat shim.
+# The sandbox automatically grants read-only access to the selected MCP/runtime executable directory and known interpreter entry-script directory.
+# Codex and runtime/MCP executable files must stay outside allowed_directories so workspaceWrite cannot modify them.
+# A workspaceWrite sandbox cannot represent deny holes inside a writable root. When sandbox is enabled,
+# keep disallowed_directories, disallowed_files, and disallowed_path_globs empty; narrow or split allowed_directories instead.
 # Tool exclusion is per MCP server. `blocked_tools` is an exact-name list.
 # `blocked_tool_substrings` is a case-insensitive literal substring list; it is
 # not glob or regular-expression syntax. Multiple values are allowed. Setting
@@ -132,6 +140,9 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # args = ['C:\path\to\server.py']
 # cwd = 'C:\path\to'
 # enabled = false
+# sandbox = "never"
+# codex_executable = 'C:\absolute\path\to\codex.exe'
+# sandbox_read_only_directories = ['C:\path\to\mcp-implementation']
 # prefix = "my_server"
 # annotation_config = true
 # dangerous_allow_gateway_config_access = false
@@ -147,3 +158,140 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 #
 # [mcp_servers.my_server.env]
 # EXAMPLE_CONFIG = 'C:\path\to\config.json'
+
+# Strict allowlisted script runners. Repeat the same bundled MCP with a different --runtime
+# to expose independent tools such as mjs_script__run_script, python_script__run_script,
+# php_script__run_script, and nodejs_script__run_script.
+# These entries must use sandbox="elevated" or sandbox="unelevated" for execution;
+# codex-script delegates that setting to a fresh Codex workspaceWrite sandbox for each
+# run/check call, using the signed isolation roots as the actual writable roots.
+# Arbitrary code cannot safely honor deny holes inside a writable root, so keep
+# disallowed_directories, disallowed_files, and disallowed_path_globs empty here;
+# narrow or split allowed_directories instead.
+[mcp_servers.mjs_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=mjs', '--runtime-executable=C:\ABSOLUTE\PATH\TO\node.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.exe'
+prefix = "mjs_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.nodejs_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=nodejs', '--runtime-executable=C:\ABSOLUTE\PATH\TO\node.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.exe'
+prefix = "nodejs_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.python_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=python', '--runtime-executable=C:\ABSOLUTE\PATH\TO\python.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.exe'
+prefix = "python_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.php_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=php', '--runtime-executable=C:\ABSOLUTE\PATH\TO\php.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.exe'
+prefix = "php_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+# Strict allowlisted checkers. These expose check_file only and never run npm scripts,
+# package managers, shell commands, or arbitrary executables.
+[mcp_servers.nodejs_check]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=check', '--runtime=nodejs', '--runtime-executable=C:\ABSOLUTE\PATH\TO\node.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.exe'
+prefix = "nodejs_check"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.python_check]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=check', '--runtime=python', '--runtime-executable=C:\ABSOLUTE\PATH\TO\python.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.exe'
+prefix = "python_check"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.php_check]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=check', '--runtime=php', '--runtime-executable=C:\ABSOLUTE\PATH\TO\php.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.exe'
+prefix = "php_check"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
