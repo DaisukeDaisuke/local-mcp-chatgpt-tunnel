@@ -21,6 +21,20 @@ test('TOML subset parses Codex-style MCP tables, arrays, and env', () => {
   assert.equal(parsed.mcp_servers.demo.env.DEMO, 'value');
 });
 
+test('TOML comments do not participate in string parsing', () => {
+  const parsed = parseToml([
+    'private_use_only = true',
+    "# The gateway's comments may contain apostrophes.",
+    'publish_tool_directory = false # trailing comment',
+    'tool_annotations_path = "tool-#annotations.toml" # hash inside a string is data'
+  ].join('\n'));
+  assert.deepEqual(parsed, {
+    private_use_only: true,
+    publish_tool_directory: false,
+    tool_annotations_path: 'tool-#annotations.toml'
+  });
+});
+
 test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entries', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-toml-'));
   const path = join(directory, 'gateway.toml');
