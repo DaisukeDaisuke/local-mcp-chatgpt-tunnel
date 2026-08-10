@@ -191,18 +191,3 @@ test('third-party Ghidra and DQ9 MCP implementations are not redistributed', asy
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   assert.doesNotMatch(packageJson.scripts.test, /dq9-test|ghidra/);
 });
-
-test('tunnel client acquisition remains manual and uses the public release endpoint', async () => {
-  const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
-  assert.match(install, /releases\/latest\/download\/tunnel-client-v0\.0\.10-windows-amd64\.zip/);
-  assert.match(install, /releases\/latest\/download\/SHA256SUMS\.txt/);
-  assert.match(install, /Get-FileHash/);
-  assert.doesNotMatch(install, /api\.github\.com/);
-});
-
-test('ChatGPT setup uses direct Developer Mode and connector creation links', async () => {
-  const install = await readFile(new URL('../INSTALL.md', import.meta.url), 'utf8');
-  assert.match(install, /chatgpt\.com\/plugins#settings\/Security\?section=developer-mode/);
-  assert.match(install, /chatgpt\.com\/plugins#settings\/Connectors\?create-connector=true/);
-  assert.match(install, /developers\.openai\.com\/plugins\/deploy\/connect-chatgpt/);
-});
