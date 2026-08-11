@@ -17,6 +17,12 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 > 自分のWindows PC、自分のOpenAI Platform Organization、自分のChatGPT Workspaceだけで使う個人専用ツールです。<br>
 > 任意コード実行能力を持つMCPを接続できるため、第三者への共有や公開Pluginとしての運用は想定していません。<br>
 
+## codexサンドボックスについて
+
+> [!IMPORTANT]
+> 2026年8月11日のバージョンにおいて、codex サンドボックスを直接使用し、境界や任意コード実行からパソコンを保護する仕組みが実装されました。
+> 任意コード実行こそ提供しませんが、nodejsによる安全なmjs実行など内臓mcpの選択肢が増えたため、今後私はelevatedモードでの内蔵mcp実行を推奨します。
+
 ## AIによる実装について
 > [!CAUTION]
 > このリポジトリは、ChatGPT 5.6 Sol Highによって実装されました。<br>
