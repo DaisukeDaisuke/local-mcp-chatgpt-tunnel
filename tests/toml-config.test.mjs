@@ -113,7 +113,7 @@ test('gateway config rejects unsupported MCP sandbox modes', async () => {
   });
 });
 
-test('gateway requires explicit absolute executable paths for sandboxed MCPs', async () => {
+test('gateway requires absolute command paths only for elevated sandbox mode', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-executables-'));
   const commandPath = join(directory, 'relative-command.toml');
   await writeFile(commandPath, [
@@ -130,6 +130,20 @@ test('gateway requires explicit absolute executable paths for sandboxed MCPs', a
     return true;
   });
 
+  const unelevatedPath = join(directory, 'unelevated-command.toml');
+  await writeFile(unelevatedPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    "cwd = 'C:\\work\\project'",
+    'sandbox = "unelevated"',
+    "codex_executable = 'C:\\tools\\codex.cmd'",
+    "allowed_directories = ['C:\\work\\project']"
+  ].join('\n'), 'utf8');
+  const unelevated = await loadGatewayConfig(unelevatedPath, { platform: 'win32' });
+  assert.equal(unelevated.servers[0].command, 'node');
+  assert.equal(unelevated.servers[0].codexExecutable, 'C:\\tools\\codex.cmd');
+
   const codexPath = join(directory, 'relative-codex.toml');
   await writeFile(codexPath, [
     'private_use_only = true',
@@ -144,23 +158,6 @@ test('gateway requires explicit absolute executable paths for sandboxed MCPs', a
     assert.equal(error.message, 'mcp_servers.alpha.codex_executable must be an absolute path');
     return true;
   });
-
-  if (process.platform === 'win32') {
-    const shimPath = join(directory, 'shim-codex.toml');
-    await writeFile(shimPath, [
-      'private_use_only = true',
-      '[mcp_servers.alpha]',
-      `command = '${process.execPath}'`,
-      `cwd = '${directory}'`,
-      'sandbox = "elevated"',
-      `codex_executable = '${join(directory, 'codex.cmd')}'`,
-      `allowed_directories = ['${directory}']`
-    ].join('\n'), 'utf8');
-    await assert.rejects(loadGatewayConfig(shimPath), (error) => {
-      assert.equal(error.message, 'mcp_servers.alpha.codex_executable must point to the native codex.exe on Windows');
-      return true;
-    });
-  }
 });
 
 test('gateway requires sandboxed MCP cwd to stay inside its writable allowlist', async () => {
@@ -202,7 +199,7 @@ test('gateway config reserves the delegated Codex sandbox marker', async () => {
     '[mcp_servers.alpha]',
     'command = "node"',
     '[mcp_servers.alpha.env]',
-    'LOCAL_MCP_CODEX_EXECUTABLE = "C:\\fake\\codex.exe"'
+    "LOCAL_MCP_CODEX_EXECUTABLE = 'C:\\fake\\codex.exe'"
   ].join('\n'), 'utf8');
   await assert.rejects(loadGatewayConfig(executablePath), (error) => {
     assert.equal(error.message, 'mcp_servers.alpha.env may not override reserved path-policy variable LOCAL_MCP_CODEX_EXECUTABLE');

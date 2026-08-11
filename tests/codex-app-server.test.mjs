@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { dirname } from 'node:path';
 import test from 'node:test';
-import { CodexAppServerSandboxedProcess } from '../app/codex-app-server.mjs';
+import { CodexAppServerSandboxedProcess, codexAppServerInternals } from '../app/codex-app-server.mjs';
 
 function fakeAppServer({ holdWrites = false } = {}) {
   const child = new EventEmitter();
@@ -68,6 +68,24 @@ function fakeAppServer({ holdWrites = false } = {}) {
     }
   };
 }
+
+test('Codex app-server launches an explicit Windows npm .cmd shim through cmd.exe', () => {
+  const launch = codexAppServerInternals.codexAppServerLaunchSpec(
+    'C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd',
+    'C:\\work',
+    { platform: 'win32', env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' } }
+  );
+  assert.equal(launch.command, 'C:\\Windows\\System32\\cmd.exe');
+  assert.deepEqual(launch.args, [
+    '/d',
+    '/v:off',
+    '/s',
+    '/c',
+    '""C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd" app-server --listen stdio://"'
+  ]);
+  assert.equal(launch.options.shell, false);
+  assert.equal(launch.options.windowsVerbatimArguments, true);
+});
 
 test('Codex app-server transport preserves UTF-8 split across output deltas', async () => {
   const fake = fakeAppServer();

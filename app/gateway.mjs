@@ -306,10 +306,12 @@ async function startChild(childConfig) {
       if (childConfig.sandbox && childConfig.sandbox !== 'never') {
         childConfig.allowedDirectories = allowedPolicy.directories.map((entry) => entry.canonical);
         childConfig.allowedFiles = allowedPolicy.files.map((entry) => entry.canonical);
-        childConfig.command = await canonicalExecutable(childConfig.command, `${childConfig.name} command`);
         childConfig.codexExecutable = await canonicalExecutable(childConfig.codexExecutable, `${childConfig.name} codex_executable`);
-        if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.command))) {
-          throw new Error(`${childConfig.name}: command resolves inside a writable sandbox root`);
+        if (childConfig.sandbox === 'elevated') {
+          childConfig.command = await canonicalExecutable(childConfig.command, `${childConfig.name} command`);
+          if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.command))) {
+            throw new Error(`${childConfig.name}: command resolves inside a writable sandbox root`);
+          }
         }
         if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.codexExecutable))) {
           throw new Error(`${childConfig.name}: codex_executable resolves inside a writable sandbox root`);

@@ -120,11 +120,7 @@ function normalizeNativeExecutable(value, name, platform = process.platform) {
 }
 
 function normalizeCodexExecutable(value, name, platform = process.platform) {
-  const executable = normalizeAbsoluteExecutable(value, name, platform);
-  if (platform === 'win32' && !/\.exe$/i.test(executable)) {
-    throw new Error(`${name} must point to the native codex.exe on Windows`);
-  }
-  return executable;
+  return normalizeAbsoluteExecutable(value, name, platform);
 }
 
 function normalizeLifecycle(raw, key, serverName) {
@@ -170,7 +166,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
   if (sandboxDelegated && sandbox === 'never') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for codex-script`);
   }
-  const command = sandbox !== 'never' || sandboxDelegated
+  const command = sandbox === 'elevated'
     ? normalizeNativeExecutable(raw.command, `mcp_servers.${name}.command`, platform)
     : raw.command;
   const codexExecutable = sandbox !== 'never'
@@ -185,7 +181,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
   if (sandbox !== 'never' && allowedDirectories.some((directory) => pathWithin(directory, codexExecutable, platform))) {
     throw new Error(`mcp_servers.${name}.codex_executable must be outside allowed_directories so sandboxed code cannot modify it`);
   }
-  if (sandbox !== 'never' && allowedDirectories.some((directory) => pathWithin(directory, command, platform))) {
+  if (sandbox === 'elevated' && allowedDirectories.some((directory) => pathWithin(directory, command, platform))) {
     throw new Error(`mcp_servers.${name}.command must be outside allowed_directories so the sandboxed MCP cannot modify its executable`);
   }
   return {

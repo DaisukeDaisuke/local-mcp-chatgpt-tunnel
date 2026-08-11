@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { StringDecoder } from 'node:string_decoder';
 import { lstat, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { environmentWithoutBundledIsolationKey } from './bundled-isolation.mjs';
 
@@ -24,12 +24,13 @@ async function canonicalRegularFile(path, label) {
   return actual;
 }
 
-function spawnCodexAppServer(codexExecutable, cwd) {
-  if (typeof codexExecutable !== 'string' || !isAbsolute(codexExecutable)) {
+function codexAppServerLaunchSpec(codexExecutable, cwd, { platform = process.platform, env = process.env } = {}) {
+  if (typeof codexExecutable !== 'string') {
     throw new Error('codexExecutable must be an absolute path');
   }
-  if (process.platform === 'win32' && !/\.exe$/i.test(codexExecutable)) {
-    throw new Error('codexExecutable must point to the native codex.exe on Windows; .cmd/.bat launchers are not accepted');
+  const pathIsAbsolute = platform === 'win32' ? win32.isAbsolute(codexExecutable) : isAbsolute(codexExecutable);
+  if (!pathIsAbsolute) {
+    throw new Error('codexExecutable must be an absolute path');
   }
   const options = {
     cwd,
@@ -38,7 +39,24 @@ function spawnCodexAppServer(codexExecutable, cwd) {
     windowsHide: true,
     shell: false
   };
-  return spawn(codexExecutable, ['app-server', '--listen', 'stdio://'], options);
+  if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(codexExecutable)) {
+    const configuredInterpreter = env.ComSpec || env.COMSPEC;
+    const systemRoot = env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows';
+    const commandInterpreter = configuredInterpreter && win32.isAbsolute(configuredInterpreter)
+      ? configuredInterpreter
+      : win32.join(systemRoot, 'System32', 'cmd.exe');
+    return {
+      command: commandInterpreter,
+      args: ['/d', '/v:off', '/s', '/c', `""${codexExecutable}" app-server --listen stdio://"`],
+      options: { ...options, windowsVerbatimArguments: true }
+    };
+  }
+  return { command: codexExecutable, args: ['app-server', '--listen', 'stdio://'], options };
+}
+
+function spawnCodexAppServer(codexExecutable, cwd) {
+  const launch = codexAppServerLaunchSpec(codexExecutable, cwd);
+  return spawn(launch.command, launch.args, launch.options);
 }
 
 function sandboxPolicyFor(config) {
@@ -110,13 +128,15 @@ export class CodexAppServerSandboxedProcess {
   async start() {
     if (this.ready) return;
     const codexExecutable = await canonicalRegularFile(this.config.codexExecutable, 'codexExecutable');
-    const command = await canonicalRegularFile(this.config.command, `${this.config.name} command`);
+    const command = this.config.sandbox === 'elevated'
+      ? await canonicalRegularFile(this.config.command, `${this.config.name} command`)
+      : this.config.command;
     if (this.config.sandbox !== 'never') {
       const roots = this.config.allowedDirectories ?? [];
       if (roots.some((root) => within(root, codexExecutable))) {
         throw new Error(`${this.config.name} codexExecutable resolves inside a writable sandbox root`);
       }
-      if (roots.some((root) => within(root, command))) {
+      if (this.config.sandbox === 'elevated' && roots.some((root) => within(root, command))) {
         throw new Error(`${this.config.name} command resolves inside a writable sandbox root`);
       }
     }
@@ -325,3 +345,5 @@ export class CodexAppServerSandboxedProcess {
     this.pending.clear();
   }
 }
+
+export const codexAppServerInternals = { codexAppServerLaunchSpec };
