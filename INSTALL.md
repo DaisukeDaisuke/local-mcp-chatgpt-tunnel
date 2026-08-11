@@ -2,7 +2,7 @@
 > ChatGPT Freeプランでは絶対に試さないでください。GPT5.5 Instantが暴走する可能性があります。
 
 # Windows 11への導入
-この手順では、Windows 11上のstdio MCPサーバーをGatewayへ登録し、OpenAI Secure MCP Tunnel経由でChatGPTから呼び出せる状態にします。<br>管理者PowerShellは使いません。<br>自動インストール、自動ZIP展開、自動設定生成、Git hook変更も行いません。<br>
+この手順では、Windows 11上のstdio MCPサーバーをGatewayへ登録し、OpenAI Secure MCP Tunnel経由でChatGPTから呼び出せる状態にします。<br>通常の導入とTunnel運用では管理者PowerShellを使いません。Codexのelevated sandboxを使う場合だけ、初回のsandboxセットアップで管理者PowerShellを使用します。<br>自動インストール、自動ZIP展開、自動設定生成、Git hook変更も行いません。<br>
 ## 作業の流れ
 1. Windowsへ必要なコマンドを導入する
 2. OpenAI公式の`tunnel-client.exe`を配置する
@@ -28,8 +28,43 @@ winget install -e --id Git.Git
 Chrome、Ghidra、その他の外部MCPは、実際に使うものだけを各プロジェクトの公式手順で導入します。<br>安全上の理由から、このスクリプトで一括導入はしません。<br>
 
 ## nodejsのインストール
-nodejsをインストールしてください。
+nodejsをインストールしてください。<br>
 https://nodejs.org/ja/download
+
+### 1.1 Codex elevated sandboxを使う場合（推奨）
+通常の`config/gateway.example.toml`では、Gatewayのパス検証と各MCP自身の検証が主な境界になります。<br>
+WindowsでCodexのelevated sandboxをセットアップすると、`config/gateway.codex.example.toml`を使ってMCPプロセス自体をCodexのOSサンドボックス内で起動でき、許可したWorkspaceの外へのアクセスに対して追加の防御層を持たせられます。<br>
+任意スクリプト実行を有効にする場合は、通常版よりCodex sandbox版を推奨します。<br>
+
+まず通常権限のPowerShellでCodex CLIをインストールし、起動できることを確認します。OpenAI公式のCodex CLIはnpmでもインストールできます。<br>
+```powershell
+npm install -g @openai/codex
+codex --version
+```
+
+次に、**管理者として起動したPowerShell**で初回セットアップを1回だけ実行します。通常権限のPowerShellから実行すると、sandbox provisioningに必要な昇格がなく失敗します。<br>
+```powershell
+codex sandbox setup --elevated --current-user
+```
+セットアップが完了したら管理者PowerShellは閉じ、以降のGatewayとTunnelは通常権限で起動してください。<br>
+
+npm経由のWindowsインストールでは`codex.exe`ではなくnpm shimの`codex.cmd`が見つかる場合があります。実際のパスを確認し、`gateway.toml`の`codex_executable`には確認済みの絶対パスを指定します。<br>
+```powershell
+where.exe codex
+```
+例:<br>
+```toml
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+```
+`sandbox = "elevated"`を使うMCPの`command`は、`node`のようなPATH名ではなく、`C:\Program Files\nodejs\node.exe`のような絶対パスのnative executableを指定してください。<br>
+
+Codex sandbox用の設定例を使う場合は、手順4で`gateway.codex.example.toml`をコピーします。通常版とCodex版を両方コピーしないでください。<br>
+```powershell
+Copy-Item config\gateway.codex.example.toml config\gateway.toml
+code config\gateway.toml
+```
+`gateway.codex.example.toml`もダミーパスを含むテンプレートです。`command`、`codex_executable`、`args`、`cwd`、`allowed_directories`を実際の絶対パスへ置き換えてから起動します。<br>
+Codex sandboxは追加の防御層であり、`allowed_directories`やMCP自身の拒否設定を不要にするものではありません。許可範囲は必要最小限のままにしてください。<br>
 
 ## 1.2 このリポジトリをクローンし展開する
 更新の利便性から、git経由をお勧めしますが、[zip経由](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip)でのダウンロード後展開でもかまいません。<br>
@@ -87,11 +122,18 @@ node mcp\gh-workflow\server.mjs --help
 `.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。<br>
 ## 4. gateway.tomlを作成する
 ### 4.1 設定例をコピーする
+Codex sandboxを使わない場合は通常版をコピーします。<br>
 ```powershell
 Copy-Item config\gateway.example.toml config\gateway.toml
 code config\gateway.toml
 ```
-`gateway.example.toml`内の`C:\ABSOLUTE\PATH\TO`は説明用のダミーです。<br>
+手順1.1でCodex elevated sandboxをセットアップした場合は、代わりにCodex版をコピーします。<br>
+```powershell
+Copy-Item config\gateway.codex.example.toml config\gateway.toml
+code config\gateway.toml
+```
+どちらか一方だけを使用してください。<br>
+両方の設定例にある`C:\ABSOLUTE\PATH\TO`は説明用のダミーです。Codex版では`command`と`codex_executable`も実在する絶対パスへ置き換えます。<br>
 `args`にはこのリポジトリ内のMCPサーバーの絶対パスを、`cwd`と`allowed_directories`には実際に操作するWorkspaceの絶対パスを書きます。<br>
 > [!IMPORTANT]
 > `config/gateway.toml`は途中まで記入した状態で起動しないでください。<br>
