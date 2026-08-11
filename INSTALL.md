@@ -139,6 +139,8 @@ Select-String -Path $sums -Pattern 'tunnel-client-v0\.0\.10-windows-amd64\.zip'
 node mcp\safe-files\server.mjs --help
 node mcp\safe-images\server.mjs --help
 node mcp\safe-download\server.mjs --help
+node mcp\gitmcp\server.mjs --help
+node mcp\git-capability\server.mjs --help
 node mcp\gh-workflow\server.mjs --help
 ```
 これらの出力、リポジトリとWorkspaceの絶対パス、追加したいstdio MCPの起動コマンドがあれば、`gateway.toml`を組み立てるための情報が揃います。<br>
@@ -240,7 +242,7 @@ ChatGPTからは`downloads__download_zip`へ`path`を渡します。<br>単一�
 ### 4.6 gh-workflowを必要な場合だけ有効にする
 GitHub Actionsの実行状況確認と、実行中runの明示的なキャンセルをChatGPTから行う場合は、`gh-workflow`を追加または有効化します。<br>
 事前に通常権限のPowerShellで`gh auth login`を済ませ、対象リポジトリを読めるGitHubアカウントで認証してください。<br>
-gitmcpでコミット後、デプロイ完了まで待機することを想定しています。依存関係として`GitHub cli`が必要です。<br>
+`git-capability`のcommit / pushと組み合わせ、push後のデプロイ完了まで待機する用途を想定しています。依存関係として`GitHub cli`が必要です。<br>
 ```toml
 [mcp_servers.gh_workflow]
 command = "node"
@@ -259,14 +261,14 @@ disallowed_path_globs = ['**.ssh**']
 許可リポジトリが1件の場合は各ツールの`repository`を省略できます。複数の場合は、呼び出すたびに許可リスト内の`repository`を指定します。<br>
 `cwd`は省略せず、実在する安全な作業ディレクトリを必ず明示します。設定例は`enabled = false`であり、内容を確認してから有効化します。<br>
 公開するのはrun一覧、run待機、runキャンセル、run概要、job一覧、ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLだけです。`cancel_run`は検証済みのrun IDと許可リポジトリを`gh run cancel`の固定引数へ渡し、シェルを使用しません。workflow実行、再実行、delete、artifact download、`gh api`は公開しません。<br>
-### 4.7 gitmcpを必要な場合だけ有効にする
-ローカルGitリポジトリの状態確認、差分確認、ブランチ操作、ステージ、コミットなどをChatGPTから行う場合は、同梱の`gitmcp`を有効化します。<br>
-使用しない場合は`enabled = false`のままにしてください。<br>
-gitmcpは、依存関係として、`Git For Windows`を要求します。
+### 4.7 gitmcpとGit capabilityを必要な場合だけ有効にする
+ローカルGitリポジトリの状態確認、差分確認、ブランチ操作、stage / unstageをChatGPTから行う場合は、同梱の`gitmcp`を有効化します。`commit`、`push`、`pull`、`clone_repository`は`gitmcp`には含まれず、`git-capability`をmode別の独立MCPとして追加します。<br>
+この分離により、system/global Git設定から外部programが起動し得るローカルGit操作はCodex OS sandbox内に置いたまま、署名agentが必要なcommitだけ`sandbox = "never"`にするなど、capabilityごとに境界を選択できます。`sandbox = "never"`自体は禁止しないため、OS sandboxを使わない従来構成も維持できます。<br>
+どのGit MCPも使用しない場合は`enabled = false`のままにしてください。依存関係として`Git For Windows`を要求します。<br>
 ```toml
 [mcp_servers.git]
 command = "node"
-args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs']
 cwd = 'C:\Users\owner\Documents\YOUR_PROJECT'
 enabled = false
 prefix = "git"
@@ -279,14 +281,28 @@ allowed_files = []
 disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.git_commit]
+command = "node"
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=commit', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\Users\owner\Documents\YOUR_PROJECT'
+enabled = false
+prefix = "git_commit"
+annotation_config = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\Users\owner\Documents\YOUR_PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
 ```
 `enabled = false`では`gitmcp`自体を起動せず、Gitツールを一つも公開しません。パスと操作範囲を確認した後、必要な場合だけ`enabled = true`へ変更します。<br>
-`gitmcp`を有効にすると、`roots`、`get_working_directory`、`set_working_directory`、`status`、`ls_files`、`branches`、`remotes`、`log`、`diff`、`show`、`switch_branch`、`add_all`、`commit`を公開します。<br>`show`はcommit IDまたは`HEAD`などの単純なローカルrevisionを受け付け、任意のリポジトリ内ファイルで絞り込めます。`format`はcommit patchの`patch`、diffstat付き概要の`stat`、patchなし概要の`summary`から選択します。<br>
-`push`、`pull`、`clone_repository`は、次の起動引数で個別にツール一覧から除外できます。<br>
-`--disable-push=true`は`push`を除外します。`false`にすると現在のブランチを指定済みremoteへpushできますが、force pushと任意refspecは公開しません。省略時は`false`です。<br>
-`--disable-pull=true`は`pull`を除外します。`false`にすると設定済みupstreamを取得し、拒否対象パスを検査してからfast-forward onlyで反映します。省略時は`true`です。<br>
-`--disable-clone=true`は`clone_repository`を除外します。`false`にすると許可ディレクトリ直下の新規子ディレクトリへcloneできます。省略時は`true`です。<br>
-上の設定例は3機能をすべて除外しています。必要な機能だけ該当値を`false`へ変更してください。これらの引数は`gitmcp`全体や`commit`などのローカルGitツールを無効化する設定ではありません。<br>
+`gitmcp`を有効にすると、`roots`、`get_working_directory`、`set_working_directory`、`status`、`ls_files`、`list_worktree_files`、`check_ignore`、`check_attributes`、`get_effective_config`、`branches`、`remotes`、`log`、`diff`、`show`、`switch_branch`、`create_branch`、`checkout`、worktree操作、`add_all`、`stage_paths`、`unstage_paths`を公開します。`commit`、`push`、`pull`、`clone_repository`は公開しません。旧`--disable-push`、`--disable-pull`、`--disable-clone`は古い設定を起動不能にしないためno-opとして受理します。<br>
+`git_commit`は`roots`、`get_working_directory`、`set_working_directory`と`commit`だけを公開します。`commit`のtool引数は`message`だけで、repositoryPath、Git executable、任意Git引数、環境変数を受け取りません。既にstage済みのindexだけをcommitし、repository-localの実行可能Git設定を事前に拒否します。`--git-executable`はMCP起動時に実在するGitの絶対パスへ置き換えてください。<br>
+`push`、`pull`、`clone`も同じ`mcp\git-capability\server.mjs`を別MCPとして登録します。push / pullは`--remote=origin`と`--expected-remote-url=https://github.com/OWNER/REPO.git`を起動時に固定し、cloneは`--url=https://github.com/OWNER/REPO.git`を固定します。tool側からremote、URL、refspecを変更できません。cloneはsubmodule再帰を提供しません。詳細な4 modeの設定例は`config/gateway.example.toml`と`config/gateway.codex.example.toml`を参照してください。<br>
+Codex版の設定例では、ファイル操作能力が大きい`gitmcp`を`elevated` sandboxへ入れ、署名agent互換性のためcommitだけ`sandbox = "never"`にしています。現在のCodex permission profileはnetworkを無効化するため、push / pull / cloneの例は`sandbox = "never"`です。各MCPは独立設定なので、境界実装が変わった場合も個別に切り替えられます。<br>
 `cwd`は相対パスの基準となる実在するディレクトリです。`allowed_directories`にはChatGPTからGit操作を許可するリポジトリまたはその親ディレクトリだけを指定し、秘密情報や私用ディレクトリは`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`で拒否してください。<br>
 ### 4.8 任意のstdio MCPを追加する
 任意のstdio MCPも同じ形式で追加できます。<br>
@@ -624,7 +640,7 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
 入力に`isolatedId`が必須なら、最初に`isolated__create`へ未使用IDと対象の絶対ディレクトリを`workspaces`で渡し、その作業の全同梱MCP呼び出しで同じIDを使う。IDを別作業へ流用せず、閉じたIDはGateway再起動まで再利用しない。通常ツールの引数でrootやworkspaceを上書きしない。
 同じIDでも許可rootと相対パス基準はprefixごとに異なる。あるMCPで許可されたパスを別MCPでも使えると仮定しない。初回操作前に同prefixの`get_gateway_access_scope`と、存在すれば`get_working_directory`または`roots`を呼ぶ。対象が許可root内で`set_working_directory`があるなら変更して再確認する。拒否時はエラーの`accessScope`に示された絶対パスだけを候補とし、別パスを捏造しない。
 ファイルの一覧・検索・読書き・置換・パッチには`files__`を優先する。`files__`が見えなくても探索前に不存在と断定しない。MCPの有効状態や許可設定を、明示的指示なく変更・回避・緩和しない。
-`gitmcp`ではGitのignore、attributes、改行、filter、署名を尊重し、必要なら`list_worktree_files`、`check_ignore`、`check_attributes`、`get_effective_config`、`get_policy`でGit自身の判定を確認する。
+`gitmcp`はローカルGit操作専用で、Gitのignore、attributes、改行、filterを尊重する。必要なら`list_worktree_files`、`check_ignore`、`check_attributes`、`get_effective_config`、`get_policy`でGit自身の判定を確認する。commit / push / pull / cloneはgitmcpにあると仮定せず、対応する独立`git-capability` prefixが公開されている場合だけ使う。
 任意コード・コマンド・シェル・スクリプト・プロセスを実行できるMCPは、今回の目的と対象への明示的許可がある場合だけ使う。過去の許可を別用途へ流用しない。
 commitとpushが明示的に許可され、対応ツールがある場合は、push後の新しいActions runを特定して全jobを確認する。失敗時はログを読み、修正・再commit・再push・再確認し、全job成功前に全環境成功と断定しない。
 OpenAIの安全チェックでブロックされたら、少し待って1回だけ再試行し、再失敗時は範囲・出力・パスを狭く単純にする。`gh_workflow`拒否を`chrome-devtools-mcp`で迂回しない。

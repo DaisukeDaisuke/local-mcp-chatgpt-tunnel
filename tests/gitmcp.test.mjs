@@ -39,14 +39,15 @@ async function importGitMcp(root, args, suffix, options = {}) {
   }
 }
 
-test('gitmcp hides pull and clone by default', async () => {
+test('gitmcp exposes only local Git capabilities', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-default-'));
   const { createServer } = await importGitMcp(root, [], 'default');
   const server = createServer();
   await server(request(1, 'initialize'));
   const listed = await server(request(2, 'tools/list'));
   const names = listed.result.tools.map((tool) => tool.name);
-  assert.ok(names.includes('push'));
+  assert.ok(!names.includes('commit'));
+  assert.ok(!names.includes('push'));
   assert.ok(!names.includes('pull'));
   assert.ok(!names.includes('clone_repository'));
   assert.ok(names.includes('get_policy'));
@@ -78,24 +79,23 @@ test('gitmcp reports which standard Git behaviors are preserved', async () => {
   assert.equal(policy.attributes.binaryAndTextClassificationRespectedByDiff, true);
   assert.equal(policy.gitConfiguration.lineEndingConversionRespected, true);
   assert.equal(policy.gitConfiguration.systemAndGlobalCleanSmudgeFiltersRespected, true);
-  assert.equal(policy.gitConfiguration.configuredCommitSigningRespected, true);
+  assert.equal(policy.gitConfiguration.commitCapabilityMovedToDedicatedMcp, true);
   assert.equal(policy.deliberatelyDisabled.hooks, true);
   assert.equal(policy.attributes.systemAndGlobalTextconvRespected, true);
   assert.equal(policy.attributes.repositoryExternalDiffAndTextconvRejected, true);
 });
 
-test('gitmcp exposes pull and recursive clone only when explicitly enabled', async () => {
+test('gitmcp accepts legacy disable flags as no-ops without restoring moved capabilities', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-enabled-'));
-  const { createServer } = await importGitMcp(root, ['--disable-pull=false', '--disable-clone=false'], 'enabled');
+  const { createServer } = await importGitMcp(root, ['--disable-push=false', '--disable-pull=false', '--disable-clone=false'], 'enabled');
   const server = createServer();
   await server(request(1, 'initialize'));
   const listed = await server(request(2, 'tools/list'));
   const tools = new Map(listed.result.tools.map((tool) => [tool.name, tool]));
-  assert.ok(tools.has('pull'));
-  assert.ok(tools.has('clone_repository'));
-  assert.equal(tools.get('clone_repository').inputSchema.properties.recurseSubmodules.type, 'boolean');
-  assert.equal(tools.get('clone_repository').inputSchema.properties.depth.type, 'integer');
-  assert.equal(tools.get('clone_repository').inputSchema.properties.depth.minimum, 1);
+  assert.ok(!tools.has('commit'));
+  assert.ok(!tools.has('push'));
+  assert.ok(!tools.has('pull'));
+  assert.ok(!tools.has('clone_repository'));
   const annotationKeys = ['destructiveHint', 'idempotentHint', 'openWorldHint', 'readOnlyHint'];
   for (const tool of tools.values()) assert.deepEqual(Object.keys(tool.annotations).sort(), annotationKeys);
   assert.deepEqual(tools.get('status').annotations, {
@@ -127,24 +127,6 @@ test('gitmcp exposes pull and recursive clone only when explicitly enabled', asy
     destructiveHint: true,
     idempotentHint: true,
     openWorldHint: false
-  });
-  assert.deepEqual(tools.get('commit').annotations, {
-    readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: false,
-    openWorldHint: false
-  });
-  assert.deepEqual(tools.get('push').annotations, {
-    readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: true,
-    openWorldHint: true
-  });
-  assert.deepEqual(tools.get('clone_repository').annotations, {
-    readOnlyHint: false,
-    destructiveHint: false,
-    idempotentHint: false,
-    openWorldHint: true
   });
 });
 
@@ -443,8 +425,6 @@ test('gitmcp add_all preserves configured line-ending conversion', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-autocrlf-'));
   await exec('git', ['init'], { cwd: root });
   await exec('git', ['config', 'core.autocrlf', 'true'], { cwd: root });
-  await exec('git', ['config', 'commit.gpgsign', 'true'], { cwd: root });
-  await exec('git', ['config', 'user.signingkey', 'TEST-SIGNING-KEY'], { cwd: root });
   await writeFile(join(root, 'line.txt'), 'alpha\r\nbeta\r\n', 'utf8');
   const { createServer } = await importGitMcp(root, [], 'autocrlf');
   const server = createServer();
@@ -456,8 +436,6 @@ test('gitmcp add_all preserves configured line-ending conversion', async () => {
   const configuration = await server(request(3, 'tools/call', { name: 'get_effective_config', arguments: { repositoryPath: root } }));
   assert.equal(configuration.result.isError, false);
   assert.ok(configuration.result.structuredContent.result.configuration.some((line) => /core\.autocrlf\s+true$/i.test(line)));
-  assert.ok(configuration.result.structuredContent.result.configuration.some((line) => /commit\.gpgsign\s+true$/i.test(line)));
-  assert.ok(configuration.result.structuredContent.result.configuration.some((line) => /user\.signingkey\s+TEST-SIGNING-KEY$/i.test(line)));
 });
 
 test('gitmcp rejects repository-local executable filters before status or staging while allowing ordinary repository configuration', async () => {

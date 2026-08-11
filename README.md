@@ -68,7 +68,8 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 | `safe-files` | `list_files`、`search_text`、`file_info`、`read_text`、`write_text_file`、`replace_text`、`copy`、`move`、`apply_patch` | 許可したWorkspace内の一覧、UTF-8検索、複数ファイル・行範囲読み取り、ファイル情報、読み書き、Workspace間のファイル移動・複製、限定されたパッチ適用 |
 | `safe-images` | `read_image` | PNG、JPEG、WebPをChatGPTの画像コンテンツとして読み取る |
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
-| `gitmcp` | `get_policy`、`branches`、`create_branch`、`checkout`、`list_worktrees`、`create_worktree`、`remove_worktree`、`status`、`diff`、`commit`、`push` | 許可したリポジトリに対する限定されたGit操作 |
+| `gitmcp` | `get_policy`、`branches`、`create_branch`、`checkout`、`list_worktrees`、`create_worktree`、`remove_worktree`、`status`、`diff`、`stage_paths`、`unstage_paths` | 許可したリポジトリに対するローカルGit操作。commit / push / pull / cloneは含めない |
+| `git-capability` | `commit`、`push`、`pull`、`clone_repository`のいずれか1つ + Workspace制御 | `--mode=`ごとに1 Git capabilityだけを独立MCPプロセスとして公開し、sandbox境界・署名・network権限を分離する |
 | `gh-workflow` | `list_runs`、`watch_run`、`cancel_run`、`view_run`、`view_run_jobs`、`view_failed_logs`、`list_workflows`、`view_workflow_yaml` | 明示的に許可したGitHubリポジトリのActions実行状況確認とrunキャンセル |
 | `codex-script` | `roots`、`get_working_directory`、`set_working_directory`、`run_script`または`check_file` | MCP起動時に固定したmjs / Node.js / Python / PHP runtimeで、許可Workspace内の既存スクリプト実行または構文チェック。`sandbox = "elevated"`または`"unelevated"`が必須 |
 
@@ -98,12 +99,18 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 `safe-download`は読み取り専用で、単一ファイルまたはディレクトリを常にZIPとして返します。`safe-files`とは別の`cwd`と許可リストを設定し、ChatGPTへ渡してよいソースだけを公開します。<br>
 ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。`disallowed_path_globs`が設定されている場合は、利用者指定の`globs`や`excludePaths`を適用する前に対象ディレクトリ全体を確認し、拒否パターンへ一致するファイルまたはフォルダが1件でもあればZIP作成全体を拒否します。エラーには一致した設定パターンと対象パスを含めます。<br>
 ### gitmcp
-`gitmcp`は、許可されたディレクトリ内のGitリポジトリに対して、固定されたGitサブコマンドとオプションだけを実行します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、force push、任意refspecには対応しません。<br>
-`status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、特定commitの`show`、既存ブランチへの切り替えとcheckout、親commitを指定したブランチ作成、許可root内のworktree作成・一覧・通常削除、`git add --all -- .`、commitを利用できます。ブランチ削除、primary worktree削除、dirtyまたはlocked worktreeの強制削除は実装しません。`show`は任意のリポジトリ内パスで絞り込め、commit patch、diffstat付き概要、patchなし概要を選択できます。`push`、`pull`、cloneは起動引数で個別に無効化でき、設定例では`pull`とcloneを無効にしています。<br>
-`.gitignore`と標準のignore設定を尊重するため、`status`はignoreされた未追跡ファイルを表示せず、`add_all`もforce-addしません。`.gitattributes`、`.git/info/attributes`、グローバルattributes、`core.autocrlf`などの改行変換、システム・グローバル設定のclean/smudge filter、外部diff、textconv、commit署名設定も通常のGitと同様に尊重します。リポジトリ内の`.git/config`またはworktree configに置かれた実行可能な設定は事前に拒否します。<br>
-`list_worktree_files`は追跡ファイルとignoreされていない未追跡ファイルをGit自身のexclude判定で列挙します。`check_ignore`は各パスへ適用されたignoreルールと最終判定、`check_attributes`はtext、binary、diff、merge、filter、改行属性などの実効値を返します。`get_effective_config`は`credential.*`、author名、メールアドレスを照会対象から除外し、`core.autocrlf`、filter、attributes、署名鍵などの挙動に関係する設定をscope・origin付きで返します。<br>
+`gitmcp`は、許可されたディレクトリ内のGitリポジトリに対するローカル操作だけを固定されたGitサブコマンドとオプションで実行します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、branch削除、force操作には対応しません。`commit`、`push`、`pull`、`clone_repository`は境界分離のため完全に別の`git-capability` MCPへ移動しました。旧`--disable-push`、`--disable-pull`、`--disable-clone`は古い`gateway.toml`を起動不能にしないためno-opとして受理しますが、これらを`false`にしても移動済みcapabilityは復活しません。<br>
+`status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、特定commitの`show`、既存ブランチへの切り替えとcheckout、親commitを指定したブランチ作成、許可root内のworktree作成・一覧・通常削除、`git add --all -- .`、path単位のstage / unstageを利用できます。ブランチ削除、primary worktree削除、dirtyまたはlocked worktreeの強制削除は実装しません。<br>
+`.gitignore`と標準のignore設定を尊重するため、`status`はignoreされた未追跡ファイルを表示せず、`add_all`もforce-addしません。`.gitattributes`、`.git/info/attributes`、グローバルattributes、`core.autocrlf`などの改行変換、システム・グローバル設定のclean/smudge filter、外部diff、textconvも通常のGitと同様に尊重します。リポジトリ内の`.git/config`またはworktree configに置かれた実行可能な設定は事前に拒否します。system/globalのfilterやdiff helperは意図どおり実行され得るため、ファイル操作権限を持つ`gitmcp`は可能ならCodex OS sandbox内で動かす構成を推奨します。`sandbox = "never"`も下位互換性のため使用可能です。<br>
+`list_worktree_files`は追跡ファイルとignoreされていない未追跡ファイルをGit自身のexclude判定で列挙します。`check_ignore`は各パスへ適用されたignoreルールと最終判定、`check_attributes`はtext、binary、diff、merge、filter、改行属性などの実効値を返します。`get_effective_config`は`credential.*`、author名、メールアドレスを照会対象から除外し、`core.autocrlf`、filter、attributes、diff/textconvなどローカルgitmcpの挙動に関係する設定をscope・origin付きで返します。<br>
 安全対策はGit設定全体の無効化ではなく、リポジトリ自身の`.git/config`またはworktree configに置かれた実行可能なhook、helper、filter、外部diff/textconv、merge driver、署名program、proxy、独自transport設定の拒否に限定します。フック、fsmonitor、`file`・`ext` protocol、対話的なcredential promptは無効です。`get_policy`で現在の方針を機械可読に確認できます。<br>
 `repositoryPath`へサブモジュールや入れ子のGitリポジトリを直接指定すると、そのリポジトリ自身のstatus、diff、logなどを取得できます。親リポジトリ配下を再帰探索して、すべての入れ子リポジトリを自動列挙するツールは含みません。<br>
+### git-capability
+`git-capability`は`mcp/git-capability/server.mjs`を`--mode=commit|push|pull|clone`で複数登録し、1つのMCPプロセスにつき1 Git capabilityだけを公開する同梱MCPです。各登録は独立した`[mcp_servers.<name>]`なので、`sandbox`、`allowed_directories`、timeout、`serial_group`を個別に選べます。`sandbox = "never"`は禁止せず、署名agentやnetworkとの互換性が必要な利用者も従来経路を選択できます。<br>
+全modeで`--git-executable=<absolute-path>`を起動時に固定し、tool引数からGit実行ファイル、repositoryPath、環境変数、任意Git引数を選べません。Gateway経由では通常のbundled MCPと同じHMAC署名済みisolated workspaceが必須です。リポジトリ内の`.git/config`またはworktree configに実行可能なhook / helper / filter / diff / merge driver / signing program / proxy / transport設定がある場合は、capability実行前に拒否します。<br>
+`commit` modeのtool引数は`message`だけで、既にstage済みのindexだけを`git commit --no-verify -m <message>`でcommitします。stage機能やrepository選択は持ちません。system/globalのcommit signing設定は維持するため、署名agentへアクセスさせたい構成ではcommit MCPだけを`sandbox = "never"`にし、より大きな`gitmcp`はsandbox内に残せます。<br>
+`push`と`pull`は起動時に`--remote=`と`--expected-remote-url=`を固定し、tool呼び出しはremote、URL、refspecを受け取りません。pushはcurrent branchだけをforceなしで送信し、upstream設定を書き換えません。pullは固定remoteをfetchし、incoming treeへpath policyを適用してから同名current branchへ`--ff-only`で反映します。<br>
+`clone`は起動時の`--url=`を1つだけ許可し、tool側は新規子ディレクトリ名と任意の`depth`だけを受け取ります。`--no-checkout`で取得後、incoming treeの許可・拒否パスを検査してからcheckoutし、失敗時はその呼び出しで新規作成したclone先だけを削除します。submodule再帰、任意URL、任意parentは公開しません。<br>
 ### gh-workflow
 `gh-workflow`は、起動引数`--repository=OWNER/REPO`で明示的に許可したGitHubリポジトリについて、GitHub Actionsの実行状況を確認し、明示されたrunをキャンセルします。`--repository=`は複数回指定でき、指定されていないリポジトリは選択できません。許可リポジトリが1件なら各ツールで省略でき、複数なら対象リポジトリの指定が必須です。設定例では`DaisukeDaisuke/desmume_webassembly`を指定し、MCP自体はデフォルト無効です。<br>
 `gh run list --branch main --limit 3`、`gh run watch RUN_ID --exit-status`、`gh run cancel RUN_ID`、`gh run view RUN_ID`に相当するツールに加え、job一覧、全ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLを取得できます。`cancel_run`は検証済みの10進run IDと許可リポジトリだけを固定引数で渡します。workflow dispatch、rerun、delete、artifact download、`gh api`は公開しません。<br>
@@ -180,7 +187,7 @@ disallowed_path_globs = ['**.ssh**']
 macOSとLinuxでは`/`を区切りとして扱い、大文字小文字を区別します。<br>
 拒否時のエラーには、`disallowed_path_globs`で拒否されたこと、一致したglob、正規化された対象パスが表示されます。<br>
 Gateway側の検査は、ChatGPTから子MCPへ渡るツール引数のガードです。<br>
-同梱の`safe-files`、`safe-images`、`safe-download`、`gitmcp`、`codex-script`は、署名済みWorkspace contextと各MCP自身のパス検証も使用します。第三者MCPについてはGatewayの引数guardだけで内部ファイルアクセスを制限できないため、必要に応じて`sandbox = "elevated"`または`"unelevated"`でMCPプロセス自体をCodex OS sandbox内に起動します。<br>
+同梱の`safe-files`、`safe-images`、`safe-download`、`gitmcp`、`git-capability`、`codex-script`は、署名済みWorkspace contextと各MCP自身のパス検証も使用します。第三者MCPについてはGatewayの引数guardだけで内部ファイルアクセスを制限できないため、必要に応じて`sandbox = "elevated"`または`"unelevated"`でMCPプロセス自体をCodex OS sandbox内に起動します。<br>
 ### MCPサーバー設定の形式
 Gatewayは、CodexのMCP設定と同じように、MCPごとの設定を`[mcp_servers.<name>]`テーブルへまとめる形式を採用しています。<br>
 Codexの設定ファイルをそのまま読み込む互換機能ではなく、Gatewayが実装している項目だけを認識します。<br>

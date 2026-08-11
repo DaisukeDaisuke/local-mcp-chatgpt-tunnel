@@ -35,16 +35,12 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# Git operations for explicitly allowed repositories only. Set enabled=true only when needed.
-# enabled=false prevents the entire gitmcp server from starting.
-# --disable-push=true removes push from the published tool list. Default when omitted: false.
-# --disable-pull=true removes pull from the published tool list. Default when omitted: true.
-# --disable-clone=true removes clone_repository from the published tool list. Default when omitted: true.
-# These flags do not disable branch, checkout, worktree, status, diff, show, staging, or commit tools.
-# Branch deletion and forced worktree removal are not exposed.
+# Local Git filesystem operations only. Run gitmcp inside the Codex OS sandbox so Git configuration
+# that invokes a system/global filter or diff helper cannot escape the configured filesystem boundary.
+# commit, push, pull, and clone are separate MCP processes below and choose their sandbox independently.
 [mcp_servers.git]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 sandbox = "elevated"
@@ -60,6 +56,85 @@ allowed_files = []
 # Deny secrets or private subtrees even when they are inside allowed_directories.
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
+disallowed_path_globs = ['**.ssh**']
+
+# Commit is intentionally a separate process so signing access does not force the larger gitmcp
+# outside the OS sandbox. This example uses sandbox="never" for compatibility with local signing agents.
+# Users who do not need that access may choose elevated/unelevated instead.
+[mcp_servers.git_commit]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=commit', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "never"
+prefix = "git_commit"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+# The current Codex permission profile disables network. Remote Git capabilities therefore use
+# sandbox="never" in this example; they remain separate MCPs so a future/network-capable boundary
+# or a deliberately different policy can be selected per capability without moving gitmcp itself.
+# push/pull pin the remote name and exact URL at startup and accept no remote/refspec/URL tool arguments.
+[mcp_servers.git_push]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=push', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--expected-remote-url=https://github.com/OWNER/REPO.git']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "never"
+prefix = "git_push"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.git_pull]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=pull', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--expected-remote-url=https://github.com/OWNER/REPO.git']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "never"
+prefix = "git_pull"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.git_clone]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=clone', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--url=https://github.com/OWNER/REPO.git']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "never"
+prefix = "git_clone"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
 # GitHub Actions inspection and explicit run cancellation for a repository allowlist.

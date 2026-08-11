@@ -110,6 +110,7 @@ test('bundled isolation uses a private HMAC-signed multi-root context and reject
     '../mcp/safe-images/server.mjs',
     '../mcp/safe-download/server.mjs',
     '../mcp/gitmcp/server.mjs',
+    '../mcp/git-capability/server.mjs',
     '../mcp/gh-workflow/server.mjs'
   ]) {
     const source = await readFile(new URL(path, import.meta.url), 'utf8');
@@ -134,7 +135,7 @@ test('safe-files uses cwd while the gateway applies generic path allowlists', as
 });
 
 test('bundled MCP tools declare structured output schemas and safe-download is independently rooted', async () => {
-  for (const path of ['../mcp/safe-files/server.mjs', '../mcp/safe-images/server.mjs', '../mcp/safe-download/server.mjs', '../mcp/gh-workflow/server.mjs']) {
+  for (const path of ['../mcp/safe-files/server.mjs', '../mcp/safe-images/server.mjs', '../mcp/safe-download/server.mjs', '../mcp/gitmcp/server.mjs', '../mcp/git-capability/server.mjs', '../mcp/gh-workflow/server.mjs']) {
     const source = await readFile(new URL(path, import.meta.url), 'utf8');
     assert.match(source, /outputSchema/);
   }
@@ -159,7 +160,7 @@ test('bundled gh-workflow MCP exposes only bounded inspection and run cancellati
   assert.match(config, /\[mcp_servers\.gh_workflow\][\s\S]*?cwd = '[^']+'[\s\S]*?enabled = false/);
 });
 
-test('gitmcp preserves normal Git configuration while disabling only executable repository-controlled paths', async () => {
+test('gitmcp is local-only and preserves compatible Git behavior inside its chosen OS boundary', async () => {
   const source = await readFile(new URL('../mcp/gitmcp/server.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /GIT_CONFIG_NOSYSTEM/);
   assert.doesNotMatch(source, /GIT_CONFIG_KEY_\d+: 'core\.attributesFile'/);
@@ -168,7 +169,8 @@ test('gitmcp preserves normal Git configuration while disabling only executable 
   assert.doesNotMatch(source, /--no-gpg-sign/);
   assert.doesNotMatch(source, /--no-textconv|--no-ext-diff/);
   assert.match(source, /'--ext-diff', '--textconv'/);
-  assert.match(source, /configuredCommitSigningRespected: true/);
+  assert.match(source, /commitCapabilityMovedToDedicatedMcp: true/);
+  assert.doesNotMatch(source, /name:\s*'commit'|name:\s*'push'|name:\s*'pull'|name:\s*'clone_repository'/);
   assert.match(source, /lineEndingConversionRespected: true/);
   assert.match(source, /systemAndGlobalCleanSmudgeFiltersRespected: true/);
   assert.match(source, /\/\^\(local\|worktree\)\\s\//);
@@ -176,6 +178,23 @@ test('gitmcp preserves normal Git configuration while disabling only executable 
   assert.match(source, /'worktree', 'add'/);
   assert.match(source, /'worktree', 'remove', '--'/);
   assert.doesNotMatch(source, /worktree', 'remove', '--force|branch', '-[dD]/);
+});
+
+test('git-capability isolates commit and network Git powers into one fixed capability per process', async () => {
+  const source = await readFile(new URL('../mcp/git-capability/server.mjs', import.meta.url), 'utf8');
+  assert.match(source, /createBundledIsolation/);
+  assert.match(source, /isolation\.run/);
+  assert.match(source, /--git-executable=<absolute-path> is required/);
+  assert.match(source, /MODES = new Set\(\['commit', 'push', 'pull', 'clone'\]\)/);
+  assert.match(source, /Repository-local Git configuration contains executable/);
+  assert.match(source, /protocol\.file\.allow/);
+  assert.match(source, /protocol\.ext\.allow/);
+  assert.match(source, /protocol\.http\.allow/);
+  assert.match(source, /'push', '--', remote, branch/);
+  assert.match(source, /'merge', '--ff-only', '--no-edit'/);
+  assert.match(source, /'clone', '--no-local', '--no-checkout'/);
+  assert.doesNotMatch(source, /exec\(|execFile\(|shell:\s*true/);
+  assert.doesNotMatch(source, /repositoryPath:\s*\{[^}]*type:\s*'string'/);
 });
 
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {

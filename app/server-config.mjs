@@ -12,6 +12,7 @@ const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-images', 'server.mjs'],
   ['mcp', 'safe-download', 'server.mjs'],
   ['mcp', 'gitmcp', 'server.mjs'],
+  ['mcp', 'git-capability', 'server.mjs'],
   ['mcp', 'gh-workflow', 'server.mjs'],
   ['mcp', 'codex-script', 'server.mjs']
 ].map((parts) => resolve(repositoryRoot, ...parts));

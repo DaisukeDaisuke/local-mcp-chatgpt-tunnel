@@ -8,27 +8,14 @@ import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPat
 const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
 const MAX_OUTPUT_BYTES = Number(process.env.GIT_MCP_MAX_OUTPUT_BYTES ?? 8 * 1024 * 1024);
-const MAX_COMMIT_MESSAGE_BYTES = Number(process.env.GIT_MCP_MAX_COMMIT_MESSAGE_BYTES ?? 64 * 1024);
-
-function booleanOption(name, fallback) {
-  const prefix = `--${name}=`;
-  const argument = process.argv.slice(2).find((value) => value.startsWith(prefix));
-  if (argument === undefined) return fallback;
-  const value = argument.slice(prefix.length).toLowerCase();
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  throw new Error(`${prefix} accepts only true or false`);
-}
 
 const cli = {
-  help: process.argv.slice(2).some((value) => value === '--help' || value === '-h'),
-  disablePush: booleanOption('disable-push', false),
-  disablePull: booleanOption('disable-pull', true),
-  disableClone: booleanOption('disable-clone', true)
+  help: process.argv.slice(2).some((value) => value === '--help' || value === '-h')
 };
 
 for (const argument of process.argv.slice(2)) {
   if (argument === '--help' || argument === '-h') continue;
+  // Backward-compatible no-ops. Remote/commit capabilities moved to git-capability.
   if (argument.startsWith('--disable-push=') || argument.startsWith('--disable-pull=') || argument.startsWith('--disable-clone=')) continue;
   throw new Error(`Unknown argument: ${argument}`);
 }
@@ -36,21 +23,19 @@ for (const argument of process.argv.slice(2)) {
 export const GIT_MCP_HELP = `gitmcp
 
 Usage:
-  node mcp/gitmcp/server.mjs [--disable-push=true|false] [--disable-pull=true|false] [--disable-clone=true|false]
+  node mcp/gitmcp/server.mjs
 
-Options:
-  --disable-push=true|false   Remove the push tool when true. Default: false.
-  --disable-pull=true|false   Remove the pull tool when true. Default: true.
-  --disable-clone=true|false  Remove the clone_repository tool when true. Default: true.
-
-The disable options affect only push, pull, and clone_repository. Local Git tools such as status,
-diff, show, branch listing and creation, checkout, worktree creation and removal, add_all,
-stage_paths, unstage_paths, and commit remain available while this MCP server is enabled.
+Legacy --disable-push/--disable-pull/--disable-clone options are accepted as no-ops so older
+gateway.toml files still start. commit, push, pull, and clone_repository are no longer exposed by
+this MCP; register mcp/git-capability/server.mjs separately for each required capability.
+Local Git tools such as status, diff, show, branch listing and creation, checkout, worktree creation
+and removal, add_all, stage_paths, and unstage_paths remain available.
 Branch deletion is intentionally absent.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
 Gateway calls also require an HMAC-signed isolated base and root list; public root or workspace override arguments are rejected.
-Standard Git ignore rules, attributes, line-ending conversion, system/global filters, and configured
-commit signing are preserved. Repository-local executable Git configuration is rejected.
+Standard Git ignore rules, attributes, line-ending conversion, and system/global filters are preserved.
+Repository-local executable Git configuration is rejected. Because system/global filters and
+diff/textconv programs are still respected, running this MCP inside a Codex OS sandbox is recommended.
 Git is always spawned with shell=false and fixed subcommands and options.
 `;
 
@@ -92,8 +77,7 @@ const LOCAL_STATE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, i
 const LOCAL_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 const LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
 const LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
-const OPEN_WORLD_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
-const OPEN_WORLD_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+
 const repositorySchema = () => ({
   type: 'object',
   properties: { repositoryPath: { type: 'string', default: '.' } },
@@ -118,7 +102,7 @@ const schemas = [
   { name: 'roots', description: 'List allowed and denied Git paths and the current working directory.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: READ_ONLY_ANNOTATIONS },
   {
     name: 'get_policy',
-    description: 'Describe which standard Git ignore, attribute, line-ending, filter, signing, and configuration behaviors this MCP preserves or deliberately disables.',
+    description: 'Describe which standard Git ignore, attribute, line-ending, filter, and configuration behaviors this local-only MCP preserves or deliberately disables.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: READ_ONLY_ANNOTATIONS
   },
@@ -264,41 +248,6 @@ const schemas = [
     inputSchema: repositoryPathsSchema(),
     annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
   },
-  {
-    name: 'commit',
-    description: 'Commit already staged changes using a literal message. Configured commit signing is respected; Git hooks remain disabled. This tool does not stage files.',
-    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, message: { type: 'string', minLength: 1 } }, required: ['message'], additionalProperties: false },
-    annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
-  },
-  ...(!cli.disablePush ? [{
-    name: 'push',
-    description: 'Push the current branch to a named remote. Force push and arbitrary refspecs are not supported.',
-    inputSchema: { type: 'object', properties: { repositoryPath: { type: 'string', default: '.' }, remote: { type: 'string', minLength: 1, maxLength: 255, default: 'origin' }, setUpstream: { type: 'boolean', default: false } }, additionalProperties: false },
-    annotations: OPEN_WORLD_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
-  }] : []),
-  ...(!cli.disablePull ? [{
-    name: 'pull',
-    description: 'Fetch the configured upstream without submodules, reject denied incoming paths, then fast-forward only. Arbitrary remotes, refspecs, merge commits, and rebase are not supported.',
-    inputSchema: repositorySchema(),
-    annotations: OPEN_WORLD_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
-  }] : []),
-  ...(!cli.disableClone ? [{
-    name: 'clone_repository',
-    description: 'Clone into one new relative child directory under an allowed directory. recurseSubmodules adds the fixed --recurse-submodules option, and depth adds a fixed --depth=<n> option.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', minLength: 1, maxLength: 4096 },
-        destinationDirectory: { type: 'string', minLength: 1, maxLength: 255 },
-        parentDirectory: { type: 'string', default: '.' },
-        recurseSubmodules: { type: 'boolean', default: false },
-        depth: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
-      },
-      required: ['url', 'destinationDirectory'],
-      additionalProperties: false
-    },
-    annotations: OPEN_WORLD_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS
-  }] : [])
 ].map((schema) => ({ ...schema, outputSchema: TOOL_OUTPUT_SCHEMA }));
 
 const normalizeCase = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
@@ -462,11 +411,6 @@ function safeShowFormat(value = 'patch') {
   return value;
 }
 
-function safeCloneUrl(value) {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 4096 || /[\0\r\n]/.test(value) || value.startsWith('-')) throw new Error('Clone URL is invalid');
-  if (/^(?:https?|ssh):\/\//i.test(value) || /^git@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+$/.test(value)) return value;
-  throw new Error('Clone URL must use http, https, ssh, or git@host:path syntax');
-}
 
 async function runGit(cwd, args, { input, acceptedExitCodes = [0] } = {}) {
   return new Promise((resolvePromise, reject) => {
@@ -728,7 +672,7 @@ async function worktreesForRepository(cwd) {
 
 async function callTool(name, args = {}) {
   switch (name) {
-    case 'roots': return { ...(await policy()), workingDirectory: await workingDirectory(), disablePush: cli.disablePush, disablePull: cli.disablePull, disableClone: cli.disableClone };
+    case 'roots': return { ...(await policy()), workingDirectory: await workingDirectory() };
     case 'get_policy':
       return {
         ignoreRules: {
@@ -754,7 +698,7 @@ async function callTool(name, args = {}) {
           repositoryExternalAttributesAndIgnoreFilesRejected: true,
           lineEndingConversionRespected: true,
           systemAndGlobalCleanSmudgeFiltersRespected: true,
-          configuredCommitSigningRespected: true
+          commitCapabilityMovedToDedicatedMcp: true
         },
         deliberatelyDisabled: {
           hooks: true,
@@ -810,7 +754,7 @@ async function callTool(name, args = {}) {
         '--show-scope',
         '--show-origin',
         '--get-regexp',
-        '^(core\\.(autocrlf|safecrlf|eol|attributesfile|excludesfile|symlinks|fscache)|commit\\.gpgsign|gpg\\.(format|program|ssh\\.program)|user\\.signingkey|filter\\..*\\.(clean|smudge|process|required)|diff\\..*\\.(binary|textconv)|push\\.followtags|pull\\.rebase)$'
+        '^(core\\.(autocrlf|safecrlf|eol|attributesfile|excludesfile|symlinks|fscache)|filter\\..*\\.(clean|smudge|process|required)|diff\\..*\\.(binary|textconv))$'
       ], { acceptedExitCodes: [0, 1] });
       return { repositoryPath: cwd, configuration: result.stdout.trim().split(/\r?\n/).filter(Boolean) };
     }
@@ -993,59 +937,7 @@ async function callTool(name, args = {}) {
       }
       return { repositoryPath: cwd, paths, unstaged: true, changed: true, unbornHead: head.exitCode !== 0 };
     }
-    case 'commit': {
-      const cwd = await repository(args.repositoryPath);
-      if (typeof args.message !== 'string' || args.message.length === 0 || /\0/.test(args.message)) throw new Error('message must be a non-empty string without NUL');
-      if (Buffer.byteLength(args.message, 'utf8') > MAX_COMMIT_MESSAGE_BYTES) throw new Error('Commit message is too large');
-      await runGit(cwd, ['commit', '--no-verify', '-m', args.message]);
-      return { repositoryPath: cwd, committed: true };
-    }
-    case 'push': {
-      if (cli.disablePush) throw new Error('push is disabled');
-      const cwd = await repository(args.repositoryPath);
-      const remote = safeRemote(args.remote ?? 'origin');
-      const current = (await runGit(cwd, ['branch', '--show-current'])).stdout.trim();
-      if (!current) throw new Error('Detached HEAD cannot be pushed');
-      safeName(current, 'current branch');
-      const command = ['push'];
-      if (args.setUpstream === true) command.push('--set-upstream');
-      command.push('--', remote, current);
-      await runGit(cwd, command);
-      return { repositoryPath: cwd, remote, branch: current, setUpstream: args.setUpstream === true };
-    }
-    case 'pull': {
-      if (cli.disablePull) throw new Error('pull is disabled');
-      const cwd = await repository(args.repositoryPath);
-      const current = (await runGit(cwd, ['branch', '--show-current'])).stdout.trim();
-      if (!current) throw new Error('Detached HEAD cannot be pulled');
-      safeName(current, 'current branch');
-      const remote = (await runGit(cwd, ['config', '--get', `branch.${current}.remote`])).stdout.trim();
-      safeRemote(remote);
-      await runGit(cwd, ['fetch', '--no-recurse-submodules', '--', remote]);
-      await runGit(cwd, ['rev-parse', '--verify', '@{upstream}']);
-      await assertTreeAvoidsDeniedPaths(cwd, '@{upstream}');
-      await runGit(cwd, ['merge', '--ff-only', '--no-edit', '@{upstream}']);
-      return { repositoryPath: cwd, remote, branch: current, fastForwardOnly: true, recurseSubmodules: false };
-    }
-    case 'clone_repository': {
-      if (cli.disableClone) throw new Error('clone is disabled');
-      const url = safeCloneUrl(args.url);
-      const { parent, destination } = await assertAllowedNewDirectory(args.parentDirectory ?? '.', args.destinationDirectory);
-      const depth = args.depth;
-      if (depth !== undefined && (!Number.isSafeInteger(depth) || depth < 1)) throw new Error('depth must be a positive safe integer');
-      const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
-      const command = ['clone', '--no-local', '--config', `core.hooksPath=${nullPath}`];
-      if (args.recurseSubmodules === true) command.push('--recurse-submodules');
-      if (depth !== undefined) command.push(`--depth=${depth}`);
-      command.push('--', url, args.destinationDirectory);
-      await runGit(parent, command);
-      return {
-        parentDirectory: parent,
-        destinationDirectory: destination,
-        recurseSubmodules: args.recurseSubmodules === true,
-        ...(depth === undefined ? {} : { depth })
-      };
-    }
+
     default: throw new Error(`Unknown tool: ${name}`);
   }
 }
@@ -1060,8 +952,8 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'gitmcp', version: '1.3.0' },
-        instructions: 'Allowlisted Git operations only. Branch listing, creation, switching, checkout, allowed-path worktree creation/removal, and literal path-scoped staging/unstaging are supported; branch deletion and forced worktree removal are not. Standard ignore rules, attributes, line-ending conversion, system/global filters, external diff/textconv, and configured commit signing are preserved. Repository-local executable Git configuration, hooks, force push, and arbitrary clone destinations are blocked.'
+        serverInfo: { name: 'gitmcp', version: '1.4.0' },
+        instructions: 'Local allowlisted Git operations only. commit, push, pull, and clone are intentionally absent and must be registered as separate git-capability MCP instances. Repository-local executable Git configuration and hooks are rejected. System/global filters and diff/textconv remain compatible, so a Codex OS sandbox is recommended when this MCP is allowed to modify files.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');

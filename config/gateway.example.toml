@@ -29,16 +29,12 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# Git operations for explicitly allowed repositories only. Set enabled=true only when needed.
-# enabled=false prevents the entire gitmcp server from starting.
-# --disable-push=true removes push from the published tool list. Default when omitted: false.
-# --disable-pull=true removes pull from the published tool list. Default when omitted: true.
-# --disable-clone=true removes clone_repository from the published tool list. Default when omitted: true.
-# These flags do not disable branch, checkout, worktree, status, diff, show, staging, or commit tools.
+# Local Git filesystem operations only. commit, push, pull, and clone are separate MCP processes below.
+# This separation lets each capability choose its own sandbox boundary and keeps signing/network powers out of gitmcp.
 # Branch deletion and forced worktree removal are not exposed.
 [mcp_servers.git]
 command = "node"
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "git"
@@ -52,6 +48,66 @@ allowed_files = []
 # Deny secrets or private subtrees even when they are inside allowed_directories.
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
+disallowed_path_globs = ['**.ssh**']
+
+# One Git capability per MCP process. --git-executable is fixed at startup and is never a tool argument.
+# commit accepts only a literal message; repository selection comes from the signed isolated workspace/base.
+[mcp_servers.git_commit]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=commit', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+prefix = "git_commit"
+annotation_config = false
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+# push/pull pin both the remote name and exact URL at MCP startup. Tools accept no remote/refspec/URL arguments.
+[mcp_servers.git_push]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=push', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--expected-remote-url=https://github.com/OWNER/REPO.git']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+prefix = "git_push"
+annotation_config = false
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.git_pull]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=pull', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--expected-remote-url=https://github.com/OWNER/REPO.git']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+prefix = "git_pull"
+annotation_config = false
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+# clone pins one exact URL at startup, creates one new child directory, validates the incoming tree, then checks it out.
+[mcp_servers.git_clone]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=clone', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--url=https://github.com/OWNER/REPO.git']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+prefix = "git_clone"
+annotation_config = false
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
 # GitHub Actions inspection and explicit run cancellation for a repository allowlist.

@@ -292,6 +292,21 @@ test('gateway marks only Node-launched bundled server paths as bundled', async (
   ].join('\n'), 'utf8');
   const impersonated = await loadGatewayConfig(impersonatedConfigPath);
   assert.equal(impersonated.servers[0].isBundled, false);
+
+  const capabilityPath = resolve('mcp/git-capability/server.mjs');
+  const capabilityConfigPath = join(directory, 'git-capability.toml');
+  await writeFile(capabilityConfigPath, [
+    'private_use_only = true',
+    '[mcp_servers.git_commit]',
+    `command = '${process.execPath}'`,
+    `args = ['${capabilityPath}', '--mode=commit', '--git-executable=${process.execPath}']`,
+    `cwd = '${cwd}'`,
+    `allowed_directories = ['${cwd}']`,
+    'sandbox = "never"'
+  ].join('\n'), 'utf8');
+  const capability = await loadGatewayConfig(capabilityConfigPath);
+  assert.equal(capability.servers[0].isBundled, true);
+  assert.equal(capability.servers[0].sandbox, 'never');
 });
 
 test('gateway config forbids overriding the private bundled isolation key', async () => {
