@@ -21,7 +21,8 @@ Windows上で動くstdio形式のMCPサーバーを、OpenAI公式Secure MCP Tun
 
 > [!IMPORTANT]
 > 2026年8月11日のバージョンにおいて、codex サンドボックスを直接使用し、境界不整合や任意コード実行からパソコンを保護する仕組みが実装されました。<br>
-> 任意コード実行こそ提供しませんが、nodejsによる安全なmjs実行など内臓mcpの選択肢が増えたため、今後私はelevatedモードでの内蔵mcp実行を推奨します。<br>
+> 一般シェルや任意実行ファイル選択は提供しませんが、固定runtimeで既存スクリプトを実行する`codex-script`が同梱されました。`codex-script`は`elevated`または`unelevated` sandboxが必須です。<br>
+> そのほかの同梱MCPや外部stdio MCPもMCPごとにCodex sandbox内で起動できるため、今後は可能な範囲で`elevated`モードによる境界強化を推奨します。<br>
 
 ## AIによる実装について
 > [!CAUTION]
@@ -69,6 +70,7 @@ macOSとLinux向けの導入手順、Docker構成、受信ポートを開く構�
 | `safe-download` | `download_zip` | 許可したソースを単一ファイルでもZIPとしてChatGPTへ渡す |
 | `gitmcp` | `get_policy`、`branches`、`create_branch`、`checkout`、`list_worktrees`、`create_worktree`、`remove_worktree`、`status`、`diff`、`commit`、`push` | 許可したリポジトリに対する限定されたGit操作 |
 | `gh-workflow` | `list_runs`、`watch_run`、`cancel_run`、`view_run`、`view_run_jobs`、`view_failed_logs`、`list_workflows`、`view_workflow_yaml` | 明示的に許可したGitHubリポジトリのActions実行状況確認とrunキャンセル |
+| `codex-script` | `roots`、`get_working_directory`、`set_working_directory`、`run_script`または`check_file` | MCP起動時に固定したmjs / Node.js / Python / PHP runtimeで、許可Workspace内の既存スクリプト実行または構文チェック。`sandbox = "elevated"`または`"unelevated"`が必須 |
 
 <br>
 
@@ -106,6 +108,11 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 `gh-workflow`は、起動引数`--repository=OWNER/REPO`で明示的に許可したGitHubリポジトリについて、GitHub Actionsの実行状況を確認し、明示されたrunをキャンセルします。`--repository=`は複数回指定でき、指定されていないリポジトリは選択できません。許可リポジトリが1件なら各ツールで省略でき、複数なら対象リポジトリの指定が必須です。設定例では`DaisukeDaisuke/desmume_webassembly`を指定し、MCP自体はデフォルト無効です。<br>
 `gh run list --branch main --limit 3`、`gh run watch RUN_ID --exit-status`、`gh run cancel RUN_ID`、`gh run view RUN_ID`に相当するツールに加え、job一覧、全ログ、失敗ログ、workflow一覧、workflow概要、workflow YAMLを取得できます。`cancel_run`は検証済みの10進run IDと許可リポジトリだけを固定引数で渡します。workflow dispatch、rerun、delete、artifact download、`gh api`は公開しません。<br>
 `gh`は`spawn`から`shell=false`で直接起動し、サブコマンドとオプションを固定しています。run ID、branch、workflow識別子は個別に検証し、標準入力を閉じ、出力サイズを制限します。子プロセスの`cwd`は必ず`gateway.toml`で明示してください。認証にはローカルの`gh auth login`で保存されたGitHub CLI設定を利用できます。<br>
+### codex-script
+`codex-script`は、MCP起動時に`--runtime=mjs|nodejs|python|php`と`--runtime-executable=<absolute-path>`で実行runtimeを固定し、許可Workspace内に既に存在するスクリプトだけを実行する同梱MCPです。同じ`server.mjs`を複数登録し、`mjs_script`、`nodejs_script`、`python_script`、`php_script`のように独立したprefixで公開できます。<br>
+`--mode=run`では`run_script`、`--mode=check`では`check_file`を公開します。`run_script`はruntimeそのもの、`check_file`はNode.js `--check`、Python `py_compile`、PHP `-l`の固定checkerだけを起動します。一般シェル、任意実行ファイル選択、任意環境変数注入、npm scriptやpackage manager呼び出しは公開しません。引数はliteral argvとして渡し、stdinを閉じ、timeoutと出力サイズを制限します。<br>
+Gatewayは`codex-script`を`isBundled`として扱い、`isolatedId`で選択した署名済みbase / rootsと通常のパスポリシーを適用します。さらに`codex-script`は`gateway.toml`で`sandbox = "never"`を指定すると設定読み込み時に拒否され、`elevated`または`unelevated`のCodex Windows sandbox内でMCPプロセス自体を起動する必要があります。各script呼び出しで別のsandboxを作るのではなく、固定runtimeは既にsandbox化されたMCPの子プロセスとして動作します。<br>
+任意コードは許可したWorkspace内で動作するため、`allowed_directories`は必要最小限にし、runtime、Codex CLI、MCP実行ファイルを書き込み可能rootの外へ置いてください。任意コードでは書き込みroot内のdeny holeを安全に表現できないため、script runnerでは`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`を空にし、必要なら`allowed_directories`自体を狭めるか分割します。<br>
 ## 任意のstdio MCPを追加する
 接続するMCPの起動コマンドや引数は、Gateway本体ではなく`config/gateway.toml`の`[mcp_servers.<name>]`へ記述します。<br>
 ```toml
@@ -148,17 +155,14 @@ click = true
 ### ユーザーの決定は尊重されます
 Gatewayの動作は、利用者が`config/gateway.toml`へ明示した設定によって決まります。MCPを自動検出して勝手に登録することや、設定ファイルを自動的に書き換えることはありません。<br>
 例外として、外部MCPのツールannotationsだけは、`tool_annotations_path`で指定された独立TOMLへ未登録prefixと新しく発見したツール識別名を追記します。新規ツールは`UNCLASSIFIED`になり、`gateway.toml`、既存prefix、既存ツール設定は変更しません。<br>
-接続するMCP、その起動コマンド、引数、作業ディレクトリ、環境変数、有効・無効、公開しないツール、パスの許可・拒否範囲、直列実行、遅延起動は、すべて利用者が選択します。<br>
+接続するMCP、その起動コマンド、引数、作業ディレクトリ、環境変数、有効・無効、Codex sandboxモード、sandbox用の読み取り専用パス、公開しないツール、パスの許可・拒否範囲、直列実行、遅延起動は、すべて利用者が選択します。<br>
 Gatewayはその設定を読み取り、検証して適用しますが、利用者の代わりに安全性や用途を推測して設定を追加したり、許可範囲を広げたりしません。<br>
 `config/gateway.example.toml`は設定例であり、そのまま適用される「魔法のスクリプト」ではありません。必要な項目だけを確認して`config/gateway.toml`へ記述し、実際に起動するプログラムと公開する機能を利用者自身が把握できる構成にしています。<br>
-### 任意コード実行はこのリポジトリでは提供しません。
-このリポジトリは、一般シェル、PowerShell、コマンドプロンプト、任意スクリプト、任意プロセス起動など、ChatGPTからWindows PC上で任意コードを実行するための同梱ツールを提供しません。今後も実装しません。<br>
-任意コード実行を公開すると、Tunnel IDやruntime API keyなどの接続情報が意図せず流出し、不正利用された場合、攻撃者は許可されたパスの読み書きにとどまらず、Windowsユーザー権限で任意の操作を実行できる可能性があります。<br>
-パス許可やツール名の除外だけでは、任意コードの内部動作を安全に制限できません。<br>
-コードの生成、変換、ビルド確認、単体テストなどは、まずChatGPTのサンドボックス内で行ってください。<br>
-ローカルのソースが必要な場合は、`safe-download`で許可したファイルだけをZIP化し、ChatGPTにサンドボックスへダウンロードさせてください。<br>
-利用者が外部の任意コード実行MCPを`gateway.toml`へ追加すること自体はGatewayの仕様上可能ですが、それはこのリポジトリが提供、推奨、保護する機能ではありません。<br>
-接続したMCPは実際のPC上でWindowsユーザーの権限を使って動作します。<br>
+### 一般目的のコマンド実行は提供しません
+このリポジトリは、一般シェル、PowerShell、コマンドプロンプト、任意実行ファイル選択、任意環境変数注入など、Windowsユーザー権限をそのまま公開する汎用コマンドランナーを同梱しません。<br>
+例外は上記の`codex-script`で、実行runtimeをMCP起動時に固定し、許可Workspace内の既存スクリプトだけをCodex Windows sandbox内で実行します。これはパス許可だけで任意コードを安全化するものではなく、OS sandboxを必須化した限定的なscript runnerです。<br>
+一般的な任意コード実行を直接公開すると、Tunnel IDやruntime API keyなどの接続情報が意図せず流出し、不正利用された場合、攻撃者がWindowsユーザー権限で任意の操作を実行できる可能性があります。そのため、外部の任意コード実行MCPを追加する場合も`sandbox = "elevated"`または`"unelevated"`を使い、書き込み可能rootを必要最小限にしてください。<br>
+コードの生成や変換などローカル実行を必要としない作業は、引き続きChatGPT側のサンドボックスを優先してください。ローカルのソースを渡すだけなら、`safe-download`で許可したファイルだけをZIP化できます。<br>
 ### パス許可
 `allowed_directories`は指定したディレクトリとその配下を許可し、`allowed_files`は指定したファイルだけを完全一致で許可します。<br>
 Gatewayはすべての子MCPのツール引数を再帰的に検査し、`path`、`filePath`、`files`、`directory`などのキーや絶対パスらしい文字列を許可リストへ照合します。相対パスは対象MCPの`cwd`から解決します。<br>
@@ -176,23 +180,27 @@ disallowed_path_globs = ['**.ssh**']
 macOSとLinuxでは`/`を区切りとして扱い、大文字小文字を区別します。<br>
 拒否時のエラーには、`disallowed_path_globs`で拒否されたこと、一致したglob、正規化された対象パスが表示されます。<br>
 Gateway側の検査は、ChatGPTから子MCPへ渡るツール引数のガードです。<br>
-同梱の`safe-files`、`safe-images`、`safe-download`、`gitmcp`は同じ設定を子プロセス内でも検査しますが、任意に接続した第三者MCPの内部アクセスをOSレベルで防ぐ機能ではありません。<br>
+同梱の`safe-files`、`safe-images`、`safe-download`、`gitmcp`、`codex-script`は、署名済みWorkspace contextと各MCP自身のパス検証も使用します。第三者MCPについてはGatewayの引数guardだけで内部ファイルアクセスを制限できないため、必要に応じて`sandbox = "elevated"`または`"unelevated"`でMCPプロセス自体をCodex OS sandbox内に起動します。<br>
 ### MCPサーバー設定の形式
 Gatewayは、CodexのMCP設定と同じように、MCPごとの設定を`[mcp_servers.<name>]`テーブルへまとめる形式を採用しています。<br>
 Codexの設定ファイルをそのまま読み込む互換機能ではなく、Gatewayが実装している項目だけを認識します。<br>
-`config/gateway.toml`へMCPを追加する場合は、コメント用の`#`を付けず、次のように記述します。以下はGatewayが認識する全オプションを載せたテンプレートです。。<br>
+`config/gateway.toml`へMCPを追加する場合は、コメント用の`#`を付けず、次のように記述します。以下はGatewayが認識する全オプションを載せたテンプレートです。<br>
 ```toml
 private_use_only = true
 publish_tool_directory = false
 tool_annotations_path = "tool-annotations.toml"
 
 [mcp_servers.my_server]
-command = "node"
+command = 'C:\Program Files\nodejs\node.exe'
 args = ['C:\path\to\server.mjs', '--example=value']
-cwd = 'C:\path\to'
+cwd = 'C:\work\project'
 enabled = true
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+sandbox_read_only_directories = ['C:\path\to\read-only-data']
 prefix = "my_server"
 annotation_config = true
+dangerous_allow_gateway_config_access = false
 startup_timeout_sec = 30
 tool_timeout_sec = 1800
 serial_group = "my_server"
@@ -201,9 +209,9 @@ blocked_tools = ["dangerous_tool"]
 blocked_tool_substrings = ["script", "shell", "execute"]
 allowed_directories = ['C:\work\project']
 allowed_files = ['C:\Users\owner\Downloads\upload.png']
-disallowed_directories = ['C:\work\project\private']
-disallowed_files = ['C:\work\project\.env']
-disallowed_path_globs = ['**.ssh**']
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
 
 [mcp_servers.my_server.start_after]
 server = "controller"
@@ -221,13 +229,17 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | `private_use_only` | Gateway全体の必須設定です。安全確認のため、必ず`true`にする必要があります。 |
 | `publish_tool_directory` | `true`にすると内蔵ツール`gateway__list_available_tools`を公開します。省略時と`false`では公開しません。 |
 | `tool_annotations_path` | 外部MCPのannotations設定TOMLです。相対パスは`gateway.toml`のあるディレクトリを基準にし、省略時は同じディレクトリの`tool-annotations.toml`です。 |
-| `[mcp_servers.<name>]` | 1つのstdio MCPを定義します。`<name>`はGateway内で一意にします。 |
-| `command` | 子MCPを起動する実行ファイルまたはコマンドです。`enabled = false`でない場合は必須です。 |
+| `[mcp_servers.<name>]` | 1つのstdio MCP接続を定義する単位です。`<name>`はGateway内で一意にし、この単位ごとに起動方法、Codex sandbox、prefix、パスポリシー、公開ツール、lifecycleを設定します。`enabled = false`なら設定を保持したまま起動対象から外れます。 |
+| `command` | 子MCPを起動する実行ファイルまたはコマンドです。`enabled = false`でない場合は必須です。`sandbox = "elevated"`ではWindows上の絶対パスを持つnative `.exe`が必須です。`unelevated`と`never`ではPATH名も使用できます。 |
 | `args` | `command`へ渡す引数を文字列配列で指定します。省略時は引数なしで起動します。 |
-| `cwd` | 子MCPの作業ディレクトリです。相対パスは`gateway.toml`があるディレクトリを基準に解決され、省略時はそのディレクトリを使います。 |
+| `cwd` | 子MCPの作業ディレクトリです。相対パスは`gateway.toml`があるディレクトリを基準に絶対化され、省略時はそのディレクトリを使います。sandbox有効時は、少なくとも1つの`allowed_directories`内に含まれている必要があります。 |
 | `enabled` | `false`にすると設定を残したまま、そのMCPを起動対象から除外します。省略時は有効です。 |
+| `sandbox` | 子MCPの起動境界です。`"never"`、`"elevated"`、`"unelevated"`の3値で、省略時は`"never"`です。`elevated`または`unelevated`ではCodex Windows sandboxを経由してMCPプロセス自体を起動します。`codex-script`では`never`は拒否されます。 |
+| `codex_executable` | `sandbox != "never"`のとき必須となるCodex CLIの絶対パスです。Windowsではnpm shimの`codex.cmd`も使用できます。実在する通常ファイルへ解決され、`allowed_directories`の書き込み可能root内に置くことはできません。 |
+| `sandbox_read_only_directories` | sandbox有効時に追加で読み取り専用としてCodex permission profileへ渡す絶対ディレクトリ配列です。`allowed_directories`のような書き込みrootにはしません。省略時は空です。 |
 | `prefix` | ChatGPTへ公開するツール名の接頭辞です。元の`tool_name`は`<prefix>__<tool_name>`として公開されます。省略時は`[mcp_servers.<name>]`の`<name>`を使います。 |
 | `annotation_config` | 外部annotations設定を適用するかを指定します。省略時は`true`です。同梱MCPのように自身で完全なannotationsを持つ場合は`false`にします。 |
+| `dangerous_allow_gateway_config_access` | 既定は`false`です。`false`では読み込んだ`gateway.toml`の解決前・実在パスを保護対象へ追加し、許可root内にあってもGatewayと子MCPのパスポリシーから拒否します。`true`にするとこの保護だけを解除します。名前どおり危険な互換用設定です。 |
 | `startup_timeout_sec` | 子MCPの起動と初期化を待つ秒数です。正の数で指定し、省略時は30秒です。 |
 | `tool_timeout_sec` | 子MCPのツール呼び出しを待つ秒数です。正の数で指定し、省略時は1800秒です。 |
 | `request_timeout_sec` | `tool_timeout_sec`の互換用別名です。両方ある場合は`tool_timeout_sec`が優先されるため、新しい設定では`tool_timeout_sec`を使用します。 |
@@ -235,8 +247,8 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | `deferred` | `true`にするとGateway初期化時には起動せず、`start_after`で指定したツールが成功するまで遅延します。省略時は`false`です。 |
 | `blocked_tools` | ChatGPTへ公開しないツール名を完全一致の文字列配列で指定します。 |
 | `blocked_tool_substrings` | ChatGPTへ公開しないツール名の部分文字列を指定します。大文字小文字は区別せず、globや正規表現としては扱いません。 |
-| `allowed_directories` | 指定した絶対パスのディレクトリと、その配下へのアクセスを許可します。 |
-| `allowed_files` | 指定した絶対パスのファイルだけを完全一致で許可します。 |
+| `allowed_directories` | 指定した絶対パスのディレクトリと、その配下へのアクセスを許可します。sandbox有効時はCodex permission profileの書き込み可能rootにもなります。 |
+| `allowed_files` | 指定した絶対パスのファイルだけを完全一致で許可します。sandbox有効時はCodex permission profileへ読み取り可能な個別パスとしても渡されます。 |
 | `disallowed_directories` | 許可範囲内であっても拒否するディレクトリと、その配下を絶対パスで指定します。 |
 | `disallowed_files` | 許可範囲内であっても拒否するファイルを絶対パスで指定します。 |
 | `disallowed_path_globs` | 正規化されたパス全体へ適用する拒否globを指定します。ファイルとフォルダの両方が対象です。 |
@@ -247,6 +259,8 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 <br>
 
 通常のMCPは`deferred = false`または省略で起動します。その場合、`start_after`は不要です。<br>
+`sandbox != "never"`ではCodex permission profileのnetworkは無効化され、`allowed_directories`がwrite、`allowed_files`と`sandbox_read_only_directories`がreadとして構成されます。加えて、MCP実行ファイルのディレクトリ、既知interpreterのentry scriptディレクトリ、同梱MCPではGatewayの`app`ディレクトリが必要に応じてreadで追加されます。`codex_executable`は書き込み可能rootの外に置く必要があり、`elevated`では`command`自身も書き込み可能rootの外に置く必要があります。<br>
+sandbox化した外部MCPでは、OS sandboxのworkspaceWrite root内部に`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`、保護中の`gateway.toml`といった「deny hole」を正確に表現できません。そのため該当する設定は起動時に拒否されます。外部MCPでは`allowed_directories`を狭くするか分割してください。同梱MCPは自身でもdeny policyを検証するため、この互換性チェックの例外です。<br>
 `url`によるリモートMCP設定は拒否されます。Codex固有の`tool_output_token_limit`は読み取られても使用されず、このGateway上では効果を持ちません。<br>
 ### 内蔵ツールディレクトリ
 トップレベルで`publish_tool_directory = true`を指定すると、`gateway__list_available_tools`を公開します。<br>
