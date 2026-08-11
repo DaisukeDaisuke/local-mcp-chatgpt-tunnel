@@ -199,7 +199,7 @@ process.stdin.on('data', (chunk) => {
   assert.match(log, /tool="SCRIPT_debug".*blocked_tool_substrings="script"/);
   assert.match(log, /tool="shell_exec".*blocked_tool_substrings="shell"/);
   assert.match(log, /tool="dangerous".*blocked_tools exact match/);
-  assert.match(log, /INFO tool exposure: server="demo" prefix="demo" tool="plain" public_name="demo__plain" status="published"/);
+  assert.doesNotMatch(log, /status="published"/);
   assert.match(log, /INFO tool prefix: server="demo" prefix="demo" enabled=true found=5 rejected=4 published=2/);
   assert.match(log, /INFO tool prefix disabled: server="offline" prefix="offline" enabled=false reason="enabled=false"/);
 });

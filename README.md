@@ -275,7 +275,7 @@ sandbox化した外部MCPでは、OS sandboxのworkspaceWrite root内部に`disa
 これらのツールはGatewayが既に保持している公開ツールレジストリだけを参照し、設定ファイル、ファイルシステム、子MCPの追加情報を読みません。`enabled = false`のMCPは起動せず、名前だけを`disabledProxyNames`へ返します。<br>
 入力を省略すると現在利用可能なツールをすべて返し、`prefix`を指定すると大文字小文字を区別せずフル識別子の先頭一致で絞り込みます。該当が0件の場合はエラーにせず、全件を返します。<br>
 返却するツール情報は`chrome-devtools__click`のような省略しない公開名と説明だけです。入力スキーマ、出力スキーマ、起動コマンド、引数、パス、環境変数、拒否されたツール名は返しません。`enabledProxyCount`は設定上有効なMCP数、`rejectedToolCount`は起動済みMCPから公開を拒否したツール数です。<br>
-Gateway初期化時の`[gateway] INFO`には、公開・拒否された各ツールをprefix付きで1行ずつ記録し、prefixごとのfound/rejected/published件数、`enabled = false`のprefix、起動失敗したprefix、全体集計も記録します。<br>
+Gateway初期化時の`[gateway] INFO`には、公開を拒否されたツールだけを1件ずつ記録し、公開された個別ツール名は列挙しません。代わりにprefixごとのfound/rejected/published件数、`enabled = false`のprefix、起動失敗したprefix、全体集計を記録します。<br>
 ### 公開ツールの除外
 ツール名の完全一致は`blocked_tools`、大文字小文字を区別しない部分一致は`blocked_tool_substrings`で非公開にできます。。<br>
 ```toml

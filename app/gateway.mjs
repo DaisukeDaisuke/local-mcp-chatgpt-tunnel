@@ -175,7 +175,6 @@ function supportsGatewayErrorEnvelope(tool) {
 
 function toolExposureReport() {
   const disabled = [];
-  const tools = [];
   const prefixes = [];
   let found = 0;
   for (const child of children) {
@@ -197,20 +196,10 @@ function toolExposureReport() {
       if (reason) {
         childRejected += 1;
         disabled.push(item);
-        tools.push({ ...item, status: 'rejected' });
       } else {
         childPublished += 1;
-        tools.push({ ...item, status: 'published' });
       }
     }
-    tools.push({
-      server: child.config.name,
-      prefix: child.config.prefix,
-      tool: ACCESS_SCOPE_TOOL_NAME,
-      publicName: namespacedName(child.config.prefix, ACCESS_SCOPE_TOOL_NAME),
-      status: 'published',
-      synthetic: true
-    });
     prefixes.push({
       server: child.config.name,
       prefix: child.config.prefix,
@@ -219,30 +208,24 @@ function toolExposureReport() {
       published: childPublished
     });
   }
-  return { found, disabled, tools, prefixes, published: publishedTools().length };
+  return { found, disabled, prefixes, published: publishedTools().length };
 }
 
 function logToolExposureReport() {
   const report = toolExposureReport();
-  if (config.publishToolDirectory) {
-    for (const tool of [toolDirectoryDefinition, prefixListDefinition]) {
-      info(`tool exposure: server="gateway" prefix="gateway" tool=${JSON.stringify(tool.name)} public_name=${JSON.stringify(tool.name)} status="published"`);
-    }
-  }
-  if (hasBundledChildren()) {
-    for (const tool of isolatedToolDefinitions) {
-      info(`tool exposure: server="gateway" prefix="isolated" tool=${JSON.stringify(tool.name)} public_name=${JSON.stringify(tool.name)} status="published"`);
-    }
-  }
-  for (const item of report.tools) {
+  for (const item of report.disabled) {
     const identity = `server=${JSON.stringify(item.server)} prefix=${JSON.stringify(item.prefix)} tool=${JSON.stringify(item.tool)} public_name=${JSON.stringify(item.publicName)}`;
-    if (item.status === 'published') {
-      info(`tool exposure: ${identity} status="published"${item.synthetic ? ' synthetic=true' : ''}`);
-    } else if (item.reason.type === 'exact') {
+    if (item.reason.type === 'exact') {
       info(`tool disabled: ${identity} status="rejected" reason="blocked_tools exact match"`);
     } else {
       info(`tool disabled: ${identity} status="rejected" blocked_tool_substrings=${JSON.stringify(item.reason.value)}`);
     }
+  }
+  if (config.publishToolDirectory) {
+    info(`tool prefix: server="gateway" prefix="gateway" enabled=true found=2 rejected=0 published=2`);
+  }
+  if (hasBundledChildren()) {
+    info(`tool prefix: server="gateway" prefix="isolated" enabled=true found=${isolatedToolDefinitions.length} rejected=0 published=${isolatedToolDefinitions.length}`);
   }
   for (const item of report.prefixes) {
     info(`tool prefix: server=${JSON.stringify(item.server)} prefix=${JSON.stringify(item.prefix)} enabled=true found=${item.found} rejected=${item.rejected} published=${item.published}`);

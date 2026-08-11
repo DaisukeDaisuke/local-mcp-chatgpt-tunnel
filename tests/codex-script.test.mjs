@@ -116,6 +116,7 @@ test('codex-script check mode accepts a workspace with deny holes but still reje
   await writeFile(deniedSourcePath, 'export const hidden = 1;\n', 'utf8');
   const canonicalRoot = await realpath(root);
   const canonicalDenied = await realpath(denied);
+  const canonicalInvalidSourcePath = await realpath(invalidSourcePath);
   const isolationKey = 'codex-script-check-isolation-key-0123456789';
   const context = { roots: [canonicalRoot], base: canonicalRoot };
   const envelope = {
@@ -171,7 +172,7 @@ test('codex-script check mode accepts a workspace with deny holes but still reje
   assert.equal(checked.result.structuredContent.result.pass, 1);
   assert.equal(checked.result.structuredContent.result.fault, 1);
   assert.equal(checked.result.structuredContent.result.messages.length, 1);
-  assert.equal(checked.result.structuredContent.result.messages[0].filePath, invalidSourcePath);
+  assert.equal(checked.result.structuredContent.result.messages[0].filePath, canonicalInvalidSourcePath);
   assert.notEqual(checked.result.structuredContent.result.messages[0].exitCode, 0);
   assert.equal(typeof checked.result.structuredContent.result.messages[0].stderr, 'string');
   assert.equal(checked.result.structuredContent.result.messages.some((message) => message.filePath === sourcePath), false);
