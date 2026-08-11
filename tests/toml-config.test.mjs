@@ -207,7 +207,7 @@ test('gateway config reserves the delegated Codex sandbox marker', async () => {
   });
 });
 
-test('bundled codex-script delegates sandboxing to each tool execution', async () => {
+test('bundled codex-script is sandboxed once at MCP startup', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-codex-script-'));
   const path = join(directory, 'gateway.toml');
   const serverPath = resolve('mcp/codex-script/server.mjs');
@@ -224,8 +224,9 @@ test('bundled codex-script delegates sandboxing to each tool execution', async (
   ].join('\n'), 'utf8');
   const config = await loadGatewayConfig(path);
   assert.equal(config.servers[0].isBundled, true);
-  assert.equal(config.servers[0].sandboxDelegated, true);
+  assert.equal(config.servers[0].sandboxDelegated, false);
   assert.equal(config.servers[0].sandbox, 'elevated');
+  assert.equal(config.servers[0].cwd, cwd);
 });
 
 test('gateway keeps sandbox executable trust anchors outside writable roots', async () => {

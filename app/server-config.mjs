@@ -162,10 +162,11 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
   const args = stringArray(raw.args, `mcp_servers.${name}.args`);
   const cwd = absoluteFrom(base, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : '.', platform);
   const sandbox = normalizeSandbox(raw, name);
-  const sandboxDelegated = isCodexScriptServer(raw.command, args, cwd, platform);
-  if (sandboxDelegated && sandbox === 'never') {
+  const codexScriptServer = isCodexScriptServer(raw.command, args, cwd, platform);
+  if (codexScriptServer && sandbox === 'never') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for codex-script`);
   }
+  const sandboxDelegated = false;
   const command = sandbox === 'elevated'
     ? normalizeNativeExecutable(raw.command, `mcp_servers.${name}.command`, platform)
     : raw.command;
@@ -175,7 +176,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
   const allowedDirectories = absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`, platform);
   const allowedFiles = absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform);
   const sandboxReadOnlyDirectories = absolutePathArray(raw.sandbox_read_only_directories, `mcp_servers.${name}.sandbox_read_only_directories`, platform);
-  if (sandbox !== 'never' && !sandboxDelegated && !allowedDirectories.some((directory) => pathWithin(directory, cwd, platform))) {
+  if (sandbox !== 'never' && !allowedDirectories.some((directory) => pathWithin(directory, cwd, platform))) {
     throw new Error(`mcp_servers.${name}.cwd must be inside allowed_directories when sandbox is enabled`);
   }
   if (sandbox !== 'never' && allowedDirectories.some((directory) => pathWithin(directory, codexExecutable, platform))) {

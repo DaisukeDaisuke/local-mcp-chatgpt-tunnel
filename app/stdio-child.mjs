@@ -53,12 +53,6 @@ export class StdioMcpChild {
       ...(this.config.isBundled && this.config.gatewayIsolationKey
         ? { LOCAL_MCP_GATEWAY_ISOLATION_KEY: this.config.gatewayIsolationKey }
         : {}),
-      ...(this.config.sandboxDelegated && this.config.sandbox !== 'never'
-        ? {
-            LOCAL_MCP_CODEX_SANDBOX_MODE: this.config.sandbox,
-            LOCAL_MCP_CODEX_EXECUTABLE: this.config.codexExecutable
-          }
-        : {})
     };
     const childEnvironment = buildChildEnvironment({ ...env, ...policyEnvironment });
     if (this.config.sandbox && this.config.sandbox !== 'never' && !this.config.sandboxDelegated) {

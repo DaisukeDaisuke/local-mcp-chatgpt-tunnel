@@ -1,10 +1,9 @@
+import { spawn } from 'node:child_process';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildChildEnvironment } from '../../app/child-environment.mjs';
 import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
-import { CodexAppServerSandboxedProcess } from '../../app/codex-app-server.mjs';
-import { CodexWindowsSandboxedProcess } from '../../app/codex-windows-sandbox.mjs';
 import { normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 import { ToolPathPolicy } from '../../app/path-policy.mjs';
 
@@ -84,7 +83,8 @@ Usage:
 
 Runs one existing script with literal argv, or checks one existing source file, using the runtime selected at MCP startup.
 This server is intended to be launched from gateway.toml with sandbox = "elevated" or "unelevated".
-The gateway delegates that setting to a fresh Codex workspaceWrite sandbox for each run/check call.
+The gateway starts this MCP itself inside that Codex sandbox once.
+Each run/check starts only the fixed runtime as a child of the already-sandboxed MCP process.
 
 Options:
   --mode=run|check
@@ -325,21 +325,6 @@ async function rootsPayload() {
   return { roots, base, workingDirectory: base, disallowedPathGlobs: configuredDisallowedPathGlobs, policy: scope };
 }
 
-function sandboxModeForExecution() {
-  if (['elevated', 'unelevated'].includes(process.env.LOCAL_MCP_CODEX_SANDBOX_MODE)) {
-    return process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;
-  }
-  throw new Error('script/check tools require this MCP to be launched through gateway sandbox="elevated" or sandbox="unelevated"');
-}
-
-function codexExecutableForExecution() {
-  const value = process.env.LOCAL_MCP_CODEX_EXECUTABLE;
-  if (typeof value !== 'string' || value.length === 0 || !isAbsolute(value)) {
-    throw new Error('LOCAL_MCP_CODEX_EXECUTABLE must be an absolute path supplied by gateway codex_executable');
-  }
-  return value;
-}
-
 async function assertSandboxPolicyRepresentable(roots, base) {
   if (configuredDisallowedPathGlobs.length > 0) {
     throw new Error('codex-script cannot safely enforce disallowed_path_globs inside arbitrary-code sandbox roots; remove the glob deny rules and narrow allowed_directories instead');
@@ -352,54 +337,47 @@ async function assertSandboxPolicyRepresentable(roots, base) {
   }
 }
 
-async function runSandboxedCommand({ command, commandArgs, cwd, roots, timeoutMs, maxOutputBytes }) {
-  const sandboxMode = sandboxModeForExecution();
-  const codexExecutable = codexExecutableForExecution();
-  if (roots.some((root) => within(root, command))) {
-    throw new Error('--runtime-executable must resolve outside the signed writable roots');
-  }
-  if (roots.some((root) => within(root, codexExecutable))) {
-    throw new Error('codex_executable must be outside the signed writable roots');
+async function runSandboxedCommand({ command, commandArgs, cwd, timeoutMs, maxOutputBytes }) {
+  if (configuredAllowedDirectories.some((root) => within(root, command))) {
+    throw new Error('--runtime-executable must resolve outside configured writable roots');
   }
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
   let overflowError = null;
-  let sandboxed = null;
+  let child = null;
+  let timeout = null;
   const collect = (streamName, chunk) => {
     if (overflowError) return;
     const current = streamName === 'stdout' ? stdout : stderr;
-    const nextChunk = Buffer.from(String(chunk), 'utf8');
+    const nextChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
     if (current.length + nextChunk.length > maxOutputBytes) {
       overflowError = new Error(`${streamName} exceeded ${maxOutputBytes} bytes`);
-      if (sandboxed) void sandboxed.close().catch(() => {});
+      if (child && child.exitCode === null && !child.killed) child.kill();
       return;
     }
     const next = Buffer.concat([current, nextChunk]);
     if (streamName === 'stdout') stdout = next;
     else stderr = next;
   };
-  const SandboxedProcess = process.platform === 'win32'
-    ? CodexWindowsSandboxedProcess
-    : CodexAppServerSandboxedProcess;
-  sandboxed = new SandboxedProcess({
-    name: `codex-script-${runtime}`,
-    command,
-    args: commandArgs,
-    cwd,
-    sandbox: sandboxMode,
-    codexExecutable,
-    allowedDirectories: roots,
-    allowedFiles: [],
-    commandTimeoutMs: timeoutMs
-  }, {
-    env: buildChildEnvironment({}, environmentWithoutBundledIsolationKey()),
-    onStdout: (chunk) => collect('stdout', chunk),
-    onStderr: (chunk) => collect('stderr', chunk)
-  });
   try {
-    await sandboxed.start();
-    await sandboxed.closeStdin();
-    const exit = await sandboxed.waitForExit();
+    child = spawn(command, commandArgs, {
+      cwd,
+      env: buildChildEnvironment({}, environmentWithoutBundledIsolationKey()),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: false
+    });
+    child.stdout.on('data', (chunk) => collect('stdout', chunk));
+    child.stderr.on('data', (chunk) => collect('stderr', chunk));
+    const exit = await new Promise((resolveExit, rejectExit) => {
+      child.once('error', rejectExit);
+      child.once('exit', (exitCode, signal) => resolveExit({ exitCode, signal }));
+      timeout = setTimeout(() => {
+        if (child.exitCode !== null || child.killed) return;
+        child.kill();
+        rejectExit(new Error(`script/check timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
     if (overflowError) throw overflowError;
     return {
       exitCode: exit.exitCode,
@@ -411,12 +389,12 @@ async function runSandboxedCommand({ command, commandArgs, cwd, roots, timeoutMs
     if (overflowError) throw overflowError;
     throw error;
   } finally {
-    await sandboxed.close().catch(() => {});
+    if (timeout) clearTimeout(timeout);
+    if (child && child.exitCode === null && !child.killed) child.kill();
   }
 }
 
 async function runScript(args) {
-  sandboxModeForExecution();
   if (mode !== 'run') throw new Error('run_script is available only when this MCP is started with --mode=run');
   const base = await contextBase();
   const roots = await contextRoots();
@@ -437,7 +415,6 @@ async function runScript(args) {
     command: executable,
     commandArgs: [...runtimeSpec.argvPrefix(roots), scriptPath, ...argv],
     cwd,
-    roots,
     timeoutMs,
     maxOutputBytes
   });
@@ -453,7 +430,6 @@ async function runScript(args) {
 }
 
 async function checkFile(args) {
-  sandboxModeForExecution();
   if (mode !== 'check') throw new Error('check_file is available only when this MCP is started with --mode=check');
   const base = await contextBase();
   const roots = await contextRoots();
@@ -473,7 +449,6 @@ async function checkFile(args) {
     command: executable,
     commandArgs: [...checkSpec.argvPrefix(roots), filePath],
     cwd,
-    roots,
     timeoutMs,
     maxOutputBytes
   });
@@ -517,7 +492,7 @@ export function createServer() {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
         serverInfo: { name: 'codex-script', version: SERVER_VERSION },
-        instructions: mode === 'check' ? `Strict ${runtime} checker. Requires gateway sandbox=elevated or sandbox=unelevated; each check runs in a fresh Codex workspaceWrite sandbox rooted at the signed isolation directories.` : `Strict ${runtime} runner. Requires gateway sandbox=elevated or sandbox=unelevated; each script runs in a fresh Codex workspaceWrite sandbox rooted at the signed isolation directories.`
+        instructions: mode === 'check' ? `Strict ${runtime} checker. Requires gateway sandbox=elevated or sandbox=unelevated; the MCP itself runs inside that Codex sandbox and each check inherits the same sandbox as a direct child process.` : `Strict ${runtime} runner. Requires gateway sandbox=elevated or sandbox=unelevated; the MCP itself runs inside that Codex sandbox and each script inherits the same sandbox as a direct child process.`
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
