@@ -21,6 +21,20 @@ test('TOML subset parses Codex-style MCP tables, arrays, and env', () => {
   assert.equal(parsed.mcp_servers.demo.env.DEMO, 'value');
 });
 
+test('TOML comments do not participate in string parsing', () => {
+  const parsed = parseToml([
+    'private_use_only = true',
+    "# The gateway's comments may contain apostrophes.",
+    'publish_tool_directory = false # trailing comment',
+    'tool_annotations_path = "tool-#annotations.toml" # hash inside a string is data'
+  ].join('\n'));
+  assert.deepEqual(parsed, {
+    private_use_only: true,
+    publish_tool_directory: false,
+    tool_annotations_path: 'tool-#annotations.toml'
+  });
+});
+
 test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entries', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-toml-'));
   const path = join(directory, 'gateway.toml');
@@ -28,11 +42,14 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     'private_use_only = true',
     'publish_tool_directory = true',
     '[mcp_servers.alpha]',
-    'command = "node"',
+    "command = 'C:\\runtime\\node.exe'",
     "args = ['alpha.mjs']",
+    "cwd = 'C:\\work\\project'",
     'enabled = true',
     'prefix = "a"',
     'annotation_config = false',
+    'sandbox = "elevated"',
+    "codex_executable = 'C:\\runtime\\codex.exe'",
     'dangerous_allow_gateway_config_access = true',
     'startup_timeout_sec = 5',
     'tool_timeout_sec = 15',
@@ -42,6 +59,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     'blocked_tool_substrings = ["script", "shell"]',
     "allowed_directories = ['C:\\work\\project']",
     "allowed_files = ['C:\\Users\\owner\\Downloads\\upload.png']",
+    "sandbox_read_only_directories = ['C:\\tools\\alpha-mcp']",
     "disallowed_directories = ['C:\\work\\project\\private']",
     "disallowed_files = ['C:\\work\\project\\.env']",
     "disallowed_path_globs = ['**.ssh**']",
@@ -60,6 +78,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.equal(config.servers[0].name, 'alpha');
   assert.equal(config.servers[0].prefix, 'a');
   assert.equal(config.servers[0].manageAnnotations, false);
+  assert.equal(config.servers[0].sandbox, 'elevated');
   assert.equal(config.servers[0].dangerousAllowGatewayConfigAccess, true);
   assert.ok(config.servers[0].protectedGatewayConfigPaths.includes(config.configPath));
   assert.ok(config.servers[0].protectedGatewayConfigPaths.includes(config.canonicalConfigPath));
@@ -73,9 +92,177 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].blockedToolSubstrings, ['script', 'shell']);
   assert.deepEqual(config.servers[0].allowedDirectories, ['C:\\work\\project']);
   assert.deepEqual(config.servers[0].allowedFiles, ['C:\\Users\\owner\\Downloads\\upload.png']);
+  assert.deepEqual(config.servers[0].sandboxReadOnlyDirectories, ['C:\\tools\\alpha-mcp']);
   assert.deepEqual(config.servers[0].disallowedDirectories, ['C:\\work\\project\\private']);
   assert.deepEqual(config.servers[0].disallowedFiles, ['C:\\work\\project\\.env']);
   assert.deepEqual(config.servers[0].disallowedPathGlobs, ['**.ssh**']);
+});
+
+test('gateway config rejects unsupported MCP sandbox modes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-mode-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'sandbox = "dangerFullAccess"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.sandbox must be one of: never, elevated, unelevated');
+    return true;
+  });
+});
+
+test('gateway requires absolute command paths only for elevated sandbox mode', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-executables-'));
+  const commandPath = join(directory, 'relative-command.toml');
+  await writeFile(commandPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    `cwd = '${directory}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${join(directory, 'codex.exe')}'`,
+    `allowed_directories = ['${directory}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(commandPath), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.command must be an absolute path');
+    return true;
+  });
+
+  const unelevatedPath = join(directory, 'unelevated-command.toml');
+  await writeFile(unelevatedPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    "cwd = 'C:\\work\\project'",
+    'sandbox = "unelevated"',
+    "codex_executable = 'C:\\tools\\codex.cmd'",
+    "allowed_directories = ['C:\\work\\project']"
+  ].join('\n'), 'utf8');
+  const unelevated = await loadGatewayConfig(unelevatedPath, { platform: 'win32' });
+  assert.equal(unelevated.servers[0].command, 'node');
+  assert.equal(unelevated.servers[0].codexExecutable, 'C:\\tools\\codex.cmd');
+
+  const codexPath = join(directory, 'relative-codex.toml');
+  await writeFile(codexPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    `command = '${process.execPath}'`,
+    `cwd = '${directory}'`,
+    'sandbox = "elevated"',
+    'codex_executable = "codex.exe"',
+    `allowed_directories = ['${directory}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(codexPath), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.codex_executable must be an absolute path');
+    return true;
+  });
+});
+
+test('gateway requires sandboxed MCP cwd to stay inside its writable allowlist', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-cwd-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    `command = '${join(directory, 'node.exe')}'`,
+    `cwd = '${directory}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${join(directory, 'codex.exe')}'`,
+    `allowed_directories = ['${join(directory, 'workspace')}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.cwd must be inside allowed_directories when sandbox is enabled');
+    return true;
+  });
+});
+
+test('gateway config reserves the delegated Codex sandbox marker', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-marker-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    '[mcp_servers.alpha.env]',
+    'LOCAL_MCP_CODEX_SANDBOX_MODE = "elevated"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.env may not override reserved path-policy variable LOCAL_MCP_CODEX_SANDBOX_MODE');
+    return true;
+  });
+
+  const executablePath = join(directory, 'gateway-executable.toml');
+  await writeFile(executablePath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    '[mcp_servers.alpha.env]',
+    "LOCAL_MCP_CODEX_EXECUTABLE = 'C:\\fake\\codex.exe'"
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(executablePath), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.env may not override reserved path-policy variable LOCAL_MCP_CODEX_EXECUTABLE');
+    return true;
+  });
+});
+
+test('bundled codex-script is sandboxed once at MCP startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codex-script-'));
+  const path = join(directory, 'gateway.toml');
+  const serverPath = resolve('mcp/codex-script/server.mjs');
+  const cwd = join(directory, 'workspace');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.script]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--mode=run', '--runtime=mjs', '--runtime-executable=${process.execPath}']`,
+    `cwd = '${cwd}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${join(directory, 'codex.exe')}'`,
+    `allowed_directories = ['${cwd}']`
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(path);
+  assert.equal(config.servers[0].isBundled, true);
+  assert.equal(config.servers[0].sandboxDelegated, false);
+  assert.equal(config.servers[0].sandbox, 'elevated');
+  assert.equal(config.servers[0].cwd, cwd);
+});
+
+test('gateway keeps sandbox executable trust anchors outside writable roots', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-trust-anchor-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    `command = '${join(directory, 'node.exe')}'`,
+    `cwd = '${directory}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${join(tmpdir(), 'codex.exe')}'`,
+    `allowed_directories = ['${directory}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.command must be outside allowed_directories so the sandboxed MCP cannot modify its executable');
+    return true;
+  });
+});
+
+test('gateway refuses codex-script without a Codex sandbox mode', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codex-script-unsandboxed-'));
+  const path = join(directory, 'gateway.toml');
+  const serverPath = resolve('mcp/codex-script/server.mjs');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.script]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--mode=run', '--runtime=mjs', '--runtime-executable=${process.execPath}']`,
+    `cwd = '${resolve('.')}'`,
+    'sandbox = "never"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), (error) => {
+    assert.equal(error.message, 'mcp_servers.script.sandbox must be elevated or unelevated for codex-script');
+    return true;
+  });
 });
 
 test('gateway marks only Node-launched bundled server paths as bundled', async () => {

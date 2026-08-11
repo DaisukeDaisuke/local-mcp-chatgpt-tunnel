@@ -1,3 +1,7 @@
+# Codex Windows elevated sandbox example.
+# Install Codex CLI and run `codex sandbox setup --elevated --current-user`
+# from an Administrator PowerShell before using this template.
+# Replace every absolute placeholder, including node.exe and codex.cmd.
 private_use_only = true
 # Publishes gateway__list_available_tools. It reads only the gateway's existing in-memory tool registry.
 publish_tool_directory = false
@@ -11,10 +15,12 @@ tool_annotations_path = "tool-annotations.toml"
 
 # safe-files uses cwd as its workspace root. The server script path must therefore be absolute.
 [mcp_servers.files]
-command = "node"
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\safe-files\server.mjs']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = true
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "files"
 annotation_config = false
 # Default false. Only path arguments are canonicalized, then reads and edits of the loaded gateway config are denied.
@@ -37,10 +43,12 @@ disallowed_path_globs = ['**.ssh**']
 # These flags do not disable branch, checkout, worktree, status, diff, show, staging, or commit tools.
 # Branch deletion and forced worktree removal are not exposed.
 [mcp_servers.git]
-command = "node"
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "git"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -59,10 +67,12 @@ disallowed_path_globs = ['**.ssh**']
 # Repeat --repository=OWNER/REPO to allow multiple repositories. No other repository can be selected.
 # cwd is mandatory here even though every GitHub repository argument is allowlisted by --repository.
 [mcp_servers.gh_workflow]
-command = "node"
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs', '--repository=DaisukeDaisuke/desmume_webassembly']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "gh_workflow"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -77,10 +87,12 @@ disallowed_path_globs = ['**.ssh**']
 
 # Read-only image transfer for ChatGPT vision. Enable it only after replacing every dummy path.
 [mcp_servers.images]
-command = "node"
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\safe-images\server.mjs']
 cwd = 'C:\Users\owner\Downloads'
 enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "images"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -96,10 +108,12 @@ SAFE_IMAGES_MAX_PIXELS = "52428800"
 
 # Read-only ZIP download. Keep this disabled until its cwd and allowlist are replaced with a dedicated source-export root.
 [mcp_servers.downloads]
-command = "node"
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\safe-download\server.mjs']
 cwd = 'C:\ABSOLUTE\PATH\TO\DOWNLOADABLE\SOURCE'
 enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "downloads"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -119,7 +133,8 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # Path-looking tool arguments are denied unless they match allowed_directories
 # or allowed_files. Directory entries include descendants. File entries are exact.
 # `enabled = false` keeps an entry without starting it.
-# `sandbox = "elevated"` or `sandbox = "unelevated"` starts that MCP through Codex app-server workspaceWrite sandbox.
+# `sandbox = "elevated"` or `sandbox = "unelevated"` starts that MCP inside a Codex OS sandbox.
+# On Windows, Gateway uses Codex's direct sandbox stdio path so long-running stdio MCPs remain connected.
 # `sandbox = "never"` keeps the old direct stdio behavior. Do not enable arbitrary script runners with sandbox="never".
 # `sandbox = "elevated"` requires an absolute native MCP command path; `unelevated` and `never` keep PATH command compatibility.
 # `codex_executable` is always an explicit absolute path. On Windows, npm-installed `codex.cmd` is supported and is launched through cmd.exe.
@@ -159,3 +174,141 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 #
 # [mcp_servers.my_server.env]
 # EXAMPLE_CONFIG = 'C:\path\to\config.json'
+
+# Strict allowlisted script runners. Repeat the same bundled MCP with a different --runtime
+# to expose independent tools such as mjs_script__run_script, python_script__run_script,
+# php_script__run_script, and nodejs_script__run_script.
+# These entries must use sandbox="elevated" or sandbox="unelevated" for execution.
+# The codex-script MCP itself runs inside that Codex sandbox, and run/check starts only
+# the fixed runtime as a child process inside the already-restricted sandbox. It does not
+# create a second, more-privileged Codex sandbox for each call.
+# Arbitrary code cannot safely honor deny holes inside a writable root, so keep
+# disallowed_directories, disallowed_files, and disallowed_path_globs empty here;
+# narrow or split allowed_directories instead.
+[mcp_servers.mjs_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=mjs', '--runtime-executable=C:\ABSOLUTE\PATH\TO\node.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "mjs_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.nodejs_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=nodejs', '--runtime-executable=C:\ABSOLUTE\PATH\TO\node.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "nodejs_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.python_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=python', '--runtime-executable=C:\ABSOLUTE\PATH\TO\python.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "python_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.php_script]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=php', '--runtime-executable=C:\ABSOLUTE\PATH\TO\php.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "php_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+# Strict allowlisted checkers. These expose check_file only and never run npm scripts,
+# package managers, shell commands, or arbitrary executables.
+[mcp_servers.nodejs_check]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=check', '--runtime=nodejs', '--runtime-executable=C:\ABSOLUTE\PATH\TO\node.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "nodejs_check"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.python_check]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=check', '--runtime=python', '--runtime-executable=C:\ABSOLUTE\PATH\TO\python.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "python_check"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.php_check]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=check', '--runtime=php', '--runtime-executable=C:\ABSOLUTE\PATH\TO\php.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "php_check"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = []

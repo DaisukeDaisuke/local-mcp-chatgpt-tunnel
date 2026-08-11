@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { isAbsolute } from 'node:path';
+import { realpath, stat } from 'node:fs/promises';
+import { isAbsolute, relative, sep } from 'node:path';
 import {
   ACCESS_SCOPE_TOOL_NAME,
   accessScopeMcpResult,
@@ -36,6 +37,7 @@ import {
   toolDirectoryMcpResult
 } from './tool-directory.mjs';
 import { assertNotElevatedWindows } from './windows-integrity.mjs';
+import { assertSandboxPathPolicyCompatible } from './sandbox-path-policy.mjs';
 
 scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
@@ -43,6 +45,17 @@ await assertNotElevatedWindows();
 const MAX_TOOL_NAME = 64;
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
+
+function pathInside(directory, candidate) {
+  const path = relative(directory, candidate);
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+async function canonicalExecutable(path, label) {
+  const actual = await realpath(path);
+  if (!(await stat(actual)).isFile()) throw new Error(`${label} must point to a regular file`);
+  return actual;
+}
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const warn = (message) => process.stderr.write(`[gateway] ${message}\n`);
 const info = (message) => process.stderr.write(`[gateway] INFO ${message}\n`);
@@ -272,7 +285,22 @@ async function startChild(childConfig) {
       disallowedPathGlobs: childConfig.disallowedPathGlobs
     });
     try {
-      await child.pathPolicy.allowed();
+      const allowedPolicy = await child.pathPolicy.allowed();
+      assertSandboxPathPolicyCompatible(childConfig, allowedPolicy);
+      if (childConfig.sandbox && childConfig.sandbox !== 'never') {
+        childConfig.allowedDirectories = allowedPolicy.directories.map((entry) => entry.canonical);
+        childConfig.allowedFiles = allowedPolicy.files.map((entry) => entry.canonical);
+        childConfig.codexExecutable = await canonicalExecutable(childConfig.codexExecutable, `${childConfig.name} codex_executable`);
+        if (childConfig.sandbox === 'elevated') {
+          childConfig.command = await canonicalExecutable(childConfig.command, `${childConfig.name} command`);
+          if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.command))) {
+            throw new Error(`${childConfig.name}: command resolves inside a writable sandbox root`);
+          }
+        }
+        if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.codexExecutable))) {
+          throw new Error(`${childConfig.name}: codex_executable resolves inside a writable sandbox root`);
+        }
+      }
       await child.start();
       if (childConfig.manageAnnotations) {
         await syncDiscoveredToolAnnotations(toolAnnotationConfig, childConfig.prefix, child.tools.map((tool) => tool.name));

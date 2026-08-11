@@ -827,15 +827,49 @@ async function fileInfo(args) {
 
 async function atomicWriteBytes(path, bytes, overwrite) {
   const { path: destination } = await resolveWritable(path);
-  if (!overwrite) {
-    try {
-      await access(destination, constants.F_OK);
-      throw new Error('Destination already exists; set overwrite=true to replace it');
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
+  let destinationExists = false;
+  try {
+    await access(destination, constants.F_OK);
+    destinationExists = true;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
   }
-  const temporary = join(dirname(destination), `.${randomUUID()}.tmp`);
+  if (destinationExists && !overwrite) throw new Error('Destination already exists; set overwrite=true to replace it');
+
+  if (destinationExists) {
+    const original = await readFile(destination);
+    const handle = await open(destination, 'r+');
+    const writeAll = async (payload) => {
+      await handle.truncate(0);
+      let offset = 0;
+      while (offset < payload.length) {
+        const { bytesWritten } = await handle.write(payload, offset, payload.length - offset, offset);
+        if (bytesWritten <= 0) throw new Error('Failed to make progress while writing file');
+        offset += bytesWritten;
+      }
+      await handle.truncate(payload.length);
+      await handle.sync();
+    };
+    try {
+      await writeAll(bytes);
+    } catch (error) {
+      try {
+        await writeAll(original);
+      } catch (rollbackError) {
+        const failure = new Error(`File update failed and in-memory rollback also failed: ${error instanceof Error ? error.message : String(error)}; rollback: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        failure.cause = error;
+        throw failure;
+      }
+      throw error;
+    } finally {
+      await handle.close();
+    }
+    return destination;
+  }
+
+  // Do not use dot-prefixed temporary names. Codex's Windows sandbox can reject
+  // operations in a directory after a hidden/dot-prefixed sibling is created.
+  const temporary = join(dirname(destination), `local-mcp-write-${randomUUID()}-tmp`);
   const handle = await open(temporary, 'wx', 0o600);
   try {
     await handle.writeFile(bytes);
@@ -843,25 +877,10 @@ async function atomicWriteBytes(path, bytes, overwrite) {
   } finally {
     await handle.close();
   }
-  let backup = null;
   try {
-    if (overwrite) {
-      try {
-        await access(destination, constants.F_OK);
-        backup = join(dirname(destination), `.${randomUUID()}.bak`);
-        await rename(destination, backup);
-      } catch (error) {
-        if (error?.code !== 'ENOENT') throw error;
-      }
-    }
     await rename(temporary, destination);
-    if (backup) await rm(backup, { force: true });
   } catch (error) {
     await rm(temporary, { force: true });
-    if (backup) {
-      await rm(destination, { force: true }).catch(() => {});
-      await rename(backup, destination).catch(() => {});
-    }
     throw error;
   }
   return destination;

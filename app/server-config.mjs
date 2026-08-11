@@ -1,18 +1,22 @@
 import { readFile, realpath } from 'node:fs/promises';
-import { basename, dirname, posix, resolve, win32 } from 'node:path';
+import { dirname, posix, resolve, win32 } from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { normalizeDisallowedPathGlobs } from './path-glob.mjs';
 import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const CODEX_SCRIPT_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codex-script', 'server.mjs');
 const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-files', 'server.mjs'],
   ['mcp', 'safe-images', 'server.mjs'],
   ['mcp', 'safe-download', 'server.mjs'],
   ['mcp', 'gitmcp', 'server.mjs'],
-  ['mcp', 'gh-workflow', 'server.mjs']
+  ['mcp', 'gh-workflow', 'server.mjs'],
+  ['mcp', 'codex-script', 'server.mjs']
 ].map((parts) => resolve(repositoryRoot, ...parts));
+
+const SERVER_SANDBOX_MODES = new Set(['never', 'elevated', 'unelevated']);
 
 const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_ALLOWED_DIRECTORIES',
@@ -20,7 +24,9 @@ const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_DISALLOWED_DIRECTORIES',
   'LOCAL_MCP_DISALLOWED_FILES',
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS',
-  'LOCAL_MCP_GATEWAY_ISOLATION_KEY'
+  'LOCAL_MCP_GATEWAY_ISOLATION_KEY',
+  'LOCAL_MCP_CODEX_SANDBOX_MODE',
+  'LOCAL_MCP_CODEX_EXECUTABLE'
 ]);
 
 function platformPath(platform = process.platform) {
@@ -70,12 +76,51 @@ function comparablePath(value, platform = process.platform) {
   return platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
+function pathWithin(directory, candidate, platform = process.platform) {
+  const api = platformPath(platform);
+  const path = api.relative(directory, candidate);
+  return path === '' || (path !== '..' && !path.startsWith(`..${api.sep}`) && !api.isAbsolute(path));
+}
+
 function isBundledServer(command, args, cwd, platform = process.platform) {
   if (platform !== process.platform || args.length === 0) return false;
-  const executable = basename(command).toLowerCase();
+  const executable = platformPath(platform).basename(command).toLowerCase();
   if (executable !== 'node' && executable !== 'node.exe') return false;
   const candidate = comparablePath(absoluteFrom(cwd, args[0], platform), platform);
   return BUNDLED_SERVER_PATHS.some((path) => comparablePath(path, platform) === candidate);
+}
+
+function isCodexScriptServer(command, args, cwd, platform = process.platform) {
+  if (platform !== process.platform || args.length === 0) return false;
+  const executable = platformPath(platform).basename(command).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe') return false;
+  return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(CODEX_SCRIPT_SERVER_PATH, platform);
+}
+
+function normalizeSandbox(raw, serverName) {
+  const value = raw.sandbox ?? 'never';
+  if (typeof value !== 'string' || !SERVER_SANDBOX_MODES.has(value)) {
+    throw new Error(`mcp_servers.${serverName}.sandbox must be one of: never, elevated, unelevated`);
+  }
+  return value;
+}
+
+function normalizeAbsoluteExecutable(value, name, platform = process.platform) {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`${name} must be a non-empty absolute path`);
+  if (!platformPath(platform).isAbsolute(value)) throw new Error(`${name} must be an absolute path`);
+  return value;
+}
+
+function normalizeNativeExecutable(value, name, platform = process.platform) {
+  const executable = normalizeAbsoluteExecutable(value, name, platform);
+  if (platform === 'win32' && !/\.exe$/i.test(executable)) {
+    throw new Error(`${name} must point to a native .exe on Windows`);
+  }
+  return executable;
+}
+
+function normalizeCodexExecutable(value, name, platform = process.platform) {
+  return normalizeAbsoluteExecutable(value, name, platform);
 }
 
 function normalizeLifecycle(raw, key, serverName) {
@@ -116,13 +161,40 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
   }
   const args = stringArray(raw.args, `mcp_servers.${name}.args`);
   const cwd = absoluteFrom(base, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : '.', platform);
+  const sandbox = normalizeSandbox(raw, name);
+  const codexScriptServer = isCodexScriptServer(raw.command, args, cwd, platform);
+  if (codexScriptServer && sandbox === 'never') {
+    throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for codex-script`);
+  }
+  const sandboxDelegated = false;
+  const command = sandbox === 'elevated'
+    ? normalizeNativeExecutable(raw.command, `mcp_servers.${name}.command`, platform)
+    : raw.command;
+  const codexExecutable = sandbox !== 'never'
+    ? normalizeCodexExecutable(raw.codex_executable, `mcp_servers.${name}.codex_executable`, platform)
+    : undefined;
+  const allowedDirectories = absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`, platform);
+  const allowedFiles = absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform);
+  const sandboxReadOnlyDirectories = absolutePathArray(raw.sandbox_read_only_directories, `mcp_servers.${name}.sandbox_read_only_directories`, platform);
+  if (sandbox !== 'never' && !allowedDirectories.some((directory) => pathWithin(directory, cwd, platform))) {
+    throw new Error(`mcp_servers.${name}.cwd must be inside allowed_directories when sandbox is enabled`);
+  }
+  if (sandbox !== 'never' && allowedDirectories.some((directory) => pathWithin(directory, codexExecutable, platform))) {
+    throw new Error(`mcp_servers.${name}.codex_executable must be outside allowed_directories so sandboxed code cannot modify it`);
+  }
+  if (sandbox === 'elevated' && allowedDirectories.some((directory) => pathWithin(directory, command, platform))) {
+    throw new Error(`mcp_servers.${name}.command must be outside allowed_directories so the sandboxed MCP cannot modify its executable`);
+  }
   return {
     name,
     prefix: typeof raw.prefix === 'string' && raw.prefix ? raw.prefix : name,
-    command: raw.command,
+    command,
     args,
     cwd,
     isBundled: isBundledServer(raw.command, args, cwd, platform),
+    sandbox,
+    sandboxDelegated,
+    codexExecutable,
     env,
     requestTimeoutMs: Math.round(timeoutSeconds * 1000),
     startupTimeoutMs: Math.round(startupTimeoutSeconds * 1000),
@@ -133,8 +205,9 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
     stopAfter: normalizeLifecycle(raw, 'stop_after', name),
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
-    allowedDirectories: absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`, platform),
-    allowedFiles: absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform),
+    allowedDirectories,
+    allowedFiles,
+    sandboxReadOnlyDirectories,
     disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`, platform),
     disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform),
     disallowedPathGlobs: normalizeDisallowedPathGlobs(raw.disallowed_path_globs, `mcp_servers.${name}.disallowed_path_globs`),
