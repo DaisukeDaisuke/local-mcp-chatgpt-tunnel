@@ -285,7 +285,16 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
   const protectedGatewayConfigPaths = [...new Set([resolvedConfigPath, canonicalConfigPath])];
   const servers = [];
   const disabledServerNames = [];
+  const disabledServers = [];
   for (const [name, server] of Object.entries(raw.mcp_servers)) {
+    if (server && typeof server === 'object' && !Array.isArray(server) && server.enabled === false) {
+      disabledServerNames.push(name);
+      disabledServers.push({
+        name,
+        prefix: typeof server.prefix === 'string' && server.prefix ? server.prefix : name
+      });
+      continue;
+    }
     const normalized = normalizeServer(
       name,
       server,
@@ -306,7 +315,8 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
     enableLoggingFiles: raw['enable-logging-files'] === true,
     gatewayLogsDirectory,
     servers,
-    disabledServerNames
+    disabledServerNames,
+    disabledServers
   };
 }
 

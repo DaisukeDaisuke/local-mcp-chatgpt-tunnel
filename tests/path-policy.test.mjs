@@ -78,6 +78,23 @@ test('disallowed paths override allowed directories', async () => {
   await assert.rejects(policy.assertToolArguments('read', { path: 'private\\secret.txt' }), /denied by disallowed/);
   await assert.rejects(policy.assertToolArguments('read', { path: '.env' }), /denied by disallowed/);
 });
+
+test('deny entries outside every allowed root are irrelevant instead of invalidating the policy', async () => {
+  const policy = new ToolPathPolicy({
+    serverName: 'workflow',
+    platform: 'win32',
+    cwd: 'C:\\work\\project',
+    allowedDirectories: ['C:\\work\\project'],
+    allowedFiles: [],
+    disallowedDirectories: ['C:\\other\\private'],
+    disallowedFiles: ['C:\\other\\.env']
+  });
+  const allowed = await policy.allowed();
+  assert.deepEqual(allowed.disallowedDirectories, []);
+  assert.deepEqual(allowed.disallowedFiles, []);
+  await assert.doesNotReject(policy.assertToolArguments('read', { path: 'src\\index.js' }));
+  await assert.rejects(policy.assertToolArguments('read', { path: 'C:\\other\\private\\secret.txt' }), /outside allowed_directories/);
+});
 for (const platform of ['linux', 'darwin']) {
   test(`path policy uses POSIX path rules on ${platform}`, async () => {
     const policy = new ToolPathPolicy({

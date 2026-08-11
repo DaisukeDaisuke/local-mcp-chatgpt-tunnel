@@ -163,7 +163,10 @@ process.stdin.on('data', (chunk) => {
     'enabled = true',
     'prefix = "demo"',
     'blocked_tools = ["dangerous"]',
-    'blocked_tool_substrings = ["script", "shell"]'
+    'blocked_tool_substrings = ["script", "shell"]',
+    '[mcp_servers.offline]',
+    'enabled = false',
+    'prefix = "offline"'
   ].join('\n'), 'utf8');
   const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
     cwd: resolve('.'),
@@ -196,6 +199,9 @@ process.stdin.on('data', (chunk) => {
   assert.match(log, /tool="SCRIPT_debug".*blocked_tool_substrings="script"/);
   assert.match(log, /tool="shell_exec".*blocked_tool_substrings="shell"/);
   assert.match(log, /tool="dangerous".*blocked_tools exact match/);
+  assert.match(log, /INFO tool exposure: server="demo" prefix="demo" tool="plain" public_name="demo__plain" status="published"/);
+  assert.match(log, /INFO tool prefix: server="demo" prefix="demo" enabled=true found=5 rejected=4 published=2/);
+  assert.match(log, /INFO tool prefix disabled: server="offline" prefix="offline" enabled=false reason="enabled=false"/);
 });
 
 gatewayIntegrationTest('gateway logs public tool name and received arguments before bundled isolation metadata is injected', async (t) => {
@@ -770,6 +776,7 @@ process.stdin.on('data', (chunk) => {
   const listed = await nextLine(child.stdout);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
     'gateway__list_available_tools',
+    'gateway__get_prefix_list',
     'demo__plain',
     'demo__get_gateway_access_scope'
   ]);
@@ -794,13 +801,23 @@ process.stdin.on('data', (chunk) => {
   });
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'gateway__get_prefix_list', arguments: {}
+  } })}\n`);
+  const prefixes = await nextLine(child.stdout);
+  assert.deepEqual(prefixes.result.structuredContent, {
+    prefixes: ['demo', 'gateway'],
+    prefixCount: 2
+  });
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: {
     name: 'gateway__list_available_tools', arguments: { prefix: 'no-such-prefix' }
   } })}\n`);
   const fallback = await nextLine(child.stdout);
-  assert.equal(fallback.result.structuredContent.availableToolCount, 3);
+  assert.equal(fallback.result.structuredContent.availableToolCount, 4);
   assert.deepEqual(fallback.result.structuredContent.tools.map((tool) => tool.name), [
     'demo__get_gateway_access_scope',
     'demo__plain',
+    'gateway__get_prefix_list',
     'gateway__list_available_tools'
   ]);
   assert.equal(fallback.result.structuredContent.tools[0].inputSchema, undefined);

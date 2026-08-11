@@ -218,21 +218,22 @@ export class ToolPathPolicy {
       normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files', this.platform),
       normalizeAllowedEntries(this.protectedFilesInput, this.cwd, 'protected_files', this.platform)
     ]).then(([directories, files, disallowedDirectories, disallowedFiles, protectedFiles]) => {
-      for (const entry of disallowedDirectories) {
-        const covered = directories.some((allowed) => allowed.style === entry.style
-          && isWithin(allowed.style, allowed.canonical, entry.canonical));
-        if (!covered) throw new Error(`disallowed_directories entry is not inside allowed_directories: ${entry.lexical}`);
-      }
-      for (const entry of disallowedFiles) {
+      const relevantDisallowedDirectories = disallowedDirectories.filter((entry) => directories.some((allowed) => allowed.style === entry.style
+        && isWithin(allowed.style, allowed.canonical, entry.canonical)));
+      const relevantDisallowedFiles = disallowedFiles.filter((entry) => {
         const coveredByDirectory = directories.some((allowed) => allowed.style === entry.style
           && isWithin(allowed.style, allowed.canonical, entry.canonical));
         const coveredByFile = files.some((allowed) => allowed.style === entry.style
           && comparable(allowed.style, allowed.canonical) === comparable(entry.style, entry.canonical));
-        if (!coveredByDirectory && !coveredByFile) {
-          throw new Error(`disallowed_files entry is not inside allowed_directories or allowed_files: ${entry.lexical}`);
-        }
-      }
-      return { directories, files, disallowedDirectories, disallowedFiles, protectedFiles };
+        return coveredByDirectory || coveredByFile;
+      });
+      return {
+        directories,
+        files,
+        disallowedDirectories: relevantDisallowedDirectories,
+        disallowedFiles: relevantDisallowedFiles,
+        protectedFiles
+      };
     });
     return this.allowedPromise;
   }

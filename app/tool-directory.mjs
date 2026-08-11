@@ -1,4 +1,5 @@
 export const TOOL_DIRECTORY_NAME = 'gateway__list_available_tools';
+export const PREFIX_LIST_NAME = 'gateway__get_prefix_list';
 
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
@@ -47,6 +48,34 @@ export const toolDirectoryDefinition = {
   }
 };
 
+export const prefixListDefinition = {
+  name: PREFIX_LIST_NAME,
+  description: 'List currently active public tool prefixes.',
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      prefixes: {
+        type: 'array',
+        items: { type: 'string' }
+      },
+      prefixCount: { type: 'integer', minimum: 0 }
+    },
+    required: ['prefixes', 'prefixCount'],
+    additionalProperties: false
+  }
+};
+
 const summarizeTool = (tool) => ({
   name: tool.name,
   description: typeof tool.description === 'string' ? tool.description : ''
@@ -69,6 +98,19 @@ export function createToolDirectoryPayload({ tools, prefix, enabledProxyCount, r
 }
 
 export function toolDirectoryMcpResult(payload) {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(payload) }],
+    structuredContent: payload,
+    isError: false
+  };
+}
+
+export function createPrefixListPayload(prefixes) {
+  const unique = [...new Set(prefixes)].sort((left, right) => left.localeCompare(right));
+  return { prefixes: unique, prefixCount: unique.length };
+}
+
+export function prefixListMcpResult(payload) {
   return {
     content: [{ type: 'text', text: JSON.stringify(payload) }],
     structuredContent: payload,

@@ -592,7 +592,7 @@ Gatewayは起動時に内蔵MCPごとのランダム鍵を生成し、正規化�
 ### 13 外部MCPのtool annotationsを設定する
 外部MCPを起動し、ChatGPT側でカスタムアプリを更新して初期ハンドシェイクが完了すると、`config\tool-annotations.toml`が生成または更新されます。<br>
 生成後、このファイルをAIに提示し、各MCPとツールの実際の動作に合わせて、読み取り専用か、状態を変更するか、破壊的か、再実行可能か、外部へ接続するかを適切に設定させてください。<br>
-AIには最初に`gateway__list_available_tools`を呼び出させ、現在公開されているツールの完全な名前空間付きツール名と説明を確認させます。対象MCPのprefixが不明な場合は引数を省略し、既知の場合はprefixを指定して対象を絞ります。<br>
+AIには最初に`gateway__get_prefix_list`で現在有効なprefixを確認させ、対象prefixを`gateway__list_available_tools`へ渡して、現在公開されているツールの完全な名前空間付きツール名と説明を確認させます。<br>
 `gateway__list_available_tools`が返すのはツール名と概要であるため、それだけで分類を決めず、AIが利用可能な実際のツール定義も確認し、入力スキーマにある引数名、型、必須項目、既定値、指定可能なパスやURL、実行時の副作用を調査したうえで分類案を作成させてください。<br>
 すべてのツールを一律に同じ分類へ変更せず、ツールごとの説明、実際の引数、動作、ローカル状態への変更、外部通信の有無を確認して設定します。<br>
 > [!IMPORTANT]
@@ -628,15 +628,15 @@ https://azukiazusa.dev/blog/mcp-tool-annotations/ <br>
 - `config/gateway.toml`設定ファイル、`tunnel-client.exe`のログをChatGPTに丸投げしてください。
 - それでも解決しない場合、変更を保存してからパソコンを再起動し、新規チャットで始めてください。
 ### 15.2 推奨カスタム指示
-`gateway__list_available_tools`を使用するには、`config/gateway.toml`のトップレベルで次を有効にし、Tunnelを再起動してからChatGPT側のカスタムアプリを更新します。<br>
+`gateway__get_prefix_list`と`gateway__list_available_tools`を使用するには、`config/gateway.toml`のトップレベルで次を有効にし、Tunnelを再起動してからChatGPT側のカスタムアプリを更新します。<br>
 ```toml
 publish_tool_directory = true
 ```
-ChatGPTの既存のカスタム指示を削除せず、ツール選択に関する指示として次の文章を追加してください。<br>特定のMCP構成を固定せず、後から追加したMCPや動的に公開されたツールも`gateway__list_available_tools`から確認するための共通指示です。<br>
+ChatGPTの既存のカスタム指示を削除せず、ツール選択に関する指示として次の文章を追加してください。<br>特定のMCP構成を覚えさせず、その時点で使えるprefixとツールをGatewayから確認するための共通指示です。<br>
 ```text
 ===開始ローカルMCPプラグイン指示===
 以下はツール選択の補助であり、安全規則、ユーザーの明示的指示、既存手順を上書きしない。
-ローカルMCPで直接処理できそうなら、推測・一般論・Web検索・別手段より先に`gateway__list_available_tools`を実際に呼び、完全名と説明を確認すること。既知の完全名かprefixがある場合だけ`prefix`を指定し、不明なら省略する。0件では全件が返るため、別prefixを推測して繰り返さない。
+ローカルMCPで直接処理できそうなら、推測・一般論・Web検索・別手段より先に`gateway__get_prefix_list`を実際に呼び、現在有効なprefixを確認すること。目的のprefixを確認したら`gateway__list_available_tools`へそのprefixを指定し、完全名と説明を確認する。prefixが分からない場合も名前を推測せず、`gateway__get_prefix_list`の結果から選ぶ。`gateway__list_available_tools`で0件なら全件が返るため、別prefixを推測して繰り返さない。
 入力に`isolatedId`が必須なら、最初に`isolated__create`へ未使用IDと対象の絶対ディレクトリを`workspaces`で渡し、その作業の全同梱MCP呼び出しで同じIDを使う。IDを別作業へ流用せず、閉じたIDはGateway再起動まで再利用しない。通常ツールの引数でrootやworkspaceを上書きしない。
 同じIDでも許可rootと相対パス基準はprefixごとに異なる。あるMCPで許可されたパスを別MCPでも使えると仮定しない。初回操作前に同prefixの`get_gateway_access_scope`と、存在すれば`get_working_directory`または`roots`を呼ぶ。対象が許可root内で`set_working_directory`があるなら変更して再確認する。拒否時はエラーの`accessScope`に示された絶対パスだけを候補とし、別パスを捏造しない。
 ファイルの一覧・検索・読書き・置換・パッチには`files__`を優先する。`files__`が見えなくても探索前に不存在と断定しない。MCPの有効状態や許可設定を、明示的指示なく変更・回避・緩和しない。

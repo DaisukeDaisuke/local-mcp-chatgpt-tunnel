@@ -31,8 +31,12 @@ import {
   syncDiscoveredToolAnnotations
 } from './tool-annotations.mjs';
 import {
+  PREFIX_LIST_NAME,
   TOOL_DIRECTORY_NAME,
+  createPrefixListPayload,
   createToolDirectoryPayload,
+  prefixListDefinition,
+  prefixListMcpResult,
   toolDirectoryDefinition,
   toolDirectoryMcpResult
 } from './tool-directory.mjs';
@@ -96,6 +100,7 @@ const queues = new SerialQueues();
 const children = [];
 const childrenByName = new Map();
 const childStarts = new Map();
+const unavailableServers = [];
 const toolRoutes = new Map();
 const isolatedWorkspaces = new Map();
 const usedIsolatedIds = new Set();
@@ -111,6 +116,9 @@ function blockedToolReason(childConfig, toolName) {
   return substring ? { type: 'substring', value: substring } : null;
 }
 
+const gatewayBuiltinToolNames = new Set([TOOL_DIRECTORY_NAME, PREFIX_LIST_NAME]);
+const collidesWithGatewayBuiltin = (publicName) => config.publishToolDirectory && gatewayBuiltinToolNames.has(publicName);
+
 function rebuildRoutes() {
   toolRoutes.clear();
   for (const child of children) {
@@ -118,7 +126,7 @@ function rebuildRoutes() {
       if (tool.name === ACCESS_SCOPE_TOOL_NAME) continue;
       if (blockedToolReason(child.config, tool.name)) continue;
       const publicName = namespacedName(child.config.prefix, tool.name);
-      if ((config.publishToolDirectory && publicName === TOOL_DIRECTORY_NAME) || isolatedToolNames.has(publicName)) throw new Error(`Tool name collision: ${publicName}`);
+      if (collidesWithGatewayBuiltin(publicName) || isolatedToolNames.has(publicName)) throw new Error(`Tool name collision: ${publicName}`);
       if (toolRoutes.has(publicName)) throw new Error(`Tool name collision: ${publicName}`);
       const annotatedTool = child.config.manageAnnotations
         ? applyConfiguredAnnotations(tool, child.config.prefix, toolAnnotationConfig)
@@ -131,7 +139,7 @@ function rebuildRoutes() {
       });
     }
     const accessScopePublicName = namespacedName(child.config.prefix, ACCESS_SCOPE_TOOL_NAME);
-    if ((config.publishToolDirectory && accessScopePublicName === TOOL_DIRECTORY_NAME) || isolatedToolNames.has(accessScopePublicName)) throw new Error(`Tool name collision: ${accessScopePublicName}`);
+    if (collidesWithGatewayBuiltin(accessScopePublicName) || isolatedToolNames.has(accessScopePublicName)) throw new Error(`Tool name collision: ${accessScopePublicName}`);
     if (toolRoutes.has(accessScopePublicName)) throw new Error(`Tool name collision: ${accessScopePublicName}`);
     const publicAccessScopeTool = { ...accessScopeToolDefinition, name: accessScopePublicName };
     toolRoutes.set(accessScopePublicName, {
@@ -148,8 +156,15 @@ const hasBundledChildren = () => children.some((child) => child.config.isBundled
 function publishedTools() {
   const tools = [...toolRoutes.values()].map((route) => route.tool);
   if (hasBundledChildren()) tools.unshift(...isolatedToolDefinitions);
-  if (config.publishToolDirectory) tools.unshift(toolDirectoryDefinition);
+  if (config.publishToolDirectory) tools.unshift(toolDirectoryDefinition, prefixListDefinition);
   return tools;
+}
+
+function activePrefixes() {
+  const prefixes = children.map((child) => child.config.prefix);
+  if (hasBundledChildren()) prefixes.push('isolated');
+  if (config.publishToolDirectory) prefixes.push('gateway');
+  return [...new Set(prefixes)];
 }
 
 function supportsGatewayErrorEnvelope(tool) {
@@ -160,32 +175,85 @@ function supportsGatewayErrorEnvelope(tool) {
 
 function toolExposureReport() {
   const disabled = [];
+  const tools = [];
+  const prefixes = [];
   let found = 0;
   for (const child of children) {
+    let childFound = 0;
+    let childRejected = 0;
+    let childPublished = 1;
     for (const tool of child.tools) {
       if (tool.name === ACCESS_SCOPE_TOOL_NAME) continue;
       found += 1;
+      childFound += 1;
       const reason = blockedToolReason(child.config, tool.name);
-      if (!reason) continue;
-      disabled.push({
+      const item = {
         server: child.config.name,
+        prefix: child.config.prefix,
         tool: tool.name,
         publicName: namespacedName(child.config.prefix, tool.name),
         reason
-      });
+      };
+      if (reason) {
+        childRejected += 1;
+        disabled.push(item);
+        tools.push({ ...item, status: 'rejected' });
+      } else {
+        childPublished += 1;
+        tools.push({ ...item, status: 'published' });
+      }
     }
+    tools.push({
+      server: child.config.name,
+      prefix: child.config.prefix,
+      tool: ACCESS_SCOPE_TOOL_NAME,
+      publicName: namespacedName(child.config.prefix, ACCESS_SCOPE_TOOL_NAME),
+      status: 'published',
+      synthetic: true
+    });
+    prefixes.push({
+      server: child.config.name,
+      prefix: child.config.prefix,
+      found: childFound,
+      rejected: childRejected,
+      published: childPublished
+    });
   }
-  return { found, disabled, published: toolRoutes.size + (hasBundledChildren() ? isolatedToolDefinitions.length : 0) };
+  return { found, disabled, tools, prefixes, published: publishedTools().length };
 }
 
 function logToolExposureReport() {
   const report = toolExposureReport();
-  for (const item of report.disabled) {
-    const identity = `server=${JSON.stringify(item.server)} tool=${JSON.stringify(item.tool)} public_name=${JSON.stringify(item.publicName)}`;
-    if (item.reason.type === 'exact') info(`tool disabled: ${identity} reason="blocked_tools exact match"`);
-    else info(`tool disabled: ${identity} blocked_tool_substrings=${JSON.stringify(item.reason.value)}`);
+  if (config.publishToolDirectory) {
+    for (const tool of [toolDirectoryDefinition, prefixListDefinition]) {
+      info(`tool exposure: server="gateway" prefix="gateway" tool=${JSON.stringify(tool.name)} public_name=${JSON.stringify(tool.name)} status="published"`);
+    }
   }
-  info(`tool exposure: found=${report.found} disabled=${report.disabled.length} published=${report.published}`);
+  if (hasBundledChildren()) {
+    for (const tool of isolatedToolDefinitions) {
+      info(`tool exposure: server="gateway" prefix="isolated" tool=${JSON.stringify(tool.name)} public_name=${JSON.stringify(tool.name)} status="published"`);
+    }
+  }
+  for (const item of report.tools) {
+    const identity = `server=${JSON.stringify(item.server)} prefix=${JSON.stringify(item.prefix)} tool=${JSON.stringify(item.tool)} public_name=${JSON.stringify(item.publicName)}`;
+    if (item.status === 'published') {
+      info(`tool exposure: ${identity} status="published"${item.synthetic ? ' synthetic=true' : ''}`);
+    } else if (item.reason.type === 'exact') {
+      info(`tool disabled: ${identity} status="rejected" reason="blocked_tools exact match"`);
+    } else {
+      info(`tool disabled: ${identity} status="rejected" blocked_tool_substrings=${JSON.stringify(item.reason.value)}`);
+    }
+  }
+  for (const item of report.prefixes) {
+    info(`tool prefix: server=${JSON.stringify(item.server)} prefix=${JSON.stringify(item.prefix)} enabled=true found=${item.found} rejected=${item.rejected} published=${item.published}`);
+  }
+  for (const item of config.disabledServers ?? []) {
+    info(`tool prefix disabled: server=${JSON.stringify(item.name)} prefix=${JSON.stringify(item.prefix)} enabled=false reason="enabled=false"`);
+  }
+  for (const item of unavailableServers) {
+    info(`tool prefix unavailable: server=${JSON.stringify(item.name)} prefix=${JSON.stringify(item.prefix)} enabled=true reason=${JSON.stringify(item.reason)}`);
+  }
+  info(`tool exposure: found=${report.found} disabled=${report.disabled.length} published=${report.published} prefixes=${activePrefixes().length}`);
 }
 
 async function startChildren() {
@@ -195,6 +263,7 @@ async function startChildren() {
       await startChild(childConfig);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      unavailableServers.push({ name: childConfig.name, prefix: childConfig.prefix, reason: message });
       warn(`MCP "${childConfig.name}" is unavailable and was skipped: ${message}`);
     }
   }
@@ -396,6 +465,16 @@ async function handle(request) {
   if (request.method === 'ping') return response(request.id, {});
   if (request.method === 'tools/list') return response(request.id, { tools: publishedTools() });
   if (request.method === 'tools/call') {
+    if (config.publishToolDirectory && request.params?.name === PREFIX_LIST_NAME) {
+      const toolArguments = request.params?.arguments ?? {};
+      if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments) || Object.keys(toolArguments).length > 0) {
+        return response(request.id, {
+          content: [{ type: 'text', text: 'gateway__get_prefix_list does not accept arguments' }],
+          isError: true
+        });
+      }
+      return response(request.id, prefixListMcpResult(createPrefixListPayload(activePrefixes())));
+    }
     if (config.publishToolDirectory && request.params?.name === TOOL_DIRECTORY_NAME) {
       const toolArguments = request.params?.arguments ?? {};
       if (toolArguments.prefix !== undefined && typeof toolArguments.prefix !== 'string') {

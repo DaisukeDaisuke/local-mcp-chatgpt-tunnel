@@ -118,9 +118,9 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 `gh`は`spawn`から`shell=false`で直接起動し、サブコマンドとオプションを固定しています。run ID、branch、workflow識別子は個別に検証し、標準入力を閉じ、出力サイズを制限します。子プロセスの`cwd`は必ず`gateway.toml`で明示してください。認証にはローカルの`gh auth login`で保存されたGitHub CLI設定を利用できます。<br>
 ### codex-script
 `codex-script`は、MCP起動時に`--runtime=mjs|nodejs|python|php`と`--runtime-executable=<absolute-path>`で実行runtimeを固定し、許可Workspace内に既に存在するスクリプトだけを実行する同梱MCPです。同じ`server.mjs`を複数登録し、`mjs_script`、`nodejs_script`、`python_script`、`php_script`のように独立したprefixで公開できます。<br>
-`--mode=run`では`run_script`、`--mode=check`では`check_file`を公開します。`run_script`はruntimeそのもの、`check_file`はNode.js `--check`、Python `py_compile`、PHP `-l`の固定checkerだけを起動します。一般シェル、任意実行ファイル選択、任意環境変数注入、npm scriptやpackage manager呼び出しは公開しません。引数はliteral argvとして渡し、stdinを閉じ、timeoutと出力サイズを制限します。<br>
+`--mode=run`では`run_script`、`--mode=check`では`check_file`を公開します。`run_script`はruntimeそのもの、`check_file`はNode.js `--check`、Python `py_compile`、PHP `-l`の固定checkerだけを起動します。`check_file`は後方互換の`filePath` 1件指定に加えて`filePaths`で最大500件を1回に検査でき、返却は`pass`、`fault`、失敗したファイルだけの`messages`です。成功したcheckerのstdout/stderrは返しません。一般シェル、任意実行ファイル選択、任意環境変数注入、npm scriptやpackage manager呼び出しは公開しません。引数はliteral argvとして渡し、stdinを閉じ、timeoutと出力サイズを制限します。<br>
 Gatewayは`codex-script`を`isBundled`として扱い、`isolatedId`で選択した署名済みbase / rootsと通常のパスポリシーを適用します。さらに`codex-script`は`gateway.toml`で`sandbox = "never"`を指定すると設定読み込み時に拒否され、`elevated`または`unelevated`のCodex Windows sandbox内でMCPプロセス自体を起動する必要があります。各script呼び出しで別のsandboxを作るのではなく、固定runtimeは既にsandbox化されたMCPの子プロセスとして動作します。<br>
-任意コードは許可したWorkspace内で動作するため、`allowed_directories`は必要最小限にし、runtime、Codex CLI、MCP実行ファイルを書き込み可能rootの外へ置いてください。任意コードでは書き込みroot内のdeny holeを安全に表現できないため、script runnerでは`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`を空にし、必要なら`allowed_directories`自体を狭めるか分割します。<br>
+任意コードを実行する`--mode=run`では、許可したWorkspace内でコードが動作するため、`allowed_directories`は必要最小限にし、runtime、Codex CLI、MCP実行ファイルを書き込み可能rootの外へ置いてください。任意コードでは書き込みroot内のdeny holeを安全に表現できないため、run用MCPでは`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`を空にし、必要なら`allowed_directories`自体を狭めるか分割します。`--mode=check`は固定checkerしか起動せず対象ファイルをMCP側で検証するため、Workspace内にdeny holeがあってもcheck対象がdenyに入っていなければ利用できます。<br>
 ## 任意のstdio MCPを追加する
 接続するMCPの起動コマンドや引数は、Gateway本体ではなく`config/gateway.toml`の`[mcp_servers.<name>]`へ記述します。<br>
 ```toml
@@ -271,10 +271,11 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 sandbox化した外部MCPでは、OS sandboxのworkspaceWrite root内部に`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`、保護中の`gateway.toml`といった「deny hole」を正確に表現できません。そのため該当する設定は起動時に拒否されます。外部MCPでは`allowed_directories`を狭くするか分割してください。同梱MCPは自身でもdeny policyを検証するため、この互換性チェックの例外です。<br>
 `url`によるリモートMCP設定は拒否されます。Codex固有の`tool_output_token_limit`は読み取られても使用されず、このGateway上では効果を持ちません。<br>
 ### 内蔵ツールディレクトリ
-トップレベルで`publish_tool_directory = true`を指定すると、`gateway__list_available_tools`を公開します。<br>
-このツールはGatewayが既に保持している公開ツールレジストリだけを参照し、設定ファイル、ファイルシステム、子MCPの追加情報を読みません。`enabled = false`のMCPは起動せず、名前だけを`disabledProxyNames`へ返します。<br>
+トップレベルで`publish_tool_directory = true`を指定すると、`gateway__list_available_tools`と`gateway__get_prefix_list`を公開します。`gateway__get_prefix_list`は現在起動して公開ツールを持つprefixに加え、Gateway内蔵の`gateway`と、同梱MCPが起動している場合の`isolated`を返します。<br>
+これらのツールはGatewayが既に保持している公開ツールレジストリだけを参照し、設定ファイル、ファイルシステム、子MCPの追加情報を読みません。`enabled = false`のMCPは起動せず、名前だけを`disabledProxyNames`へ返します。<br>
 入力を省略すると現在利用可能なツールをすべて返し、`prefix`を指定すると大文字小文字を区別せずフル識別子の先頭一致で絞り込みます。該当が0件の場合はエラーにせず、全件を返します。<br>
 返却するツール情報は`chrome-devtools__click`のような省略しない公開名と説明だけです。入力スキーマ、出力スキーマ、起動コマンド、引数、パス、環境変数、拒否されたツール名は返しません。`enabledProxyCount`は設定上有効なMCP数、`rejectedToolCount`は起動済みMCPから公開を拒否したツール数です。<br>
+Gateway初期化時の`[gateway] INFO`には、公開・拒否された各ツールをprefix付きで1行ずつ記録し、prefixごとのfound/rejected/published件数、`enabled = false`のprefix、起動失敗したprefix、全体集計も記録します。<br>
 ### 公開ツールの除外
 ツール名の完全一致は`blocked_tools`、大文字小文字を区別しない部分一致は`blocked_tool_substrings`で非公開にできます。。<br>
 ```toml

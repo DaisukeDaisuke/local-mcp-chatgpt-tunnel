@@ -14,6 +14,7 @@ const MAX_ARGUMENT_BYTES = Number(process.env.CODEX_SCRIPT_MAX_ARGUMENT_BYTES ??
 const MAX_OUTPUT_BYTES = Number(process.env.CODEX_SCRIPT_MAX_OUTPUT_BYTES ?? 1024 * 1024);
 const DEFAULT_TIMEOUT_MS = Number(process.env.CODEX_SCRIPT_DEFAULT_TIMEOUT_MS ?? 30_000);
 const MAX_TIMEOUT_MS = Number(process.env.CODEX_SCRIPT_MAX_TIMEOUT_MS ?? 600_000);
+const MAX_CHECK_FILES = Number(process.env.CODEX_SCRIPT_MAX_CHECK_FILES ?? 500);
 const SERVER_VERSION = '0.1.0';
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
 const MODES = new Set(['run', 'check']);
@@ -224,16 +225,26 @@ const scriptSchema = {
 
 const checkSchema = {
   name: 'check_file',
-  description: `Check one existing ${checkSpec?.label ?? runtime} source file using the fixed ${runtime} checker selected at MCP startup. Security: no shell, no npm scripts, no package manager, no arbitrary checker executable, stdin closed, timeout enforced, output bounded, and the file/cwd are checked against signed roots plus configured allow/deny rules.`,
+  description: `Check one or more existing ${checkSpec?.label ?? runtime} source files using the fixed ${runtime} checker selected at MCP startup. Successful checker stdio is omitted; only failed files are returned in messages. Security: no shell, no npm scripts, no package manager, no arbitrary checker executable, stdin closed, timeout enforced, output bounded, and every file/cwd is checked against signed roots plus configured allow/deny rules before execution.`,
   inputSchema: {
     type: 'object',
     properties: {
       filePath: { type: 'string', minLength: 1, description: 'Absolute path, or path relative to the current working directory, for the source file to check.' },
+      filePaths: {
+        type: 'array',
+        minItems: 1,
+        maxItems: MAX_CHECK_FILES,
+        items: { type: 'string', minLength: 1 },
+        description: 'Absolute paths, or paths relative to the current working directory, for source files to check.'
+      },
       cwd: { type: 'string', minLength: 1 },
       timeoutMs: { type: 'integer', minimum: 1, maximum: MAX_TIMEOUT_MS, default: DEFAULT_TIMEOUT_MS },
       maxOutputBytes: { type: 'integer', minimum: 1, maximum: MAX_OUTPUT_BYTES, default: MAX_OUTPUT_BYTES }
     },
-    required: ['filePath'],
+    oneOf: [
+      { required: ['filePath'], not: { required: ['filePaths'] } },
+      { required: ['filePaths'], not: { required: ['filePath'] } }
+    ],
     additionalProperties: false
   },
   outputSchema: TOOL_OUTPUT_SCHEMA,
@@ -337,12 +348,14 @@ async function assertSandboxPolicyRepresentable(roots, base) {
   }
 }
 
-async function runSandboxedCommand({ command, commandArgs, cwd, timeoutMs, maxOutputBytes }) {
+async function runSandboxedCommand({ command, commandArgs, cwd, timeoutMs, maxOutputBytes, truncateOutput = false }) {
   if (configuredAllowedDirectories.some((root) => within(root, command))) {
     throw new Error('--runtime-executable must resolve outside configured writable roots');
   }
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
+  let totalOutputBytes = 0;
+  let outputTruncated = false;
   let overflowError = null;
   let child = null;
   let timeout = null;
@@ -350,12 +363,22 @@ async function runSandboxedCommand({ command, commandArgs, cwd, timeoutMs, maxOu
     if (overflowError) return;
     const current = streamName === 'stdout' ? stdout : stderr;
     const nextChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
-    if (current.length + nextChunk.length > maxOutputBytes) {
+    let acceptedChunk = nextChunk;
+    if (truncateOutput) {
+      const remaining = maxOutputBytes - totalOutputBytes;
+      if (remaining <= 0) {
+        outputTruncated = true;
+        return;
+      }
+      if (nextChunk.length > remaining) outputTruncated = true;
+      acceptedChunk = nextChunk.subarray(0, remaining);
+      totalOutputBytes += acceptedChunk.length;
+    } else if (current.length + nextChunk.length > maxOutputBytes) {
       overflowError = new Error(`${streamName} exceeded ${maxOutputBytes} bytes`);
       if (child && child.exitCode === null && !child.killed) child.kill();
       return;
     }
-    const next = Buffer.concat([current, nextChunk]);
+    const next = Buffer.concat([current, acceptedChunk]);
     if (streamName === 'stdout') stdout = next;
     else stderr = next;
   };
@@ -383,7 +406,8 @@ async function runSandboxedCommand({ command, commandArgs, cwd, timeoutMs, maxOu
       exitCode: exit.exitCode,
       signal: exit.signal,
       stdout: stdout.toString('utf8'),
-      stderr: stderr.toString('utf8')
+      stderr: stderr.toString('utf8'),
+      outputTruncated
     };
   } catch (error) {
     if (overflowError) throw overflowError;
@@ -433,35 +457,66 @@ async function checkFile(args) {
   if (mode !== 'check') throw new Error('check_file is available only when this MCP is started with --mode=check');
   const base = await contextBase();
   const roots = await contextRoots();
-  await assertSandboxPolicyRepresentable(roots, base);
-  const filePath = await resolveExistingPath(args.filePath, { label: 'filePath', base, roots, requireFile: true });
-  const extension = extname(filePath).toLowerCase();
-  if (!checkSpec.extensions.includes(extension)) {
-    throw new Error(`check_file for runtime=${runtime} accepts only: ${checkSpec.extensions.join(', ')}`);
-  }
   const cwd = args.cwd === undefined
     ? await resolveExistingPath(base, { label: 'cwd', base, roots, requireDirectory: true })
     : await resolveExistingPath(args.cwd, { label: 'cwd', base, roots, requireDirectory: true });
   const timeoutMs = boundedInteger(args.timeoutMs, { name: 'timeoutMs', fallback: DEFAULT_TIMEOUT_MS, min: 1, max: MAX_TIMEOUT_MS });
   const maxOutputBytes = boundedInteger(args.maxOutputBytes, { name: 'maxOutputBytes', fallback: MAX_OUTPUT_BYTES, min: 1, max: MAX_OUTPUT_BYTES });
+  const hasFilePath = typeof args.filePath === 'string';
+  const hasFilePaths = Array.isArray(args.filePaths);
+  if (hasFilePath === hasFilePaths) throw new Error('check_file requires exactly one of filePath or filePaths');
+  const requestedPaths = args.filePaths ?? [args.filePath];
+  if (!Array.isArray(requestedPaths) || requestedPaths.length < 1 || requestedPaths.length > MAX_CHECK_FILES) {
+    throw new Error(`filePaths must contain from 1 through ${MAX_CHECK_FILES} files`);
+  }
+  const filePaths = [];
+  for (let index = 0; index < requestedPaths.length; index += 1) {
+    const filePath = await resolveExistingPath(requestedPaths[index], {
+      label: `filePaths[${index}]`,
+      base,
+      roots,
+      requireFile: true
+    });
+    const extension = extname(filePath).toLowerCase();
+    if (!checkSpec.extensions.includes(extension)) {
+      throw new Error(`check_file for runtime=${runtime} accepts only: ${checkSpec.extensions.join(', ')}`);
+    }
+    filePaths.push(filePath);
+  }
   const executable = await canonicalRuntimeExecutable();
-  const execution = await runSandboxedCommand({
-    command: executable,
-    commandArgs: [...checkSpec.argvPrefix(roots), filePath],
-    cwd,
-    timeoutMs,
-    maxOutputBytes
-  });
-  return {
-    filePath,
-    runtime,
-    checker: checkSpec.label,
-    cwd,
-    timeoutMs,
-    maxOutputBytes,
-    passed: execution.exitCode === 0,
-    ...execution
-  };
+  const perFileOutputBytes = Math.max(1, Math.floor(maxOutputBytes / filePaths.length));
+  let pass = 0;
+  const messages = [];
+  for (const filePath of filePaths) {
+    try {
+      const execution = await runSandboxedCommand({
+        command: executable,
+        commandArgs: [...checkSpec.argvPrefix(roots), filePath],
+        cwd,
+        timeoutMs,
+        maxOutputBytes: perFileOutputBytes,
+        truncateOutput: true
+      });
+      if (execution.exitCode === 0 && execution.signal === null) {
+        pass += 1;
+        continue;
+      }
+      messages.push({
+        filePath,
+        exitCode: execution.exitCode,
+        signal: execution.signal,
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        outputTruncated: execution.outputTruncated
+      });
+    } catch (error) {
+      messages.push({
+        filePath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return { pass, fault: messages.length, messages };
 }
 
 async function callTool(name, args = {}) {
