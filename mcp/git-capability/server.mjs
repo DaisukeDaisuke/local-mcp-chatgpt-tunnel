@@ -18,6 +18,13 @@ function option(name) {
   return entry === undefined ? undefined : entry.slice(prefix.length);
 }
 
+function options(name) {
+  const prefix = `--${name}=`;
+  return process.argv.slice(2)
+    .filter((value) => value.startsWith(prefix))
+    .map((value) => value.slice(prefix.length));
+}
+
 const help = process.argv.slice(2).some((value) => value === '--help' || value === '-h');
 const mode = help ? 'commit' : option('mode');
 if (!help && !MODES.has(mode)) throw new Error('--mode must be one of: stage, commit, push, pull, clone');
@@ -31,7 +38,7 @@ if (!help && process.platform === 'win32' && !/\.exe$/i.test(gitExecutableConfig
 
 const configuredRemote = option('remote') ?? 'origin';
 const expectedRemoteUrl = option('expected-remote-url');
-const expectedRepository = option('repository');
+const expectedRepositories = options('repository');
 const cloneUrl = option('url');
 for (const argument of process.argv.slice(2)) {
   if (argument === '--help' || argument === '-h') continue;
@@ -101,14 +108,14 @@ export function githubRemoteMatchesRepository(remoteUrl, repository) {
 }
 
 const remote = mode === 'push' || mode === 'pull' ? safeRemote(configuredRemote) : null;
-if (!help && (mode === 'push' || mode === 'pull') && expectedRemoteUrl !== undefined && expectedRepository !== undefined) {
-  throw new Error('Use exactly one of --repository=OWNER/REPO or --expected-remote-url=<exact-url>');
+if (!help && (mode === 'push' || mode === 'pull') && expectedRemoteUrl !== undefined && expectedRepositories.length > 0) {
+  throw new Error('Use either one or more --repository=OWNER/REPO options or --expected-remote-url=<exact-url>, not both');
 }
-if (!help && (mode === 'push' || mode === 'pull') && expectedRemoteUrl === undefined && expectedRepository === undefined) {
-  throw new Error('Either --repository=OWNER/REPO or --expected-remote-url=<exact-url> is required');
+if (!help && (mode === 'push' || mode === 'pull') && expectedRemoteUrl === undefined && expectedRepositories.length === 0) {
+  throw new Error('At least one --repository=OWNER/REPO or --expected-remote-url=<exact-url> is required');
 }
-const allowedRepository = mode === 'push' || mode === 'pull'
-  ? expectedRepository === undefined ? null : validateRepository(expectedRepository)
+const allowedRepositories = mode === 'push' || mode === 'pull'
+  ? expectedRepositories.length === 0 ? null : [...new Set(expectedRepositories.map(validateRepository))]
   : null;
 const allowedRemoteUrl = mode === 'push' || mode === 'pull'
   ? expectedRemoteUrl === undefined ? null : safeNetworkUrl(expectedRemoteUrl, '--expected-remote-url')
@@ -482,9 +489,9 @@ async function assertExpectedRemote(cwd) {
     ? ['remote', 'get-url', '--push', '--', remote]
     : ['remote', 'get-url', '--', remote];
   const actual = (await runGit(cwd, command)).stdout.trim();
-  if (allowedRepository !== null) {
-    if (!githubRemoteMatchesRepository(actual, allowedRepository)) {
-      throw new Error(`Configured remote ${remote} does not match the startup allowlisted GitHub repository`);
+  if (allowedRepositories !== null) {
+    if (!allowedRepositories.some((repository) => githubRemoteMatchesRepository(actual, repository))) {
+      throw new Error(`Configured remote ${remote} does not match any startup allowlisted GitHub repository`);
     }
     return;
   }
@@ -667,7 +674,7 @@ export async function startStdio(input = process.stdin, output = process.stdout)
   });
 }
 
-export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=stage --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path> --url=<exact-url>\n\nFor push/pull, legacy --expected-remote-url=<exact-url> remains supported instead of --repository.\nEach process exposes one bounded Git capability group plus roots/get_working_directory/set_working_directory. stage exposes only add_all, stage_paths, and unstage_paths.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
+export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=stage --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO [--repository=OWNER/OTHER_REPO ...]\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO [--repository=OWNER/OTHER_REPO ...]\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path> --url=<exact-url>\n\nFor push/pull, --repository may be repeated to allow multiple GitHub repositories. Legacy --expected-remote-url=<exact-url> remains supported instead of --repository.\nEach process exposes one bounded Git capability group plus roots/get_working_directory/set_working_directory. stage exposes only add_all, stage_paths, and unstage_paths.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
 
 if (directExecution) {
   if (help) process.stdout.write(HELP);

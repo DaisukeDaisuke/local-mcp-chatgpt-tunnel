@@ -41,7 +41,10 @@ async function importCapability(root, mode, suffix, options = {}) {
   ]);
   const git = await testGitExecutable();
   const args = [`--mode=${mode}`, `--git-executable=${git}`];
-  if (mode === 'push' || mode === 'pull') args.push('--remote=origin', '--repository=example/repository');
+  if (mode === 'push' || mode === 'pull') {
+    args.push('--remote=origin');
+    for (const repository of options.repositories ?? ['example/repository']) args.push(`--repository=${repository}`);
+  }
   if (mode === 'clone') args.push('--url=https://example.invalid/repository.git');
   process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'git-capability.test.mjs'), ...args];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
@@ -85,6 +88,27 @@ test('git-capability matches GitHub HTTPS and SSH remotes by OWNER/REPO identity
     () => githubRemoteMatchesRepository('https://example.com/DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
     (error) => error.message === 'remote URL must target github.com without a custom port, query, or fragment'
   );
+});
+
+test('git-capability push accepts a remote matching any repeated startup repository allowlist entry', async () => {
+  const root = await testRoot('git-capability-multi-repository-');
+  await exec('git', ['init'], { cwd: root });
+  await exec('git', ['remote', 'add', 'origin', 'git@github.com:DaisukeDaisuke/local-mcp-chatgpt-tunnel.git'], { cwd: root });
+  const { createServer } = await importCapability(root, 'push', 'multi-repository', {
+    repositories: [
+      'DaisukeDaisuke/dqixToGPT',
+      'DaisukeDaisuke/local-mcp-chatgpt-tunnel',
+      'DaisukeDaisuke/desmume_webassembly_harness'
+    ]
+  });
+  const server = createServer();
+  await server(request(1, 'initialize'));
+  const result = await server(request(2, 'tools/call', {
+    name: 'push',
+    arguments: signedArguments(root)
+  }));
+  assert.equal(result.result.isError, true);
+  assert.doesNotMatch(result.result.structuredContent.error, /does not match any startup allowlisted GitHub repository/);
 });
 
 test('git-capability exposes only the operations assigned to each mode', async () => {
