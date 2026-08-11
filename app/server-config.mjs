@@ -6,6 +6,7 @@ import { normalizeDisallowedPathGlobs } from './path-glob.mjs';
 import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export const gatewayLogsDirectory = resolve(repositoryRoot, 'logs');
 const CODEX_SCRIPT_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codex-script', 'server.mjs');
 const BUILD_V5T_ASSEMBLY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'buildv5tassembly', 'server.mjs');
 const BUNDLED_SERVER_PATHS = [
@@ -141,7 +142,21 @@ function normalizeLifecycle(raw, key, serverName) {
   return { server: value.server, tool: value.tool };
 }
 
-function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths) {
+function protectedLogPolicyEntries(allowedDirectories, allowedFiles, protectedDirectory, platform = process.platform) {
+  if (platform !== process.platform) return { directories: [], files: [] };
+  const directories = [];
+  for (const allowed of allowedDirectories) {
+    if (pathWithin(allowed, protectedDirectory, platform)) directories.push(protectedDirectory);
+    else if (pathWithin(protectedDirectory, allowed, platform)) directories.push(allowed);
+  }
+  const files = allowedFiles.filter((allowed) => pathWithin(protectedDirectory, allowed, platform));
+  return {
+    directories: [...new Set(directories)],
+    files: [...new Set(files)]
+  };
+}
+
+function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths, protectedGatewayLogDirectory) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`mcp_servers.${name} must be a table`);
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error(`mcp_servers.${name}.enabled must be boolean`);
   if (raw.enabled === false) return null;
@@ -189,6 +204,12 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
     : undefined;
   const allowedDirectories = absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`, platform);
   const allowedFiles = absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform);
+  const protectedGatewayLogs = protectedLogPolicyEntries(
+    allowedDirectories,
+    allowedFiles,
+    protectedGatewayLogDirectory,
+    platform
+  );
   const sandboxReadOnlyDirectories = absolutePathArray(raw.sandbox_read_only_directories, `mcp_servers.${name}.sandbox_read_only_directories`, platform);
   if (sandbox !== 'never' && !allowedDirectories.some((directory) => pathWithin(directory, cwd, platform))) {
     throw new Error(`mcp_servers.${name}.cwd must be inside allowed_directories when sandbox is enabled`);
@@ -226,7 +247,9 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
     disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform),
     disallowedPathGlobs: normalizeDisallowedPathGlobs(raw.disallowed_path_globs, `mcp_servers.${name}.disallowed_path_globs`),
     dangerousAllowGatewayConfigAccess: raw.dangerous_allow_gateway_config_access === true,
-    protectedGatewayConfigPaths
+    protectedGatewayConfigPaths,
+    protectedGatewayLogDirectories: protectedGatewayLogs.directories,
+    protectedGatewayLogFiles: protectedGatewayLogs.files
   };
 }
 
@@ -249,6 +272,9 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
   if (raw.publish_tool_directory !== undefined && typeof raw.publish_tool_directory !== 'boolean') {
     throw new Error('gateway.toml publish_tool_directory must be boolean');
   }
+  if (raw['enable-logging-files'] !== undefined && typeof raw['enable-logging-files'] !== 'boolean') {
+    throw new Error('gateway.toml enable-logging-files must be boolean');
+  }
   if (raw.tool_annotations_path !== undefined && (typeof raw.tool_annotations_path !== 'string' || !raw.tool_annotations_path)) {
     throw new Error('gateway.toml tool_annotations_path must be a non-empty string');
   }
@@ -260,7 +286,14 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
   const servers = [];
   const disabledServerNames = [];
   for (const [name, server] of Object.entries(raw.mcp_servers)) {
-    const normalized = normalizeServer(name, server, base, platform, protectedGatewayConfigPaths);
+    const normalized = normalizeServer(
+      name,
+      server,
+      base,
+      platform,
+      protectedGatewayConfigPaths,
+      gatewayLogsDirectory
+    );
     if (normalized) servers.push(normalized);
     else disabledServerNames.push(name);
   }
@@ -270,6 +303,8 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
     toolAnnotationsPath: absoluteFrom(base, raw.tool_annotations_path ?? 'tool-annotations.toml', platform),
     privateUseOnly: true,
     publishToolDirectory: raw.publish_tool_directory === true,
+    enableLoggingFiles: raw['enable-logging-files'] === true,
+    gatewayLogsDirectory,
     servers,
     disabledServerNames
   };

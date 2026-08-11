@@ -3,8 +3,10 @@
 # from an Administrator PowerShell before using this template.
 # Replace every absolute placeholder, including node.exe and codex.cmd.
 private_use_only = true
+# Default false. When true, only [gateway] INFO lines are appended to logs/<startup-datetime>_pid-<pid>.txt.
+enable-logging-files = false
 # Publishes gateway__list_available_tools. It reads only the gateway's existing in-memory tool registry.
-publish_tool_directory = false
+publish_tool_directory = true
 tool_annotations_path = "tool-annotations.toml"
 
 # Every started child MCP also receives <prefix>__get_gateway_access_scope.
@@ -37,10 +39,10 @@ disallowed_path_globs = ['**.ssh**']
 
 # Local Git filesystem operations only. Run gitmcp inside the Codex OS sandbox so Git configuration
 # that invokes a system/global filter or diff helper cannot escape the configured filesystem boundary.
-# commit, push, pull, and clone are separate MCP processes below and choose their sandbox independently.
+# index staging, commit, push, pull, and clone are separate MCP processes below and choose their sandbox independently.
 [mcp_servers.git]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 sandbox = "elevated"
@@ -54,6 +56,29 @@ serial_group = "git"
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
 allowed_files = []
 # Deny secrets or private subtrees even when they are inside allowed_directories.
+disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
+disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
+disallowed_path_globs = ['**.ssh**']
+# CodexのWindows sandboxは: minimal readでC:\Program Filesをsystem read rootとして扱うため、
+# 上記の標準Git for Windows配置は追加設定不要です。Portable Gitなどを別の場所へ置く場合だけ、
+# そのGitインストールディレクトリをsandbox_read_only_directoriesへ追加してください。
+
+# git add/restore writes .git/index and .git/index.lock. The Codex Windows sandbox deliberately
+# blocks writable dot-directories, so keep index mutation in its own unsandboxed capability.
+[mcp_servers.git_stage]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=stage', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = "never"
+prefix = "git_stage"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']

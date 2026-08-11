@@ -38,6 +38,7 @@ import {
 } from './tool-directory.mjs';
 import { assertNotElevatedWindows } from './windows-integrity.mjs';
 import { assertSandboxPathPolicyCompatible } from './sandbox-path-policy.mjs';
+import { createGatewayInfoLogger } from './gateway-info-log.mjs';
 
 scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
@@ -58,7 +59,6 @@ async function canonicalExecutable(path, label) {
 }
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const warn = (message) => process.stderr.write(`[gateway] ${message}\n`);
-const info = (message) => process.stderr.write(`[gateway] INFO ${message}\n`);
 
 const namespacedName = (prefix, name) => {
   const normalized = `${prefix}__${name}`.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -83,6 +83,11 @@ class SerialQueues {
 }
 
 const config = await loadGatewayConfig();
+const gatewayInfoLogger = createGatewayInfoLogger({
+  enabled: config.enableLoggingFiles,
+  directory: config.gatewayLogsDirectory
+});
+const info = (message) => gatewayInfoLogger.info(message);
 const toolAnnotationConfig = await loadToolAnnotationConfig(
   config.toolAnnotationsPath,
   config.servers.filter((server) => server.manageAnnotations).map((server) => server.prefix)
@@ -279,8 +284,14 @@ async function startChild(childConfig) {
       cwd: childConfig.cwd,
       allowedDirectories: childConfig.allowedDirectories,
       allowedFiles: childConfig.allowedFiles,
-      disallowedDirectories: childConfig.disallowedDirectories,
-      disallowedFiles: childConfig.disallowedFiles,
+      disallowedDirectories: [
+        ...childConfig.disallowedDirectories,
+        ...childConfig.protectedGatewayLogDirectories
+      ],
+      disallowedFiles: [
+        ...childConfig.disallowedFiles,
+        ...childConfig.protectedGatewayLogFiles
+      ],
       protectedFiles: childConfig.dangerousAllowGatewayConfigAccess ? [] : childConfig.protectedGatewayConfigPaths,
       disallowedPathGlobs: childConfig.disallowedPathGlobs
     });

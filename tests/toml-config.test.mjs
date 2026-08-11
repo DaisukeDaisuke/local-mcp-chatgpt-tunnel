@@ -40,6 +40,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   const path = join(directory, 'gateway.toml');
   await writeFile(path, [
     'private_use_only = true',
+    'enable-logging-files = true',
     'publish_tool_directory = true',
     '[mcp_servers.alpha]',
     "command = 'C:\\runtime\\node.exe'",
@@ -73,6 +74,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   ].join('\n'), 'utf8');
   const config = await loadGatewayConfig(path, { platform: 'win32' });
   assert.equal(config.servers.length, 1);
+  assert.equal(config.enableLoggingFiles, true);
   assert.equal(config.publishToolDirectory, true);
   assert.deepEqual(config.disabledServerNames, ['beta']);
   assert.equal(config.servers[0].name, 'alpha');
@@ -96,6 +98,54 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].disallowedDirectories, ['C:\\work\\project\\private']);
   assert.deepEqual(config.servers[0].disallowedFiles, ['C:\\work\\project\\.env']);
   assert.deepEqual(config.servers[0].disallowedPathGlobs, ['**.ssh**']);
+});
+
+test('gateway file logging is disabled by default and requires a boolean top-level flag', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-file-logging-config-'));
+  const defaultPath = join(directory, 'default.toml');
+  await writeFile(defaultPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    'enabled = false'
+  ].join('\n'), 'utf8');
+  const defaultConfig = await loadGatewayConfig(defaultPath);
+  assert.equal(defaultConfig.enableLoggingFiles, false);
+
+  const invalidPath = join(directory, 'invalid.toml');
+  await writeFile(invalidPath, [
+    'private_use_only = true',
+    'enable-logging-files = "yes"',
+    '[mcp_servers.files]',
+    'enabled = false'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(invalidPath), (error) => {
+    assert.equal(error.message, 'gateway.toml enable-logging-files must be boolean');
+    return true;
+  });
+});
+
+test('gateway log protection is added only where configured access overlaps the logs directory', async () => {
+  const root = resolve('.');
+  const logs = resolve('logs');
+  const outside = await mkdtemp(join(tmpdir(), 'gateway-log-protection-outside-'));
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-log-protection-config-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.inside]',
+    'command = "node"',
+    `cwd = '${root}'`,
+    `allowed_directories = ['${root}']`,
+    '[mcp_servers.outside]',
+    'command = "node"',
+    `cwd = '${outside}'`,
+    `allowed_directories = ['${outside}']`
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(path);
+  assert.deepEqual(config.servers[0].protectedGatewayLogDirectories, [logs]);
+  assert.deepEqual(config.servers[0].protectedGatewayLogFiles, []);
+  assert.deepEqual(config.servers[1].protectedGatewayLogDirectories, []);
+  assert.deepEqual(config.servers[1].protectedGatewayLogFiles, []);
 });
 
 test('gateway config rejects unsupported MCP sandbox modes', async () => {

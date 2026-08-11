@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { signBundledIsolationContext } from '../app/bundled-isolation.mjs';
+import { testGitExecutable } from './test-git-executable.mjs';
 
 const exec = promisify(execFile);
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
@@ -13,12 +14,6 @@ const ISOLATION_KEY = 'git-capability-test-isolation-key-0123456789';
 
 async function testRoot(prefix) {
   return realpath(await mkdtemp(join(tmpdir(), prefix)));
-}
-
-async function gitExecutable() {
-  const locator = process.platform === 'win32' ? 'where.exe' : 'which';
-  const { stdout } = await exec(locator, ['git']);
-  return stdout.trim().split(/\r?\n/)[0];
 }
 
 function signedArguments(root, args = {}) {
@@ -33,7 +28,7 @@ function signedArguments(root, args = {}) {
   };
 }
 
-async function importCapability(root, mode, suffix) {
+async function importCapability(root, mode, suffix, options = {}) {
   const previousArgv = process.argv;
   const previousEnvironment = new Map([
     ['LOCAL_MCP_ALLOWED_DIRECTORIES', process.env.LOCAL_MCP_ALLOWED_DIRECTORIES],
@@ -41,19 +36,21 @@ async function importCapability(root, mode, suffix) {
     ['LOCAL_MCP_DISALLOWED_DIRECTORIES', process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES],
     ['LOCAL_MCP_DISALLOWED_FILES', process.env.LOCAL_MCP_DISALLOWED_FILES],
     ['LOCAL_MCP_DISALLOWED_PATH_GLOBS', process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS],
-    ['LOCAL_MCP_GATEWAY_ISOLATION_KEY', process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY]
+    ['LOCAL_MCP_GATEWAY_ISOLATION_KEY', process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY],
+    ['LOCAL_MCP_CODEX_SANDBOX_MODE', process.env.LOCAL_MCP_CODEX_SANDBOX_MODE]
   ]);
-  const git = await gitExecutable();
+  const git = await testGitExecutable();
   const args = [`--mode=${mode}`, `--git-executable=${git}`];
   if (mode === 'push' || mode === 'pull') args.push('--remote=origin', '--repository=example/repository');
   if (mode === 'clone') args.push('--url=https://example.invalid/repository.git');
   process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'git-capability.test.mjs'), ...args];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
-  process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
-  process.env.LOCAL_MCP_DISALLOWED_FILES = '[]';
-  process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = '[]';
+  process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = JSON.stringify(options.disallowedDirectories ?? []);
+  process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
+  process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
   process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY = ISOLATION_KEY;
+  process.env.LOCAL_MCP_CODEX_SANDBOX_MODE = options.sandboxMode ?? 'never';
   try {
     return await import(`../mcp/git-capability/server.mjs?test=${suffix}-${Date.now()}`);
   } finally {
@@ -90,32 +87,86 @@ test('git-capability matches GitHub HTTPS and SSH remotes by OWNER/REPO identity
   );
 });
 
-test('git-capability exposes exactly one Git operation per mode', async () => {
+test('git-capability exposes only the operations assigned to each mode', async () => {
   const root = await testRoot('git-capability-schema-');
   const expected = new Map([
-    ['commit', 'commit'],
-    ['push', 'push'],
-    ['pull', 'pull'],
-    ['clone', 'clone_repository']
+    ['stage', ['add_all', 'stage_paths', 'unstage_paths']],
+    ['commit', ['commit']],
+    ['push', ['push']],
+    ['pull', ['pull']],
+    ['clone', ['clone_repository']]
   ]);
-  for (const [mode, operation] of expected) {
+  for (const [mode, operations] of expected) {
     const { createServer } = await importCapability(root, mode, `schema-${mode}`);
     const server = createServer();
     await server(request(1, 'initialize'));
     const listed = await server(request(2, 'tools/list'));
     const names = listed.result.tools.map((tool) => tool.name);
-    assert.deepEqual(names, ['roots', 'get_working_directory', 'set_working_directory', operation]);
-    const schema = listed.result.tools.at(-1).inputSchema;
-    assert.equal(schema.additionalProperties, false);
-    if (mode === 'commit') assert.deepEqual(Object.keys(schema.properties), ['message']);
-    if (mode === 'push' || mode === 'pull') assert.deepEqual(Object.keys(schema.properties), []);
+    assert.deepEqual(names, ['roots', 'get_working_directory', 'set_working_directory', ...operations]);
+    for (const tool of listed.result.tools.slice(3)) assert.equal(tool.inputSchema.additionalProperties, false);
+    if (mode === 'commit') assert.deepEqual(Object.keys(listed.result.tools.at(-1).inputSchema.properties), ['message']);
+    if (mode === 'push' || mode === 'pull') assert.deepEqual(Object.keys(listed.result.tools.at(-1).inputSchema.properties), []);
     if (mode === 'clone') {
+      const schema = listed.result.tools.at(-1).inputSchema;
       assert.deepEqual(Object.keys(schema.properties), ['destinationDirectory', 'depth']);
       assert.ok(!Object.hasOwn(schema.properties, 'url'));
       assert.ok(!Object.hasOwn(schema.properties, 'parentDirectory'));
       assert.ok(!Object.hasOwn(schema.properties, 'recurseSubmodules'));
     }
   }
+});
+
+test('git-capability stage updates only the Git index and preserves line-ending conversion', async () => {
+  const root = await testRoot('git-capability-stage-');
+  await exec('git', ['init'], { cwd: root });
+  await exec('git', ['config', 'core.autocrlf', 'true'], { cwd: root });
+  await writeFile(join(root, 'line.txt'), 'alpha\r\nbeta\r\n', 'utf8');
+  await writeFile(join(root, 'other.txt'), 'other\n', 'utf8');
+  const { createServer } = await importCapability(root, 'stage', 'stage');
+  const server = createServer();
+  await server(request(1, 'initialize'));
+
+  const staged = await server(request(2, 'tools/call', {
+    name: 'stage_paths',
+    arguments: signedArguments(root, { paths: ['line.txt'] })
+  }));
+  assert.equal(staged.result.isError, false);
+  assert.equal((await exec('git', ['show', ':line.txt'], { cwd: root })).stdout, 'alpha\nbeta\n');
+  const cachedNames = (await exec('git', ['diff', '--cached', '--name-only'], { cwd: root })).stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert.deepEqual(cachedNames, ['line.txt']);
+
+  const unstaged = await server(request(3, 'tools/call', {
+    name: 'unstage_paths',
+    arguments: signedArguments(root, { paths: ['line.txt'] })
+  }));
+  assert.equal(unstaged.result.isError, false);
+  assert.equal((await exec('git', ['diff', '--cached', '--name-only'], { cwd: root })).stdout, '');
+
+  const all = await server(request(4, 'tools/call', {
+    name: 'add_all',
+    arguments: signedArguments(root)
+  }));
+  assert.equal(all.result.isError, false);
+  const allNames = (await exec('git', ['diff', '--cached', '--name-only'], { cwd: root })).stdout.trim().split(/\r?\n/).filter(Boolean).sort();
+  assert.deepEqual(allNames, ['line.txt', 'other.txt']);
+});
+
+test('git-capability stage refuses to add a configured denied worktree path', async () => {
+  const root = await testRoot('git-capability-stage-denied-');
+  const denied = join(root, 'private.txt');
+  await exec('git', ['init'], { cwd: root });
+  await writeFile(join(root, 'public.txt'), 'public\n', 'utf8');
+  await writeFile(denied, 'private\n', 'utf8');
+  const { createServer } = await importCapability(root, 'stage', 'stage-denied', { disallowedFiles: [denied] });
+  const server = createServer();
+  await server(request(1, 'initialize'));
+  const refused = await server(request(2, 'tools/call', {
+    name: 'add_all',
+    arguments: signedArguments(root)
+  }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /denied by disallowed_directories or disallowed_files/);
+  assert.equal((await exec('git', ['diff', '--cached', '--name-only'], { cwd: root })).stdout, '');
 });
 
 test('git-capability commit accepts only a literal message and commits the staged index', async () => {

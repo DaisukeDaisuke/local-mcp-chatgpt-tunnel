@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { windowsIntegrityLevel } from '../app/windows-integrity.mjs';
+import { testGitExecutable } from './test-git-executable.mjs';
 
 const integrityLevel = await windowsIntegrityLevel();
 const elevatedWindows = process.platform === 'win32' && (integrityLevel === 'high' || integrityLevel === 'system');
@@ -457,6 +458,7 @@ gatewayIntegrationTest('gateway keeps multiple bundled workspaces isolated by un
   const configPath = join(configDirectory, 'gateway.toml');
   await writeFile(join(workspaceA, 'a.txt'), 'alpha', 'utf8');
   await writeFile(join(workspaceB, 'b.txt'), 'bravo', 'utf8');
+  const git = await testGitExecutable();
   await writeFile(configPath, [
     'private_use_only = true',
     '[mcp_servers.files]',
@@ -468,7 +470,7 @@ gatewayIntegrationTest('gateway keeps multiple bundled workspaces isolated by un
     'prefix = "files"',
     '[mcp_servers.git]',
     `command = '${process.execPath}'`,
-    `args = ['${resolve('mcp/gitmcp/server.mjs')}', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']`,
+    `args = ['${resolve('mcp/gitmcp/server.mjs')}', '--git-executable=${git}', '--disable-push=true', '--disable-pull=true', '--disable-clone=true']`,
     `cwd = '${workspaceB}'`,
     `allowed_directories = ['${workspaceB}']`,
     'enabled = true',

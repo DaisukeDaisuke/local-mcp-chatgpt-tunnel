@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
+import { testGitExecutable } from './test-git-executable.mjs';
 
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
 const exec = promisify(execFile);
@@ -16,12 +17,17 @@ async function importGitMcp(root, args, suffix, options = {}) {
   const previousDeniedDirectories = process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES;
   const previousDeniedFiles = process.env.LOCAL_MCP_DISALLOWED_FILES;
   const previousDeniedPathGlobs = process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS;
-  process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'gitmcp.test.mjs'), ...args];
+  const previousSandboxMode = process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;
+  const effectiveArgs = options.omitGitExecutable === true
+    ? args
+    : [`--git-executable=${await testGitExecutable()}`, ...args];
+  process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'gitmcp.test.mjs'), ...effectiveArgs];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
+  process.env.LOCAL_MCP_CODEX_SANDBOX_MODE = options.sandboxMode ?? 'never';
   try {
     return await import(`../mcp/gitmcp/server.mjs?test=${suffix}-${Date.now()}`);
   } finally {
@@ -36,8 +42,22 @@ async function importGitMcp(root, args, suffix, options = {}) {
     else process.env.LOCAL_MCP_DISALLOWED_FILES = previousDeniedFiles;
     if (previousDeniedPathGlobs === undefined) delete process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS;
     else process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = previousDeniedPathGlobs;
+    if (previousSandboxMode === undefined) delete process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;
+    else process.env.LOCAL_MCP_CODEX_SANDBOX_MODE = previousSandboxMode;
   }
 }
+
+test('gitmcp requires an absolute Git executable at startup', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitmcp-executable-required-'));
+  await assert.rejects(
+    importGitMcp(root, [], 'missing-git-executable', { omitGitExecutable: true }),
+    /--git-executable=<absolute-path> is required/
+  );
+  await assert.rejects(
+    importGitMcp(root, ['--git-executable=git'], 'relative-git-executable', { omitGitExecutable: true }),
+    /--git-executable=<absolute-path> is required/
+  );
+});
 
 test('gitmcp exposes only local Git capabilities', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-default-'));
@@ -62,8 +82,9 @@ test('gitmcp exposes only local Git capabilities', async () => {
   assert.ok(names.includes('list_worktrees'));
   assert.ok(names.includes('create_worktree'));
   assert.ok(names.includes('remove_worktree'));
-  assert.ok(names.includes('stage_paths'));
-  assert.ok(names.includes('unstage_paths'));
+  assert.ok(!names.includes('add_all'));
+  assert.ok(!names.includes('stage_paths'));
+  assert.ok(!names.includes('unstage_paths'));
   assert.ok(!names.includes('delete_branch'));
 });
 
@@ -80,6 +101,7 @@ test('gitmcp reports which standard Git behaviors are preserved', async () => {
   assert.equal(policy.gitConfiguration.lineEndingConversionRespected, true);
   assert.equal(policy.gitConfiguration.systemAndGlobalCleanSmudgeFiltersRespected, true);
   assert.equal(policy.gitConfiguration.commitCapabilityMovedToDedicatedMcp, true);
+  assert.equal(policy.gitConfiguration.indexMutationCapabilityMovedToDedicatedMcp, true);
   assert.equal(policy.deliberatelyDisabled.hooks, true);
   assert.equal(policy.attributes.systemAndGlobalTextconvRespected, true);
   assert.equal(policy.attributes.repositoryExternalDiffAndTextconvRejected, true);
@@ -96,6 +118,9 @@ test('gitmcp accepts legacy disable flags as no-ops without restoring moved capa
   assert.ok(!tools.has('push'));
   assert.ok(!tools.has('pull'));
   assert.ok(!tools.has('clone_repository'));
+  assert.ok(!tools.has('add_all'));
+  assert.ok(!tools.has('stage_paths'));
+  assert.ok(!tools.has('unstage_paths'));
   const annotationKeys = ['destructiveHint', 'idempotentHint', 'openWorldHint', 'readOnlyHint'];
   for (const tool of tools.values()) assert.deepEqual(Object.keys(tool.annotations).sort(), annotationKeys);
   assert.deepEqual(tools.get('status').annotations, {
@@ -110,24 +135,7 @@ test('gitmcp accepts legacy disable flags as no-ops without restoring moved capa
     idempotentHint: true,
     openWorldHint: false
   });
-  assert.deepEqual(tools.get('add_all').annotations, {
-    readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: true,
-    openWorldHint: false
-  });
-  assert.deepEqual(tools.get('stage_paths').annotations, {
-    readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: true,
-    openWorldHint: false
-  });
-  assert.deepEqual(tools.get('unstage_paths').annotations, {
-    readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: true,
-    openWorldHint: false
-  });
+
 });
 
 test('gitmcp rejects unknown CLI options instead of forwarding them to Git', async () => {
@@ -421,24 +429,7 @@ test('gitmcp manages branches and allowed worktrees without branch deletion or f
   assert.equal(restored.result.structuredContent.result.detached, false);
 });
 
-test('gitmcp add_all preserves configured line-ending conversion', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'gitmcp-autocrlf-'));
-  await exec('git', ['init'], { cwd: root });
-  await exec('git', ['config', 'core.autocrlf', 'true'], { cwd: root });
-  await writeFile(join(root, 'line.txt'), 'alpha\r\nbeta\r\n', 'utf8');
-  const { createServer } = await importGitMcp(root, [], 'autocrlf');
-  const server = createServer();
-  await server(request(1, 'initialize'));
-  const added = await server(request(2, 'tools/call', { name: 'add_all', arguments: { repositoryPath: root } }));
-  assert.equal(added.result.isError, false);
-  const blob = (await exec('git', ['show', ':line.txt'], { cwd: root })).stdout;
-  assert.equal(blob, 'alpha\nbeta\n');
-  const configuration = await server(request(3, 'tools/call', { name: 'get_effective_config', arguments: { repositoryPath: root } }));
-  assert.equal(configuration.result.isError, false);
-  assert.ok(configuration.result.structuredContent.result.configuration.some((line) => /core\.autocrlf\s+true$/i.test(line)));
-});
-
-test('gitmcp rejects repository-local executable filters before status or staging while allowing ordinary repository configuration', async () => {
+test('gitmcp rejects repository-local executable filters before status while allowing ordinary repository configuration', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-local-filter-'));
   await exec('git', ['init'], { cwd: root });
   await exec('git', ['config', 'core.autocrlf', 'true'], { cwd: root });
@@ -448,11 +439,9 @@ test('gitmcp rejects repository-local executable filters before status or stagin
   const { createServer } = await importGitMcp(root, [], 'local-filter');
   const server = createServer();
   await server(request(1, 'initialize'));
-  for (const [id, name] of [[2, 'status'], [3, 'add_all']]) {
-    const refused = await server(request(id, 'tools/call', { name, arguments: { repositoryPath: root } }));
-    assert.equal(refused.result.isError, true);
-    assert.match(refused.result.structuredContent.error, /Repository-local Git configuration contains executable/);
-  }
+  const refused = await server(request(2, 'tools/call', { name: 'status', arguments: { repositoryPath: root } }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /Repository-local Git configuration contains executable/);
 });
 
 test('gitmcp refuses repository operations when an internal path matches disallowed_path_globs', async () => {

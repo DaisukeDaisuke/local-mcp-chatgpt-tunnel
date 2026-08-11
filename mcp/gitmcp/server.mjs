@@ -8,13 +8,29 @@ import { disallowedPathGlobError, findDisallowedPathGlob, normalizeDisallowedPat
 const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
 const MAX_OUTPUT_BYTES = Number(process.env.GIT_MCP_MAX_OUTPUT_BYTES ?? 8 * 1024 * 1024);
+const codexSandboxMode = process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;
+const codexSandboxChangesUser = codexSandboxMode === 'elevated';
+
+function option(name) {
+  const prefix = `--${name}=`;
+  const entry = process.argv.slice(2).find((value) => value.startsWith(prefix));
+  return entry === undefined ? undefined : entry.slice(prefix.length);
+}
 
 const cli = {
   help: process.argv.slice(2).some((value) => value === '--help' || value === '-h')
 };
+const gitExecutableConfigured = cli.help ? null : option('git-executable');
+if (!cli.help && (typeof gitExecutableConfigured !== 'string' || !isAbsolute(gitExecutableConfigured))) {
+  throw new Error('--git-executable=<absolute-path> is required');
+}
+if (!cli.help && process.platform === 'win32' && !/\.exe$/i.test(gitExecutableConfigured)) {
+  throw new Error('--git-executable must point to a native .exe on Windows');
+}
 
 for (const argument of process.argv.slice(2)) {
   if (argument === '--help' || argument === '-h') continue;
+  if (argument.startsWith('--git-executable=')) continue;
   // Backward-compatible no-ops. Remote/commit capabilities moved to git-capability.
   if (argument.startsWith('--disable-push=') || argument.startsWith('--disable-pull=') || argument.startsWith('--disable-clone=')) continue;
   throw new Error(`Unknown argument: ${argument}`);
@@ -23,20 +39,21 @@ for (const argument of process.argv.slice(2)) {
 export const GIT_MCP_HELP = `gitmcp
 
 Usage:
-  node mcp/gitmcp/server.mjs
+  node mcp/gitmcp/server.mjs --git-executable=<absolute-path>
 
 Legacy --disable-push/--disable-pull/--disable-clone options are accepted as no-ops so older
-gateway.toml files still start. commit, push, pull, and clone_repository are no longer exposed by
-this MCP; register mcp/git-capability/server.mjs separately for each required capability.
+gateway.toml files still start. index staging, commit, push, pull, and clone_repository are no longer
+exposed by this MCP; register mcp/git-capability/server.mjs separately for each required capability.
 Local Git tools such as status, diff, show, branch listing and creation, checkout, worktree creation
-and removal, add_all, stage_paths, and unstage_paths remain available.
+and removal remain available.
 Branch deletion is intentionally absent.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
 Gateway calls also require an HMAC-signed isolated base and root list; public root or workspace override arguments are rejected.
 Standard Git ignore rules, attributes, line-ending conversion, and system/global filters are preserved.
 Repository-local executable Git configuration is rejected. Because system/global filters and
 diff/textconv programs are still respected, running this MCP inside a Codex OS sandbox is recommended.
-Git is always spawned with shell=false and fixed subcommands and options.
+Git is always spawned from the startup-fixed absolute --git-executable path with shell=false and
+fixed subcommands and options.
 `;
 
 function pathArray(name, fallback = []) {
@@ -75,7 +92,6 @@ const toolResult = (value, isError = false) => ({
 const READ_ONLY_ANNOTATIONS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const LOCAL_STATE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const LOCAL_ADDITIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
-const LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
 const LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
 
 const repositorySchema = () => ({
@@ -235,19 +251,6 @@ const schemas = [
     },
     annotations: LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS
   },
-  { name: 'add_all', description: 'Stage all non-ignored changes with the fixed command git add --all -- . Standard Git ignore, attributes, clean filters, and line-ending conversion are respected.', inputSchema: repositorySchema(), annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS },
-  {
-    name: 'stage_paths',
-    description: 'Stage only the selected repository files or directories with literal pathspecs. Deletions below selected directories are included; unrelated changes remain unstaged.',
-    inputSchema: repositoryPathsSchema(),
-    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
-  },
-  {
-    name: 'unstage_paths',
-    description: 'Remove only the selected repository files or directories from the index without changing working-tree files. Literal pathspecs are used, including before the first commit.',
-    inputSchema: repositoryPathsSchema(),
-    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS
-  },
 ].map((schema) => ({ ...schema, outputSchema: TOOL_OUTPUT_SCHEMA }));
 
 const normalizeCase = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
@@ -265,6 +268,7 @@ function assertNotGlobDenied(path, context) {
 
 let policyPromise;
 let workingDirectoryPromise;
+let gitExecutablePromise;
 
 async function canonicalExisting(path) {
   if (typeof path !== 'string' || path.length === 0 || /[\0\r\n]/.test(path)) throw new Error('Path must be a non-empty string without NUL or line breaks');
@@ -275,6 +279,15 @@ async function canonicalDirectory(path) {
   const actual = await canonicalExisting(path);
   if (!(await stat(actual)).isDirectory()) throw new Error(`Configured path is not a directory: ${path}`);
   return actual;
+}
+
+async function canonicalGitExecutable() {
+  gitExecutablePromise ??= (async () => {
+    const actual = await realpath(gitExecutableConfigured);
+    if (!(await stat(actual)).isFile()) throw new Error('--git-executable must point to a regular file');
+    return actual;
+  })();
+  return gitExecutablePromise;
 }
 
 async function canonicalizeExistingPrefix(path) {
@@ -413,30 +426,31 @@ function safeShowFormat(value = 'patch') {
 
 
 async function runGit(cwd, args, { input, acceptedExitCodes = [0] } = {}) {
+  const executable = await canonicalGitExecutable();
   return new Promise((resolvePromise, reject) => {
     const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const configEntries = [
+      ['core.hooksPath', nullPath],
+      ['protocol.file.allow', 'never'],
+      ['protocol.ext.allow', 'never'],
+      ['protocol.http.allow', 'always'],
+      ['protocol.https.allow', 'always'],
+      ['protocol.ssh.allow', 'always'],
+      ['core.fsmonitor', 'false'],
+      ...(codexSandboxChangesUser ? [['safe.directory', cwd]] : [])
+    ];
     const environment = {
       ...environmentWithoutBundledIsolationKey(),
       GIT_TERMINAL_PROMPT: '0',
       GIT_OPTIONAL_LOCKS: '0',
-      GIT_CONFIG_COUNT: '7',
-      GIT_CONFIG_KEY_0: 'core.hooksPath',
-      GIT_CONFIG_VALUE_0: nullPath,
-      GIT_CONFIG_KEY_1: 'protocol.file.allow',
-      GIT_CONFIG_VALUE_1: 'never',
-      GIT_CONFIG_KEY_2: 'protocol.ext.allow',
-      GIT_CONFIG_VALUE_2: 'never',
-      GIT_CONFIG_KEY_3: 'protocol.http.allow',
-      GIT_CONFIG_VALUE_3: 'always',
-      GIT_CONFIG_KEY_4: 'protocol.https.allow',
-      GIT_CONFIG_VALUE_4: 'always',
-      GIT_CONFIG_KEY_5: 'protocol.ssh.allow',
-      GIT_CONFIG_VALUE_5: 'always',
-      GIT_CONFIG_KEY_6: 'core.fsmonitor',
-      GIT_CONFIG_VALUE_6: 'false'
+      GIT_CONFIG_COUNT: String(configEntries.length)
     };
+    for (const [index, [key, value]] of configEntries.entries()) {
+      environment[`GIT_CONFIG_KEY_${index}`] = key;
+      environment[`GIT_CONFIG_VALUE_${index}`] = value;
+    }
     delete environment.GIT_EXTERNAL_DIFF;
-    const child = spawn('git', args, {
+    const child = spawn(executable, args, {
       cwd,
       shell: false,
       windowsHide: true,
@@ -678,7 +692,6 @@ async function callTool(name, args = {}) {
         ignoreRules: {
           respected: true,
           ignoredUntrackedFilesShownByStatus: false,
-          ignoredUntrackedFilesStagedByAddAll: false,
           trackedFilesRemainTrackedWhenIgnoredLater: true
         },
         attributes: {
@@ -698,7 +711,8 @@ async function callTool(name, args = {}) {
           repositoryExternalAttributesAndIgnoreFilesRejected: true,
           lineEndingConversionRespected: true,
           systemAndGlobalCleanSmudgeFiltersRespected: true,
-          commitCapabilityMovedToDedicatedMcp: true
+          commitCapabilityMovedToDedicatedMcp: true,
+          indexMutationCapabilityMovedToDedicatedMcp: true
         },
         deliberatelyDisabled: {
           hooks: true,
@@ -907,37 +921,6 @@ async function callTool(name, args = {}) {
       await runGit(cwd, ['worktree', 'remove', '--', target]);
       return { repositoryPath: cwd, worktreePath: target, removed: true, branchDeleted: false, forced: false };
     }
-    case 'add_all': {
-      const cwd = await repository(args.repositoryPath);
-      const denied = await deniedTrackedPaths(cwd);
-      if (denied.length > 0) throw new Error(`Refusing to stage denied paths: ${denied.join(', ')}`);
-      await runGit(cwd, ['add', '--all', '--', '.']);
-      return { repositoryPath: cwd, staged: true };
-    }
-    case 'stage_paths': {
-      const cwd = await repository(args.repositoryPath);
-      const paths = await repositoryRelativePaths(cwd, args.paths);
-      const denied = await deniedTrackedPaths(cwd);
-      if (denied.length > 0) throw new Error(`Refusing to stage denied paths: ${denied.join(', ')}`);
-      await runGit(cwd, ['--literal-pathspecs', 'add', '--all', '--', ...paths]);
-      return { repositoryPath: cwd, paths, staged: true };
-    }
-    case 'unstage_paths': {
-      const cwd = await repository(args.repositoryPath);
-      const paths = await repositoryRelativePaths(cwd, args.paths);
-      const stagedDiff = await runGit(cwd, ['--literal-pathspecs', 'diff', '--cached', '--quiet', '--', ...paths], { acceptedExitCodes: [0, 1] });
-      if (stagedDiff.exitCode === 0) {
-        return { repositoryPath: cwd, paths, unstaged: true, changed: false, unbornHead: false };
-      }
-      const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { acceptedExitCodes: [0, 1] });
-      if (head.exitCode === 0) {
-        await runGit(cwd, ['--literal-pathspecs', 'restore', '--staged', '--source=HEAD', '--', ...paths]);
-      } else {
-        await runGit(cwd, ['--literal-pathspecs', 'rm', '--cached', '-r', '--ignore-unmatch', '--', ...paths]);
-      }
-      return { repositoryPath: cwd, paths, unstaged: true, changed: true, unbornHead: head.exitCode !== 0 };
-    }
-
     default: throw new Error(`Unknown tool: ${name}`);
   }
 }
@@ -952,8 +935,8 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: 'gitmcp', version: '1.4.0' },
-        instructions: 'Local allowlisted Git operations only. commit, push, pull, and clone are intentionally absent and must be registered as separate git-capability MCP instances. Repository-local executable Git configuration and hooks are rejected. System/global filters and diff/textconv remain compatible, so a Codex OS sandbox is recommended when this MCP is allowed to modify files.'
+        serverInfo: { name: 'gitmcp', version: '1.5.0' },
+        instructions: 'Local allowlisted Git operations only. Index staging, commit, push, pull, and clone are intentionally absent and must be registered as separate git-capability MCP instances. Repository-local executable Git configuration and hooks are rejected. System/global filters and diff/textconv remain compatible, so a Codex OS sandbox is recommended when this MCP is allowed to modify files.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');

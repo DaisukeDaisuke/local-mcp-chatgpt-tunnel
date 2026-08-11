@@ -7,7 +7,7 @@ import { ToolPathPolicy } from '../../app/path-policy.mjs';
 
 const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
-const MODES = new Set(['commit', 'push', 'pull', 'clone']);
+const MODES = new Set(['stage', 'commit', 'push', 'pull', 'clone']);
 const MAX_OUTPUT_BYTES = Number(process.env.GIT_CAPABILITY_MAX_OUTPUT_BYTES ?? 4 * 1024 * 1024);
 const MAX_COMMIT_MESSAGE_BYTES = Number(process.env.GIT_CAPABILITY_MAX_COMMIT_MESSAGE_BYTES ?? 64 * 1024);
 const DEFAULT_TIMEOUT_MS = Number(process.env.GIT_CAPABILITY_TIMEOUT_MS ?? 300_000);
@@ -20,7 +20,7 @@ function option(name) {
 
 const help = process.argv.slice(2).some((value) => value === '--help' || value === '-h');
 const mode = help ? 'commit' : option('mode');
-if (!help && !MODES.has(mode)) throw new Error('--mode must be one of: commit, push, pull, clone');
+if (!help && !MODES.has(mode)) throw new Error('--mode must be one of: stage, commit, push, pull, clone');
 const gitExecutableConfigured = help ? null : option('git-executable');
 if (!help && (typeof gitExecutableConfigured !== 'string' || !isAbsolute(gitExecutableConfigured))) {
   throw new Error('--git-executable=<absolute-path> is required');
@@ -141,6 +141,8 @@ const policy = new ToolPathPolicy({
 const isolation = createBundledIsolation();
 let standaloneWorkingDirectoryPromise;
 let gitExecutablePromise;
+const codexSandboxMode = process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;
+const codexSandboxChangesUser = codexSandboxMode === 'elevated';
 
 const RESPONSE_SCHEMA = {
   type: 'object',
@@ -151,6 +153,7 @@ const RESPONSE_SCHEMA = {
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const LOCAL_STATE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const LOCAL_DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+const LOCAL_DESTRUCTIVE_IDEMPOTENT = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
 const OPEN_DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
 const OPEN_ADDITIVE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
 
@@ -159,7 +162,39 @@ const commonSchemas = [
   { name: 'get_working_directory', description: 'Return the verified directory used as the repository or clone parent for this capability.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: READ_ONLY },
   { name: 'set_working_directory', description: 'Change the relative-path base to one existing directory inside the signed roots after applying all allow/deny rules.', inputSchema: { type: 'object', properties: { path: { type: 'string', minLength: 1 } }, required: ['path'], additionalProperties: false }, annotations: LOCAL_STATE }
 ];
-const operationSchema = mode === 'commit' ? {
+const stagePathsInputSchema = {
+  type: 'object',
+  properties: {
+    paths: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: { type: 'string', minLength: 1, maxLength: 4096 }
+    }
+  },
+  required: ['paths'],
+  additionalProperties: false
+};
+const operationSchemas = mode === 'stage' ? [
+  {
+    name: 'add_all',
+    description: 'Stage all non-ignored changes with the fixed command git add --all -- . Standard Git ignore, attributes, clean filters, and line-ending conversion are respected.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT
+  },
+  {
+    name: 'stage_paths',
+    description: 'Stage only the selected repository files or directories with literal pathspecs. Deletions below selected directories are included; unrelated changes remain unstaged.',
+    inputSchema: stagePathsInputSchema,
+    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT
+  },
+  {
+    name: 'unstage_paths',
+    description: 'Remove only the selected repository files or directories from the index without changing working-tree files. Literal pathspecs are used, including before the first commit.',
+    inputSchema: stagePathsInputSchema,
+    annotations: LOCAL_DESTRUCTIVE_IDEMPOTENT
+  }
+] : [mode === 'commit' ? {
   name: 'commit',
   description: 'Commit only the already staged index with one literal message. No staging, hooks, arbitrary Git arguments, repository path, or network operation is exposed. Configured signing is allowed, but repository-local executable Git configuration is rejected first.',
   inputSchema: { type: 'object', properties: { message: { type: 'string', minLength: 1 } }, required: ['message'], additionalProperties: false },
@@ -187,8 +222,8 @@ const operationSchema = mode === 'commit' ? {
     additionalProperties: false
   },
   annotations: OPEN_ADDITIVE
-};
-const schemas = [...commonSchemas, operationSchema].map((schema) => ({ ...schema, outputSchema: RESPONSE_SCHEMA }));
+}];
+const schemas = [...commonSchemas, ...operationSchemas].map((schema) => ({ ...schema, outputSchema: RESPONSE_SCHEMA }));
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const protocolError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
@@ -259,7 +294,7 @@ async function canonicalGitExecutable() {
   return gitExecutablePromise;
 }
 
-function gitEnvironment() {
+function gitEnvironment(cwd) {
   const environment = environmentWithoutBundledIsolationKey();
   for (const name of [
     'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_EXTERNAL_DIFF',
@@ -270,32 +305,32 @@ function gitEnvironment() {
     if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/i.test(name)) delete environment[name];
   }
   const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const configEntries = [
+    ['core.hooksPath', nullPath],
+    ['protocol.file.allow', 'never'],
+    ['protocol.ext.allow', 'never'],
+    ['protocol.http.allow', 'never'],
+    ['protocol.https.allow', 'always'],
+    ['protocol.ssh.allow', 'always'],
+    ['core.fsmonitor', 'false'],
+    ...(codexSandboxChangesUser ? [['safe.directory', cwd]] : [])
+  ];
   Object.assign(environment, {
     GIT_TERMINAL_PROMPT: '0',
     GIT_OPTIONAL_LOCKS: '0',
-    GIT_CONFIG_COUNT: '7',
-    GIT_CONFIG_KEY_0: 'core.hooksPath',
-    GIT_CONFIG_VALUE_0: nullPath,
-    GIT_CONFIG_KEY_1: 'protocol.file.allow',
-    GIT_CONFIG_VALUE_1: 'never',
-    GIT_CONFIG_KEY_2: 'protocol.ext.allow',
-    GIT_CONFIG_VALUE_2: 'never',
-    GIT_CONFIG_KEY_3: 'protocol.http.allow',
-    GIT_CONFIG_VALUE_3: 'never',
-    GIT_CONFIG_KEY_4: 'protocol.https.allow',
-    GIT_CONFIG_VALUE_4: 'always',
-    GIT_CONFIG_KEY_5: 'protocol.ssh.allow',
-    GIT_CONFIG_VALUE_5: 'always',
-    GIT_CONFIG_KEY_6: 'core.fsmonitor',
-    GIT_CONFIG_VALUE_6: 'false'
+    GIT_CONFIG_COUNT: String(configEntries.length)
   });
+  for (const [index, [key, value]] of configEntries.entries()) {
+    environment[`GIT_CONFIG_KEY_${index}`] = key;
+    environment[`GIT_CONFIG_VALUE_${index}`] = value;
+  }
   return environment;
 }
 
 async function runGit(cwd, args, { acceptedExitCodes = [0] } = {}) {
   const executable = await canonicalGitExecutable();
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(executable, args, { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: gitEnvironment() });
+    const child = spawn(executable, args, { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: gitEnvironment(cwd) });
     const stdout = [];
     const stderr = [];
     let bytes = 0;
@@ -370,6 +405,68 @@ async function assertStagedPathsAllowed(cwd) {
   const isolationPolicy = await contextPolicy(roots, base);
   await policy.assertToolArguments('commit', { paths }, base);
   await isolationPolicy.assertToolArguments('commit', { paths }, base);
+}
+
+async function repositoryRelativePaths(cwd, values) {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 100) throw new Error('paths must contain from 1 through 100 entries');
+  const base = await contextBase();
+  const roots = await contextRoots();
+  const isolationPolicy = await contextPolicy(roots, base);
+  const relativePaths = [];
+  for (const value of values) {
+    rejectAmbiguousPath(value, 'path');
+    if (value.length > 4096) throw new Error('Each paths entry must be at most 4096 characters');
+    const candidate = resolve(isAbsolute(value) ? value : join(cwd, value));
+    if (!within(cwd, candidate)) throw new Error(`Repository path escaped the worktree: ${value}`);
+    const relativePath = candidate === cwd ? '.' : relative(cwd, candidate).split(sep).join('/');
+    if (relativePath.split('/').includes('.git')) throw new Error(`Direct .git paths are not supported: ${value}`);
+    await policy.assertToolArguments('stage path', { path: candidate }, base);
+    await isolationPolicy.assertToolArguments('stage path', { path: candidate }, base);
+    relativePaths.push(relativePath);
+  }
+  return relativePaths;
+}
+
+async function assertStageCandidatesAllowed(cwd) {
+  const output = (await runGit(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).stdout;
+  const paths = output.split('\0').filter(Boolean).map((entry) => resolve(cwd, entry));
+  if (paths.length === 0) return;
+  const base = await contextBase();
+  const roots = await contextRoots();
+  const isolationPolicy = await contextPolicy(roots, base);
+  await policy.assertToolArguments('stage', { paths }, base);
+  await isolationPolicy.assertToolArguments('stage', { paths }, base);
+}
+
+async function addAll() {
+  const cwd = await repository();
+  await assertStageCandidatesAllowed(cwd);
+  await runGit(cwd, ['add', '--all', '--', '.']);
+  return { repositoryPath: cwd, staged: true };
+}
+
+async function stagePaths(args) {
+  const cwd = await repository();
+  const paths = await repositoryRelativePaths(cwd, args.paths);
+  await assertStageCandidatesAllowed(cwd);
+  await runGit(cwd, ['--literal-pathspecs', 'add', '--all', '--', ...paths]);
+  return { repositoryPath: cwd, paths, staged: true };
+}
+
+async function unstagePaths(args) {
+  const cwd = await repository();
+  const paths = await repositoryRelativePaths(cwd, args.paths);
+  const stagedDiff = await runGit(cwd, ['--literal-pathspecs', 'diff', '--cached', '--quiet', '--', ...paths], { acceptedExitCodes: [0, 1] });
+  if (stagedDiff.exitCode === 0) {
+    return { repositoryPath: cwd, paths, unstaged: true, changed: false, unbornHead: false };
+  }
+  const head = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { acceptedExitCodes: [0, 1] });
+  if (head.exitCode === 0) {
+    await runGit(cwd, ['--literal-pathspecs', 'restore', '--staged', '--source=HEAD', '--', ...paths]);
+  } else {
+    await runGit(cwd, ['--literal-pathspecs', 'rm', '--cached', '-r', '--ignore-unmatch', '--', ...paths]);
+  }
+  return { repositoryPath: cwd, paths, unstaged: true, changed: true, unbornHead: head.exitCode !== 0 };
 }
 
 async function currentBranch(cwd) {
@@ -490,6 +587,18 @@ async function callTool(name, args = {}) {
     if (!isolation.current()) standaloneWorkingDirectoryPromise = Promise.resolve(target);
     return { workingDirectory: target };
   }
+  if (mode === 'stage' && name === 'add_all') {
+    assertExactArguments(args, []);
+    return addAll();
+  }
+  if (mode === 'stage' && name === 'stage_paths') {
+    assertExactArguments(args, ['paths'], ['paths']);
+    return stagePaths(args);
+  }
+  if (mode === 'stage' && name === 'unstage_paths') {
+    assertExactArguments(args, ['paths'], ['paths']);
+    return unstagePaths(args);
+  }
   if (mode === 'commit' && name === 'commit') {
     assertExactArguments(args, ['message'], ['message']);
     return commit(args);
@@ -519,8 +628,8 @@ export function createServer() {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
         capabilities: { tools: {} },
-        serverInfo: { name: `git-capability-${mode}`, version: '0.1.0' },
-        instructions: `Single-capability Git MCP. Only ${operationSchema.name} plus signed-workspace control tools are exposed. Repository-local executable Git configuration is rejected before the capability runs. sandbox mode remains an explicit gateway.toml choice for backward compatibility.`
+        serverInfo: { name: `git-capability-${mode}`, version: '0.2.0' },
+        instructions: `Single-capability Git MCP. Only ${operationSchemas.map((schema) => schema.name).join(', ')} plus signed-workspace control tools are exposed. Repository-local executable Git configuration is rejected before the capability runs. sandbox mode remains an explicit gateway.toml choice for backward compatibility.`
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
@@ -558,7 +667,7 @@ export async function startStdio(input = process.stdin, output = process.stdout)
   });
 }
 
-export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path> --url=<exact-url>\n\nFor push/pull, legacy --expected-remote-url=<exact-url> remains supported instead of --repository.\nEach process exposes exactly one Git capability plus roots/get_working_directory/set_working_directory.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
+export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=stage --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path> --url=<exact-url>\n\nFor push/pull, legacy --expected-remote-url=<exact-url> remains supported instead of --repository.\nEach process exposes one bounded Git capability group plus roots/get_working_directory/set_working_directory. stage exposes only add_all, stage_paths, and unstage_paths.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
 
 if (directExecution) {
   if (help) process.stdout.write(HELP);

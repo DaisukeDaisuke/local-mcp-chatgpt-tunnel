@@ -1,6 +1,8 @@
 private_use_only = true
+# Default false. When true, only [gateway] INFO lines are appended to logs/<startup-datetime>_pid-<pid>.txt.
+enable-logging-files = false
 # Publishes gateway__list_available_tools. It reads only the gateway's existing in-memory tool registry.
-publish_tool_directory = false
+publish_tool_directory = true
 tool_annotations_path = "tool-annotations.toml"
 
 # Every started child MCP also receives <prefix>__get_gateway_access_scope.
@@ -29,12 +31,12 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# Local Git filesystem operations only. commit, push, pull, and clone are separate MCP processes below.
+# Local Git filesystem operations only. index staging, commit, push, pull, and clone are separate MCP processes below.
 # This separation lets each capability choose its own sandbox boundary and keeps signing/network powers out of gitmcp.
 # Branch deletion and forced worktree removal are not exposed.
 [mcp_servers.git]
 command = "node"
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "git"
@@ -50,8 +52,22 @@ disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']
 
-# One Git capability per MCP process. --git-executable is fixed at startup and is never a tool argument.
-# commit accepts only a literal message; repository selection comes from the signed isolated workspace/base.
+# Index staging is separated because git add/restore writes .git/index and .git/index.lock.
+[mcp_servers.git_stage]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=stage', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+prefix = "git_stage"
+annotation_config = false
+serial_group = "git"
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
+disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
+disallowed_path_globs = ['**.ssh**']
+
+# Commit accepts only a literal message; repository selection comes from the signed isolated workspace/base.
 [mcp_servers.git_commit]
 command = "node"
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=commit', '--git-executable=C:\Program Files\Git\cmd\git.exe']

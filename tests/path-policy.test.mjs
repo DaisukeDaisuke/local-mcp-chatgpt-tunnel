@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -156,6 +156,30 @@ test('path policy blocks direct access to the gateway configuration', async () =
     protectedFiles: [config]
   });
   await assert.rejects(policy.assertToolArguments('read_text', { path: config }), /gateway configuration/);
+});
+
+test('isolated access-scope descriptions omit denied log directories outside the selected workspace', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'path-policy-log-scope-'));
+  const source = join(root, 'src');
+  const logs = join(root, 'logs');
+  await Promise.all([
+    mkdir(source),
+    mkdir(logs)
+  ]);
+  const policy = new ToolPathPolicy({
+    serverName: 'files',
+    cwd: root,
+    allowedDirectories: [root],
+    disallowedDirectories: [logs]
+  });
+
+  const rootScope = await policy.describeForAllowedDirectories([root], root);
+  assert.deepEqual(rootScope.configured.disallowedDirectories, [logs]);
+
+  const sourceScope = await policy.describeForAllowedDirectories([source], source);
+  assert.deepEqual(sourceScope.configured.allowedDirectories, [source]);
+  assert.deepEqual(sourceScope.configured.disallowedDirectories, []);
+  assert.deepEqual(sourceScope.effective.disallowedDirectories, []);
 });
 
 test('Windows path policy blocks alternate data stream aliases of the gateway configuration', async () => {

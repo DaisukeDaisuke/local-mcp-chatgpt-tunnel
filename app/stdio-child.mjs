@@ -40,16 +40,24 @@ export class StdioMcpChild {
     const protectedGatewayConfigPaths = this.config.dangerousAllowGatewayConfigAccess
       ? []
       : protectedPathsInsideConfiguredAccess(this.config, this.config.protectedGatewayConfigPaths ?? []);
+    const protectedGatewayLogDirectories = this.config.protectedGatewayLogDirectories ?? [];
+    const protectedGatewayLogFiles = this.config.protectedGatewayLogFiles ?? [];
+    const disallowedDirectories = [...new Set([
+      ...(this.config.disallowedDirectories ?? []),
+      ...protectedGatewayLogDirectories
+    ])];
     const disallowedFiles = [...new Set([
       ...(this.config.disallowedFiles ?? []),
-      ...protectedGatewayConfigPaths
+      ...protectedGatewayConfigPaths,
+      ...protectedGatewayLogFiles
     ])];
     const policyEnvironment = {
       LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify(this.config.allowedDirectories ?? []),
       LOCAL_MCP_ALLOWED_FILES: JSON.stringify(this.config.allowedFiles ?? []),
-      LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(this.config.disallowedDirectories ?? []),
+      LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(disallowedDirectories),
       LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(disallowedFiles),
       LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? []),
+      LOCAL_MCP_CODEX_SANDBOX_MODE: this.config.sandbox ?? 'never',
       ...(this.config.isBundled && this.config.gatewayIsolationKey
         ? { LOCAL_MCP_GATEWAY_ISOLATION_KEY: this.config.gatewayIsolationKey }
         : {}),
