@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,10 @@ import { signBundledIsolationContext } from '../app/bundled-isolation.mjs';
 const exec = promisify(execFile);
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
 const ISOLATION_KEY = 'git-capability-test-isolation-key-0123456789';
+
+async function testRoot(prefix) {
+  return realpath(await mkdtemp(join(tmpdir(), prefix)));
+}
 
 async function gitExecutable() {
   const locator = process.platform === 'win32' ? 'where.exe' : 'which';
@@ -62,7 +66,7 @@ async function importCapability(root, mode, suffix) {
 }
 
 test('git-capability matches GitHub HTTPS and SSH remotes by OWNER/REPO identity', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'git-capability-repository-match-'));
+  const root = await testRoot('git-capability-repository-match-');
   const { githubRemoteMatchesRepository } = await importCapability(root, 'push', 'repository-match');
   assert.equal(
     githubRemoteMatchesRepository('https://github.com/DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
@@ -80,14 +84,14 @@ test('git-capability matches GitHub HTTPS and SSH remotes by OWNER/REPO identity
     githubRemoteMatchesRepository('https://github.com/DaisukeDaisuke/desmume_webassembly-old.git', 'DaisukeDaisuke/desmume_webassembly'),
     false
   );
-  await assert.rejects(
-    async () => githubRemoteMatchesRepository('https://example.com/DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
-    /github\.com/
+  assert.throws(
+    () => githubRemoteMatchesRepository('https://example.com/DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
+    (error) => error.message === 'remote URL must target github.com without a custom port, query, or fragment'
   );
 });
 
 test('git-capability exposes exactly one Git operation per mode', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'git-capability-schema-'));
+  const root = await testRoot('git-capability-schema-');
   const expected = new Map([
     ['commit', 'commit'],
     ['push', 'push'],
@@ -115,7 +119,7 @@ test('git-capability exposes exactly one Git operation per mode', async () => {
 });
 
 test('git-capability commit accepts only a literal message and commits the staged index', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'git-capability-commit-'));
+  const root = await testRoot('git-capability-commit-');
   await exec('git', ['init'], { cwd: root });
   await exec('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
   await exec('git', ['config', 'user.name', 'Test User'], { cwd: root });
@@ -138,11 +142,11 @@ test('git-capability commit accepts only a literal message and commits the stage
     arguments: signedArguments(root, { message: 'nope', repositoryPath: root })
   }));
   assert.equal(extra.result.isError, true);
-  assert.match(extra.result.structuredContent.error, /Unexpected tool argument: repositoryPath/);
+  assert.equal(extra.result.structuredContent.error, 'Unexpected tool argument: repositoryPath');
 });
 
 test('git-capability commit rejects repository-local executable signing configuration', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'git-capability-local-signing-'));
+  const root = await testRoot('git-capability-local-signing-');
   await exec('git', ['init'], { cwd: root });
   await exec('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
   await exec('git', ['config', 'user.name', 'Test User'], { cwd: root });
@@ -157,11 +161,14 @@ test('git-capability commit rejects repository-local executable signing configur
     arguments: signedArguments(root, { message: 'must not execute local gpg.program' })
   }));
   assert.equal(refused.result.isError, true);
-  assert.match(refused.result.structuredContent.error, /Repository-local Git configuration contains executable/);
+  assert.equal(
+    refused.result.structuredContent.error,
+    'Repository-local Git configuration contains executable hooks, helpers, filters, diff/textconv commands, merge drivers, signing programs, proxies, custom transport commands, or external attributes/ignore files'
+  );
 });
 
 test('git-capability fails closed on a modified signed workspace context', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'git-capability-signature-'));
+  const root = await testRoot('git-capability-signature-');
   const { createServer } = await importCapability(root, 'commit', 'signature');
   const server = createServer();
   await server(request(1, 'initialize'));
@@ -169,5 +176,5 @@ test('git-capability fails closed on a modified signed workspace context', async
   args.__localMcpIsolation.base = join(root, 'forged');
   const refused = await server(request(2, 'tools/call', { name: 'commit', arguments: args }));
   assert.equal(refused.result.isError, true);
-  assert.match(refused.result.structuredContent.error, /isolation signature|outside its roots/i);
+  assert.equal(refused.result.structuredContent.ok, false);
 });

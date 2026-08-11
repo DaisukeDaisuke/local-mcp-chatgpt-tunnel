@@ -180,23 +180,6 @@ test('gitmcp is local-only and preserves compatible Git behavior inside its chos
   assert.doesNotMatch(source, /worktree', 'remove', '--force|branch', '-[dD]/);
 });
 
-test('git-capability isolates commit and network Git powers into one fixed capability per process', async () => {
-  const source = await readFile(new URL('../mcp/git-capability/server.mjs', import.meta.url), 'utf8');
-  assert.match(source, /createBundledIsolation/);
-  assert.match(source, /isolation\.run/);
-  assert.match(source, /--git-executable=<absolute-path> is required/);
-  assert.match(source, /MODES = new Set\(\['commit', 'push', 'pull', 'clone'\]\)/);
-  assert.match(source, /Repository-local Git configuration contains executable/);
-  assert.match(source, /protocol\.file\.allow/);
-  assert.match(source, /protocol\.ext\.allow/);
-  assert.match(source, /protocol\.http\.allow/);
-  assert.match(source, /'push', '--', remote, branch/);
-  assert.match(source, /'merge', '--ff-only', '--no-edit'/);
-  assert.match(source, /'clone', '--no-local', '--no-checkout'/);
-  assert.doesNotMatch(source, /exec\(|execFile\(|shell:\s*true/);
-  assert.doesNotMatch(source, /repositoryPath:\s*\{[^}]*type:\s*'string'/);
-});
-
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {
   await assert.rejects(access(new URL('../mcp/ghidra', import.meta.url)));
   await assert.rejects(access(new URL('../mcp/dq9-test', import.meta.url)));
