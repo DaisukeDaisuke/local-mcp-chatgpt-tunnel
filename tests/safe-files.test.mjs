@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -577,6 +577,30 @@ test('structured apply_patch updates and adds UTF-8 files', async () => {
   assert.equal(applied.result.isError, false);
   assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'beta\nomega\n');
   assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), 'created\n');
+});
+
+test('existing-file updates do not require renaming the destination', { skip: process.platform === 'win32' ? 'POSIX directory permissions are used to prove the no-rename update path' : false }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-no-rename-'));
+  const locked = join(root, 'locked');
+  await mkdir(locked);
+  const target = join(locked, 'a.txt');
+  await writeFile(target, 'alpha\n', 'utf8');
+  await chmod(target, 0o600);
+  await chmod(locked, 0o555);
+  t.after(async () => { await chmod(locked, 0o700).catch(() => {}); });
+
+  const server = await serverFor(root, 'no-rename');
+  const replaced = await server(request(2, 'tools/call', {
+    name: 'replace_text',
+    arguments: { path: 'locked/a.txt', oldText: 'alpha', newText: 'beta', expectedOccurrences: 1 }
+  }));
+  assert.equal(replaced.result.isError, false);
+  assert.equal(await readFile(target, 'utf8'), 'beta\n');
+
+  const patch = ['*** Begin Patch', '*** Update File: locked/a.txt', '@@', '-beta', '+gamma', '*** End Patch'].join('\n');
+  const patched = await server(request(3, 'tools/call', { name: 'apply_patch', arguments: { patch } }));
+  assert.equal(patched.result.isError, false);
+  assert.equal(await readFile(target, 'utf8'), 'gamma\n');
 });
 
 test('unified apply_patch uses fixed git apply and blocks .git internals', async () => {

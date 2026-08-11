@@ -77,6 +77,29 @@ git clone https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel.git
 ### 1.4 zip
 [最新版のスナップショットをダウンロード](https://github.com/DaisukeDaisuke/local-mcp-chatgpt-tunnel/archive/refs/heads/main.zip) <br>
 ダウンロードしたファイルを展開してください。 <br>
+
+### 1.5 Codex sandboxで既存Workspaceを書き込めない場合のACL継承修復
+Codex elevated sandboxを使う場合、`allowed_directories`にWorkspaceを指定していても、以前から存在するサブディレクトリ内のファイルだけ`EPERM: operation not permitted`で更新できないことがあります。<br>
+この状態では、Workspace直下の既存ファイルやsandbox内で新しく作成したファイルは書き込める一方、`src`、`app`、`tests`など既存の子ディレクトリにある既存ファイルだけ書き込みが拒否される場合があります。<br>
+Windows側で既存ファイルのACL継承が無効または不整合になっている場合、CodexがWorkspace rootへ設定したsandbox用の書き込み権限が既存の子ファイルまで正しく伝播しないためです。<br>
+
+この症状が発生したWorkspaceに対してだけ、GatewayとTunnelを停止した状態で通常権限のPowerShellから次を実行します。`$workspace`は、実際に`allowed_directories`へ指定するWorkspaceの絶対パスへ置き換えてください。<br>
+```powershell
+$workspace = 'C:\Users\owner\Documents\YOUR_PROJECT'
+icacls $workspace /inheritancelevel:e /T /C
+```
+
+このコマンドの意味は次のとおりです。<br>
+- `$workspace`: ACL継承を修復する対象のWorkspaceです。`C:\`、ユーザープロファイル全体、Documents全体など、必要以上に広いパスを指定しないでください。<br>
+- `/inheritancelevel:e`: 対象のACLで親ディレクトリからの権限継承を有効化します。既存の明示的なACEを一括削除する`/reset`とは異なり、継承を有効にするための指定です。<br>
+- `/T`: 指定したWorkspaceだけでなく、その配下の既存ファイルと既存サブディレクトリにも再帰的に処理します。今回の問題では、既存の子ファイルまで処理するために必要です。<br>
+- `/C`: 一部のファイルで処理に失敗しても、その時点で全体を中断せず残りの項目を処理します。実行結果に失敗が表示された場合は、その対象を確認してください。<br>
+
+この操作は`Everyone`へ書き込み権限を与えるコマンドではなく、指定したツリーでWindowsのACL継承を有効化する操作です。ただし、Workspace配下のACL状態を変更するため、対象パスを必ず確認してから実行してください。<br>
+`icacls ... /reset`や広範囲への`/grant`を代用として実行しないでください。既存の明示ACLや意図した拒否設定まで変更する可能性があります。<br>
+
+実行後はGatewayを再起動してください。Codex sandboxは起動時に`allowed_directories`へ対応するsandbox用ACLを更新するため、継承を修復した既存の子ファイルにも書き込み権限が反映されるようになります。<br>
+この処理はGatewayから自動実行しません。ACL変更は利用者が指定したWorkspaceへ影響するため、症状が発生した既存Workspaceに対して人間が対象パスを確認したうえで実行します。<br>
  
 ## 2. tunnel-clientを配置する
 ### 2.1 Windows用ZIPをダウンロードする
