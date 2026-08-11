@@ -835,7 +835,9 @@ async function atomicWriteBytes(path, bytes, overwrite) {
       if (error?.code !== 'ENOENT') throw error;
     }
   }
-  const temporary = join(dirname(destination), `.${randomUUID()}.tmp`);
+  // Do not use dot-prefixed temporary names. Codex's Windows sandbox can reject
+  // operations in a directory after a hidden/dot-prefixed sibling is created.
+  const temporary = join(dirname(destination), `local-mcp-write-${randomUUID()}-tmp`);
   const handle = await open(temporary, 'wx', 0o600);
   try {
     await handle.writeFile(bytes);
@@ -848,7 +850,7 @@ async function atomicWriteBytes(path, bytes, overwrite) {
     if (overwrite) {
       try {
         await access(destination, constants.F_OK);
-        backup = join(dirname(destination), `.${randomUUID()}.bak`);
+        backup = join(dirname(destination), `local-mcp-write-${randomUUID()}-bak`);
         await rename(destination, backup);
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error;

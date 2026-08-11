@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -27,6 +27,8 @@ test('codex-script runs the fixed runtime inside its existing sandbox process an
   const shared = join(root, 'shared');
   await mkdir(workspace);
   await mkdir(shared);
+  const canonicalWorkspace = await realpath(workspace);
+  const canonicalShared = await realpath(shared);
   const sharedFile = join(shared, 'value.txt');
   await writeFile(sharedFile, 'shared-value', 'utf8');
   const scriptPath = join(workspace, 'read-shared.mjs');
@@ -36,7 +38,10 @@ test('codex-script runs the fixed runtime inside its existing sandbox process an
   ].join('\n'), 'utf8');
 
   const isolationKey = 'codex-script-test-isolation-key-0123456789';
-  const context = { roots: [workspace], base: workspace };
+  // Gateway-signed isolation roots are canonical paths. This matters on macOS,
+  // where temporary directories may be addressed through /var but realpath to
+  // /private/var.
+  const context = { roots: [canonicalWorkspace], base: canonicalWorkspace };
   const child = spawn(process.execPath, [
     resolve('mcp/codex-script/server.mjs'),
     '--mode=run',
@@ -46,7 +51,7 @@ test('codex-script runs the fixed runtime inside its existing sandbox process an
     cwd: workspace,
     env: {
       ...process.env,
-      LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify([workspace, shared]),
+      LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify([canonicalWorkspace, canonicalShared]),
       LOCAL_MCP_ALLOWED_FILES: '[]',
       LOCAL_MCP_DISALLOWED_DIRECTORIES: '[]',
       LOCAL_MCP_DISALLOWED_FILES: '[]',
