@@ -31,11 +31,16 @@ if (!help && process.platform === 'win32' && !/\.exe$/i.test(gitExecutableConfig
 
 const configuredRemote = option('remote') ?? 'origin';
 const expectedRemoteUrl = option('expected-remote-url');
+const expectedRepository = option('repository');
 const cloneUrl = option('url');
 for (const argument of process.argv.slice(2)) {
   if (argument === '--help' || argument === '-h') continue;
   if (argument.startsWith('--mode=') || argument.startsWith('--git-executable=')) continue;
-  if ((mode === 'push' || mode === 'pull') && (argument.startsWith('--remote=') || argument.startsWith('--expected-remote-url='))) continue;
+  if ((mode === 'push' || mode === 'pull') && (
+    argument.startsWith('--remote=') ||
+    argument.startsWith('--expected-remote-url=') ||
+    argument.startsWith('--repository=')
+  )) continue;
   if (mode === 'clone' && argument.startsWith('--url=')) continue;
   throw new Error(`Unknown argument for mode=${mode}: ${argument}`);
 }
@@ -59,9 +64,54 @@ function safeNetworkUrl(value, label) {
   return value;
 }
 
+function validateRepository(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 201 || /[\0\r\n]/.test(value)) {
+    throw new Error('--repository must be OWNER/REPO');
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value)) {
+    throw new Error('--repository must be OWNER/REPO using only letters, numbers, dot, underscore, and hyphen');
+  }
+  if (value.includes('..') || value.endsWith('.git')) throw new Error('--repository is invalid');
+  return value;
+}
+
+export function githubRepositoryFromRemoteUrl(value) {
+  const url = safeNetworkUrl(value, 'remote URL');
+  let repositoryPath;
+  if (url.startsWith('git@')) {
+    const match = /^git@([^:]+):(.+)$/.exec(url);
+    if (!match || match[1].toLowerCase() !== 'github.com') throw new Error('remote URL must target github.com');
+    repositoryPath = match[2];
+  } else {
+    const parsed = new URL(url);
+    if (parsed.hostname.toLowerCase() !== 'github.com' || parsed.port || parsed.search || parsed.hash) {
+      throw new Error('remote URL must target github.com without a custom port, query, or fragment');
+    }
+    if (parsed.protocol === 'ssh:' && parsed.username && parsed.username !== 'git') {
+      throw new Error('GitHub SSH remote URL must use the git user');
+    }
+    repositoryPath = parsed.pathname.replace(/^\//, '');
+  }
+  if (repositoryPath.endsWith('.git')) repositoryPath = repositoryPath.slice(0, -4);
+  return validateRepository(repositoryPath);
+}
+
+export function githubRemoteMatchesRepository(remoteUrl, repository) {
+  return githubRepositoryFromRemoteUrl(remoteUrl).toLowerCase() === validateRepository(repository).toLowerCase();
+}
+
 const remote = mode === 'push' || mode === 'pull' ? safeRemote(configuredRemote) : null;
+if (!help && (mode === 'push' || mode === 'pull') && expectedRemoteUrl !== undefined && expectedRepository !== undefined) {
+  throw new Error('Use exactly one of --repository=OWNER/REPO or --expected-remote-url=<exact-url>');
+}
+if (!help && (mode === 'push' || mode === 'pull') && expectedRemoteUrl === undefined && expectedRepository === undefined) {
+  throw new Error('Either --repository=OWNER/REPO or --expected-remote-url=<exact-url> is required');
+}
+const allowedRepository = mode === 'push' || mode === 'pull'
+  ? expectedRepository === undefined ? null : validateRepository(expectedRepository)
+  : null;
 const allowedRemoteUrl = mode === 'push' || mode === 'pull'
-  ? safeNetworkUrl(expectedRemoteUrl, '--expected-remote-url')
+  ? expectedRemoteUrl === undefined ? null : safeNetworkUrl(expectedRemoteUrl, '--expected-remote-url')
   : mode === 'clone'
     ? safeNetworkUrl(cloneUrl, '--url')
     : null;
@@ -116,12 +166,12 @@ const operationSchema = mode === 'commit' ? {
   annotations: LOCAL_DESTRUCTIVE
 } : mode === 'push' ? {
   name: 'push',
-  description: 'Push only the current branch to the fixed startup-configured remote after verifying that remote resolves to the exact expected URL. Force push, refspecs, upstream mutation, arbitrary remotes, and arbitrary URLs are not exposed.',
+  description: 'Push only the current branch to the fixed startup-configured remote after verifying that remote resolves to the allowlisted GitHub OWNER/REPO or legacy exact URL. Force push, refspecs, upstream mutation, arbitrary remotes, and arbitrary URLs are not exposed.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: OPEN_DESTRUCTIVE
 } : mode === 'pull' ? {
   name: 'pull',
-  description: 'Fetch only the fixed startup-configured remote URL, reject denied incoming tree paths, then fast-forward the current branch only. Rebase, merge commits, arbitrary remotes, submodules, and arbitrary URLs are not exposed.',
+  description: 'Fetch only the fixed startup-configured remote after verifying that it resolves to the allowlisted GitHub OWNER/REPO or legacy exact URL, reject denied incoming tree paths, then fast-forward the current branch only. Rebase, merge commits, arbitrary remotes, submodules, and arbitrary URLs are not exposed.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: OPEN_DESTRUCTIVE
 } : {
@@ -335,6 +385,12 @@ async function assertExpectedRemote(cwd) {
     ? ['remote', 'get-url', '--push', '--', remote]
     : ['remote', 'get-url', '--', remote];
   const actual = (await runGit(cwd, command)).stdout.trim();
+  if (allowedRepository !== null) {
+    if (!githubRemoteMatchesRepository(actual, allowedRepository)) {
+      throw new Error(`Configured remote ${remote} does not match the startup allowlisted GitHub repository`);
+    }
+    return;
+  }
   if (actual !== allowedRemoteUrl) throw new Error(`Configured remote ${remote} does not match the startup allowlisted URL`);
 }
 
@@ -502,7 +558,7 @@ export async function startStdio(input = process.stdin, output = process.stdout)
   });
 }
 
-export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --expected-remote-url=<exact-url>\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --expected-remote-url=<exact-url>\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path> --url=<exact-url>\n\nEach process exposes exactly one Git capability plus roots/get_working_directory/set_working_directory.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
+export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path> --url=<exact-url>\n\nFor push/pull, legacy --expected-remote-url=<exact-url> remains supported instead of --repository.\nEach process exposes exactly one Git capability plus roots/get_working_directory/set_working_directory.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
 
 if (directExecution) {
   if (help) process.stdout.write(HELP);

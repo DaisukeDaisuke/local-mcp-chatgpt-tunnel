@@ -7,6 +7,7 @@ import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CODEX_SCRIPT_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codex-script', 'server.mjs');
+const BUILD_V5T_ASSEMBLY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'buildv5tassembly', 'server.mjs');
 const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-files', 'server.mjs'],
   ['mcp', 'safe-images', 'server.mjs'],
@@ -14,7 +15,8 @@ const BUNDLED_SERVER_PATHS = [
   ['mcp', 'gitmcp', 'server.mjs'],
   ['mcp', 'git-capability', 'server.mjs'],
   ['mcp', 'gh-workflow', 'server.mjs'],
-  ['mcp', 'codex-script', 'server.mjs']
+  ['mcp', 'codex-script', 'server.mjs'],
+  ['mcp', 'buildv5tassembly', 'server.mjs']
 ].map((parts) => resolve(repositoryRoot, ...parts));
 
 const SERVER_SANDBOX_MODES = new Set(['never', 'elevated', 'unelevated']);
@@ -98,6 +100,13 @@ function isCodexScriptServer(command, args, cwd, platform = process.platform) {
   return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(CODEX_SCRIPT_SERVER_PATH, platform);
 }
 
+function isBuildV5tAssemblyServer(command, args, cwd, platform = process.platform) {
+  if (platform !== process.platform || args.length === 0) return false;
+  const executable = platformPath(platform).basename(command).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe') return false;
+  return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(BUILD_V5T_ASSEMBLY_SERVER_PATH, platform);
+}
+
 function normalizeSandbox(raw, serverName) {
   const value = raw.sandbox ?? 'never';
   if (typeof value !== 'string' || !SERVER_SANDBOX_MODES.has(value)) {
@@ -164,8 +173,12 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths)
   const cwd = absoluteFrom(base, typeof raw.cwd === 'string' && raw.cwd ? raw.cwd : '.', platform);
   const sandbox = normalizeSandbox(raw, name);
   const codexScriptServer = isCodexScriptServer(raw.command, args, cwd, platform);
+  const buildV5tAssemblyServer = isBuildV5tAssemblyServer(raw.command, args, cwd, platform);
   if (codexScriptServer && sandbox === 'never') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for codex-script`);
+  }
+  if (buildV5tAssemblyServer && sandbox === 'never') {
+    throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for buildv5tassembly`);
   }
   const sandboxDelegated = false;
   const command = sandbox === 'elevated'

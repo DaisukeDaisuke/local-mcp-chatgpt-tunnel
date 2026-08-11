@@ -82,6 +82,22 @@ function collectText(stream) {
   };
 }
 
+function loggedToolCalls(text) {
+  const prefix = '[gateway] INFO tool call: name=';
+  const separator = ' arguments=';
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => {
+      const payload = line.slice(prefix.length);
+      const separatorIndex = payload.indexOf(separator);
+      return {
+        name: JSON.parse(payload.slice(0, separatorIndex)),
+        arguments: JSON.parse(payload.slice(separatorIndex + separator.length))
+      };
+    });
+}
+
 test('gateway refuses elevated Windows before MCP initialization', { skip: !elevatedWindows }, async () => {
   const child = spawn(process.execPath, [
     resolve('app/gateway.mjs'),
@@ -179,6 +195,60 @@ process.stdin.on('data', (chunk) => {
   assert.match(log, /tool="SCRIPT_debug".*blocked_tool_substrings="script"/);
   assert.match(log, /tool="shell_exec".*blocked_tool_substrings="shell"/);
   assert.match(log, /tool="dangerous".*blocked_tools exact match/);
+});
+
+gatewayIntegrationTest('gateway logs public tool name and received arguments before bundled isolation metadata is injected', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-input-log-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-input-log-config-'));
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(join(workspace, 'inside.txt'), 'inside', 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/safe-files/server.mjs')}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "files"'
+  ].join('\n'), 'utf8');
+
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const stderr = collectText(child.stderr);
+  t.after(() => child.kill());
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+    name: 'isolated__create', arguments: { isolatedId: 'input-log', workspaces: [workspace] }
+  } })}\n`);
+  const created = await nextLine(child.stdout);
+  assert.equal(created.result.isError, false);
+
+  const received = {
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'tools/call',
+    params: {
+      name: 'files__read_text',
+      arguments: { isolatedId: 'input-log', path: 'inside.txt' }
+    }
+  };
+  child.stdin.write(`  ${JSON.stringify(received, null, 2).replace(/\n/g, ' ')}  \n`);
+  const result = await nextLine(child.stdout);
+  assert.equal(result.result.isError, false);
+
+  await stderr.waitFor((text) => loggedToolCalls(text).some((entry) => entry.name === received.params.name));
+  const logged = loggedToolCalls(stderr.value).find((entry) => entry.name === received.params.name);
+  assert.deepEqual(logged, {
+    name: received.params.name,
+    arguments: received.params.arguments
+  });
 });
 
 gatewayIntegrationTest('gateway rejects external sandbox policy holes before launching Codex', async (t) => {

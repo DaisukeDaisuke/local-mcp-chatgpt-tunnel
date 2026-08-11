@@ -598,6 +598,9 @@ process.stdin.on('data', (chunk) => {
     let request;
     try { request = JSON.parse(line); }
     catch { write(errorResponse(null, -32700, 'Parse error')); continue; }
+    if (request?.method === 'tools/call') {
+      info(`tool call: name=${JSON.stringify(request.params?.name ?? '')} arguments=${JSON.stringify(request.params?.arguments ?? {})}`);
+    }
     void handle(request).then((message) => { if (message) write(message); }).catch((error) => write(errorResponse(request?.id, -32603, error.message)));
   }
 });

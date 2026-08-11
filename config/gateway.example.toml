@@ -66,10 +66,10 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# push/pull pin both the remote name and exact URL at MCP startup. Tools accept no remote/refspec/URL arguments.
+# push/pull pin the remote name and GitHub OWNER/REPO identity at MCP startup. HTTPS and SSH remote URL forms are normalized before comparison. Tools accept no remote/refspec/URL arguments.
 [mcp_servers.git_push]
 command = "node"
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=push', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--expected-remote-url=https://github.com/OWNER/REPO.git']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=push', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--repository=OWNER/REPO']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "git_push"
@@ -83,7 +83,7 @@ disallowed_path_globs = ['**.ssh**']
 
 [mcp_servers.git_pull]
 command = "node"
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=pull', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--expected-remote-url=https://github.com/OWNER/REPO.git']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=pull', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--repository=OWNER/REPO']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "git_pull"

@@ -265,6 +265,40 @@ test('gateway refuses codex-script without a Codex sandbox mode', async () => {
   });
 });
 
+test('bundled buildv5tassembly requires a Codex sandbox and remains marked bundled', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-buildv5tassembly-'));
+  const serverPath = resolve('mcp/buildv5tassembly/server.mjs');
+  const cwd = join(directory, 'workspace');
+  const sandboxedPath = join(directory, 'sandboxed.toml');
+  await writeFile(sandboxedPath, [
+    'private_use_only = true',
+    '[mcp_servers.builder]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--preprocessor-module=${join(directory, 'preprocessor.mjs')}', '--gcc-executable=${join(directory, 'gcc.exe')}', '--objcopy-executable=${join(directory, 'objcopy.exe')}']`,
+    `cwd = '${cwd}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${join(directory, 'codex.exe')}'`,
+    `allowed_directories = ['${cwd}']`
+  ].join('\n'), 'utf8');
+  const sandboxed = await loadGatewayConfig(sandboxedPath);
+  assert.equal(sandboxed.servers[0].isBundled, true);
+  assert.equal(sandboxed.servers[0].sandbox, 'elevated');
+
+  const unsandboxedPath = join(directory, 'unsandboxed.toml');
+  await writeFile(unsandboxedPath, [
+    'private_use_only = true',
+    '[mcp_servers.builder]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${resolve('.')}'`,
+    'sandbox = "never"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(unsandboxedPath), (error) => {
+    assert.equal(error.message, 'mcp_servers.builder.sandbox must be elevated or unelevated for buildv5tassembly');
+    return true;
+  });
+});
+
 test('gateway marks only Node-launched bundled server paths as bundled', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-bundled-config-'));
   const bundledPath = resolve('mcp/safe-files/server.mjs');

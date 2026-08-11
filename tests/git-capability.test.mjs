@@ -41,7 +41,7 @@ async function importCapability(root, mode, suffix) {
   ]);
   const git = await gitExecutable();
   const args = [`--mode=${mode}`, `--git-executable=${git}`];
-  if (mode === 'push' || mode === 'pull') args.push('--remote=origin', '--expected-remote-url=https://example.invalid/repository.git');
+  if (mode === 'push' || mode === 'pull') args.push('--remote=origin', '--repository=example/repository');
   if (mode === 'clone') args.push('--url=https://example.invalid/repository.git');
   process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'git-capability.test.mjs'), ...args];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
@@ -60,6 +60,31 @@ async function importCapability(root, mode, suffix) {
     }
   }
 }
+
+test('git-capability matches GitHub HTTPS and SSH remotes by OWNER/REPO identity', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'git-capability-repository-match-'));
+  const { githubRemoteMatchesRepository } = await importCapability(root, 'push', 'repository-match');
+  assert.equal(
+    githubRemoteMatchesRepository('https://github.com/DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
+    true
+  );
+  assert.equal(
+    githubRemoteMatchesRepository('git@github.com:DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
+    true
+  );
+  assert.equal(
+    githubRemoteMatchesRepository('ssh://git@github.com/DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
+    true
+  );
+  assert.equal(
+    githubRemoteMatchesRepository('https://github.com/DaisukeDaisuke/desmume_webassembly-old.git', 'DaisukeDaisuke/desmume_webassembly'),
+    false
+  );
+  await assert.rejects(
+    async () => githubRemoteMatchesRepository('https://example.com/DaisukeDaisuke/desmume_webassembly.git', 'DaisukeDaisuke/desmume_webassembly'),
+    /github\.com/
+  );
+});
 
 test('git-capability exposes exactly one Git operation per mode', async () => {
   const root = await mkdtemp(join(tmpdir(), 'git-capability-schema-'));
