@@ -173,6 +173,45 @@ test('Windows Codex sandbox process carries MCP JSON-RPC bidirectionally over in
 
   assert.equal(childInput, '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
   assert.equal(gatewayOutput, '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"safe-files"}}}\n');
+  child.exitCode = 7;
+  child.emit('exit', 7, null);
+  assert.deepEqual(await sandboxed.waitForExit(), { exitCode: 7, signal: null });
+  await sandboxed.close();
+});
+
+test('Windows Codex sandbox process enforces a bounded command timeout', async () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    child.exitCode = 1;
+    child.emit('exit', 1, null);
+    return true;
+  };
+
+  const sandboxed = new CodexWindowsSandboxedProcess({
+    name: 'script-timeout',
+    codexExecutable: 'C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd',
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\work\\slow.mjs'],
+    cwd: 'C:\\work',
+    sandbox: 'elevated',
+    allowedDirectories: ['C:\\work'],
+    commandTimeoutMs: 10
+  }, {
+    env: { PATH: 'C:\\Windows\\System32' },
+    canonicalize: async (path) => path,
+    spawnSandbox: () => child,
+    stderr: new PassThrough()
+  });
+
+  await sandboxed.start();
+  await assert.rejects(sandboxed.waitForExit(), /timed out after 10ms/);
+  assert.equal(child.killed, true);
   await sandboxed.close();
 });
 

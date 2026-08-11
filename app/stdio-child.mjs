@@ -1,9 +1,24 @@
 import { spawn } from 'node:child_process';
+import { isAbsolute, relative, sep } from 'node:path';
 import { buildChildEnvironment } from './child-environment.mjs';
 import { CodexAppServerSandboxedProcess } from './codex-app-server.mjs';
 import { CodexWindowsSandboxedProcess } from './codex-windows-sandbox.mjs';
 
 const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
+
+function pathInside(directory, candidate) {
+  const path = relative(directory, candidate);
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+function protectedPathsInsideConfiguredAccess(config, paths) {
+  const allowedDirectories = config.allowedDirectories ?? [];
+  const allowedFiles = config.allowedFiles ?? [];
+  return paths.filter((candidate) =>
+    allowedDirectories.some((directory) => pathInside(directory, candidate))
+      || allowedFiles.some((file) => relative(file, candidate) === '')
+  );
+}
 
 export class StdioMcpChild {
   constructor(config, { onToolsChanged, stderr = process.stderr } = {}) {
@@ -24,7 +39,7 @@ export class StdioMcpChild {
     const { command, args = [], cwd, env = {} } = this.config;
     const protectedGatewayConfigPaths = this.config.dangerousAllowGatewayConfigAccess
       ? []
-      : (this.config.protectedGatewayConfigPaths ?? []);
+      : protectedPathsInsideConfiguredAccess(this.config, this.config.protectedGatewayConfigPaths ?? []);
     const disallowedFiles = [...new Set([
       ...(this.config.disallowedFiles ?? []),
       ...protectedGatewayConfigPaths

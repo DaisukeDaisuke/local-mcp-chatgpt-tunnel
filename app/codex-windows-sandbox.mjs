@@ -109,6 +109,10 @@ export class CodexWindowsSandboxedProcess {
     this.child = null;
     this.closed = false;
     this.ready = false;
+    this.exitPromise = null;
+    this.resolveExit = null;
+    this.rejectExit = null;
+    this.timeout = null;
   }
 
   get writable() {
@@ -130,6 +134,10 @@ export class CodexWindowsSandboxedProcess {
     }
 
     const executionConfig = { ...this.config, command };
+    this.exitPromise = new Promise((resolvePromise, rejectPromise) => {
+      this.resolveExit = resolvePromise;
+      this.rejectExit = rejectPromise;
+    });
     this.child = this.spawnSandbox(codexExecutable, executionConfig, this.env);
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', (chunk) => this.onStdout?.(chunk));
@@ -137,10 +145,20 @@ export class CodexWindowsSandboxedProcess {
     this.child.stderr.on('data', (chunk) => this.#writeStderr(chunk));
     this.child.once('error', (error) => this.#fail(error));
     this.child.once('exit', (code, signal) => {
+      this.#clearTimeout();
       this.ready = false;
+      this.resolveExit?.({ exitCode: code, signal });
       if (!this.closed) this.onExit?.(code, signal);
     });
     this.ready = true;
+    if (Number.isFinite(this.config.commandTimeoutMs) && this.config.commandTimeoutMs > 0) {
+      this.timeout = setTimeout(() => {
+        if (!this.ready || this.closed || !this.child || this.child.exitCode !== null) return;
+        const error = new Error(`${this.config.name} timed out after ${this.config.commandTimeoutMs}ms`);
+        this.#fail(error);
+        if (!this.child.killed) this.child.kill();
+      }, this.config.commandTimeoutMs);
+    }
   }
 
   write(chunk) {
@@ -153,9 +171,15 @@ export class CodexWindowsSandboxedProcess {
     await new Promise((resolvePromise) => this.child.stdin.end(resolvePromise));
   }
 
+  waitForExit() {
+    if (!this.exitPromise) return Promise.reject(new Error(`${this.config.name} sandboxed process has not started`));
+    return this.exitPromise;
+  }
+
   async close() {
     this.closed = true;
     this.ready = false;
+    this.#clearTimeout();
     if (!this.child) return;
     if (this.child.stdin?.writable) this.child.stdin.end();
     if (this.child.exitCode === null && !this.child.killed) this.child.kill();
@@ -167,8 +191,15 @@ export class CodexWindowsSandboxedProcess {
   }
 
   #fail(error) {
+    this.#clearTimeout();
     this.ready = false;
+    this.rejectExit?.(error);
     if (!this.closed) this.onFailure?.(error);
+  }
+
+  #clearTimeout() {
+    if (this.timeout) clearTimeout(this.timeout);
+    this.timeout = null;
   }
 }
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { buildChildEnvironment } from '../../app/child-environment.mjs';
 import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
 import { CodexAppServerSandboxedProcess } from '../../app/codex-app-server.mjs';
+import { CodexWindowsSandboxedProcess } from '../../app/codex-windows-sandbox.mjs';
 import { normalizeDisallowedPathGlobs } from '../../app/path-glob.mjs';
 import { ToolPathPolicy } from '../../app/path-policy.mjs';
 
@@ -377,7 +378,10 @@ async function runSandboxedCommand({ command, commandArgs, cwd, roots, timeoutMs
     if (streamName === 'stdout') stdout = next;
     else stderr = next;
   };
-  sandboxed = new CodexAppServerSandboxedProcess({
+  const SandboxedProcess = process.platform === 'win32'
+    ? CodexWindowsSandboxedProcess
+    : CodexAppServerSandboxedProcess;
+  sandboxed = new SandboxedProcess({
     name: `codex-script-${runtime}`,
     command,
     args: commandArgs,
