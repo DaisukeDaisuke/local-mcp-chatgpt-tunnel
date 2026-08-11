@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { environmentWithoutBundledIsolationKey } from './bundled-isolation.mjs';
 
 const DEFAULT_APP_SERVER_STARTUP_TIMEOUT_MS = Number(process.env.CODEX_APP_SERVER_STARTUP_TIMEOUT_MS ?? 30_000);
+const CODEX_PERMISSION_PROFILE_ID = 'local_mcp_gateway';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryAppRoot = resolve(repositoryRoot, 'app');
 
@@ -24,7 +25,62 @@ async function canonicalRegularFile(path, label) {
   return actual;
 }
 
-function codexAppServerLaunchSpec(codexExecutable, cwd, { platform = process.platform, env = process.env } = {}) {
+function tomlLiteral(value, label) {
+  const text = String(value);
+  if (/[\u0000-\u001f\u007f']/.test(text)) {
+    throw new Error(`${label} cannot be represented safely in the temporary Codex permission profile`);
+  }
+  return `'${text}'`;
+}
+
+function absolutePath(value) {
+  return typeof value === 'string' && (isAbsolute(value) || win32.isAbsolute(value));
+}
+
+function pathDirname(value) {
+  return win32.isAbsolute(value) ? win32.dirname(value) : dirname(value);
+}
+
+function pathBasename(value) {
+  return win32.isAbsolute(value) ? win32.basename(value) : basename(value);
+}
+
+function configuredWithin(root, candidate) {
+  const path = win32.isAbsolute(root) || win32.isAbsolute(candidate)
+    ? win32.relative(root, candidate)
+    : relative(root, candidate);
+  const separator = win32.isAbsolute(root) || win32.isAbsolute(candidate) ? win32.sep : sep;
+  const absolute = win32.isAbsolute(root) || win32.isAbsolute(candidate) ? win32.isAbsolute(path) : isAbsolute(path);
+  return path === '' || (path !== '..' && !path.startsWith(`..${separator}`) && !absolute);
+}
+
+function permissionProfileOverrideFor(config) {
+  const writableRoots = [...new Set(config.allowedDirectories ?? [])];
+  const executableName = typeof config.command === 'string' ? pathBasename(config.command).toLowerCase() : '';
+  const interpreterEntryDirectory = [
+    'node', 'node.exe', 'python', 'python.exe', 'python3', 'python3.exe', 'php', 'php.exe'
+  ].includes(executableName) && absolutePath(config.args?.[0])
+    ? pathDirname(config.args[0])
+    : null;
+  const readableRoots = [...new Set([
+    ...(config.allowedFiles ?? []),
+    ...(config.sandboxReadOnlyDirectories ?? []),
+    ...(absolutePath(config.command) ? [pathDirname(config.command)] : []),
+    ...(interpreterEntryDirectory ? [interpreterEntryDirectory] : []),
+    ...(config.isBundled ? [repositoryAppRoot] : [])
+  ])];
+  const entries = new Map([[':minimal', 'read']]);
+  for (const path of readableRoots) {
+    if (!writableRoots.some((root) => configuredWithin(root, path))) entries.set(path, 'read');
+  }
+  for (const path of writableRoots) entries.set(path, 'write');
+  const filesystem = [...entries.entries()]
+    .map(([path, access]) => `${tomlLiteral(path, 'sandbox path')}=${tomlLiteral(access, 'sandbox access')}`)
+    .join(',');
+  return `permissions.${CODEX_PERMISSION_PROFILE_ID}={filesystem={${filesystem}},network={enabled=false}}`;
+}
+
+function codexAppServerLaunchSpec(codexExecutable, cwd, { platform = process.platform, env = process.env, permissionProfileOverride } = {}) {
   if (typeof codexExecutable !== 'string') {
     throw new Error('codexExecutable must be an absolute path');
   }
@@ -39,52 +95,34 @@ function codexAppServerLaunchSpec(codexExecutable, cwd, { platform = process.pla
     windowsHide: true,
     shell: false
   };
+  const appServerArgs = [
+    ...(permissionProfileOverride ? ['-c', permissionProfileOverride] : []),
+    'app-server', '--listen', 'stdio://'
+  ];
   if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(codexExecutable)) {
+    if (appServerArgs.some((argument) => /[\r\n"%^]/.test(argument))) {
+      throw new Error('Codex .cmd launch arguments contain characters that cannot be passed safely through cmd.exe');
+    }
     const configuredInterpreter = env.ComSpec || env.COMSPEC;
     const systemRoot = env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows';
     const commandInterpreter = configuredInterpreter && win32.isAbsolute(configuredInterpreter)
       ? configuredInterpreter
       : win32.join(systemRoot, 'System32', 'cmd.exe');
+    const renderedArgs = appServerArgs
+      .map((argument) => argument === permissionProfileOverride || /\s/.test(argument) ? `"${argument}"` : argument)
+      .join(' ');
     return {
       command: commandInterpreter,
-      args: ['/d', '/v:off', '/s', '/c', `""${codexExecutable}" app-server --listen stdio://"`],
+      args: ['/d', '/v:off', '/s', '/c', `""${codexExecutable}" ${renderedArgs}"`],
       options: { ...options, windowsVerbatimArguments: true }
     };
   }
-  return { command: codexExecutable, args: ['app-server', '--listen', 'stdio://'], options };
+  return { command: codexExecutable, args: appServerArgs, options };
 }
 
-function spawnCodexAppServer(codexExecutable, cwd) {
-  const launch = codexAppServerLaunchSpec(codexExecutable, cwd);
+function spawnCodexAppServer(codexExecutable, cwd, permissionProfileOverride) {
+  const launch = codexAppServerLaunchSpec(codexExecutable, cwd, { permissionProfileOverride });
   return spawn(launch.command, launch.args, launch.options);
-}
-
-function sandboxPolicyFor(config) {
-  const writableRoots = [...new Set(config.allowedDirectories ?? [])];
-  const executableName = typeof config.command === 'string' ? basename(config.command).toLowerCase() : '';
-  const interpreterEntryDirectory = [
-    'node', 'node.exe', 'python', 'python.exe', 'python3', 'python3.exe', 'php', 'php.exe'
-  ].includes(executableName) && typeof config.args?.[0] === 'string' && isAbsolute(config.args[0])
-    ? dirname(config.args[0])
-    : null;
-  const readableRoots = [...new Set([
-    ...writableRoots,
-    ...(config.allowedFiles ?? []),
-    ...(config.sandboxReadOnlyDirectories ?? []),
-    ...(typeof config.command === 'string' && isAbsolute(config.command) ? [dirname(config.command)] : []),
-    ...(interpreterEntryDirectory ? [interpreterEntryDirectory] : []),
-    ...(config.isBundled ? [repositoryAppRoot] : [])
-  ])];
-  return {
-    type: 'workspaceWrite',
-    writableRoots,
-    readOnlyAccess: {
-      type: 'restricted',
-      includePlatformDefaults: true,
-      readableRoots
-    },
-    networkAccess: false
-  };
 }
 
 export class CodexAppServerSandboxedProcess {
@@ -141,7 +179,8 @@ export class CodexAppServerSandboxedProcess {
       }
     }
     const executionConfig = { ...this.config, command };
-    this.appServer = this.spawnAppServer(codexExecutable, this.config.cwd);
+    const permissionProfileOverride = permissionProfileOverrideFor(executionConfig);
+    this.appServer = this.spawnAppServer(codexExecutable, this.config.cwd, permissionProfileOverride);
     this.appServer.stdout.setEncoding('utf8');
     this.appServer.stdout.on('data', (chunk) => this.#accept(chunk));
     this.appServer.stderr.setEncoding('utf8');
@@ -172,7 +211,7 @@ export class CodexAppServerSandboxedProcess {
       command: [command, ...(this.config.args ?? [])],
       cwd: this.config.cwd,
       env: { ...this.env, LOCAL_MCP_CODEX_SANDBOX_MODE: this.config.sandbox },
-      sandboxPolicy: sandboxPolicyFor(executionConfig),
+      permissionProfile: CODEX_PERMISSION_PROFILE_ID,
       processId: this.processId,
       streamStdoutStderr: true
     };
@@ -351,4 +390,4 @@ export class CodexAppServerSandboxedProcess {
   }
 }
 
-export const codexAppServerInternals = { codexAppServerLaunchSpec };
+export const codexAppServerInternals = { codexAppServerLaunchSpec, permissionProfileOverrideFor };

@@ -4,6 +4,11 @@ import { PassThrough } from 'node:stream';
 import { dirname } from 'node:path';
 import test from 'node:test';
 import { CodexAppServerSandboxedProcess, codexAppServerInternals } from '../app/codex-app-server.mjs';
+import {
+  CodexWindowsSandboxedProcess,
+  codexWindowsSandboxLaunchSpec,
+  codexWindowsSandboxInternals
+} from '../app/codex-windows-sandbox.mjs';
 
 function fakeAppServer({ holdWrites = false } = {}) {
   const child = new EventEmitter();
@@ -70,10 +75,15 @@ function fakeAppServer({ holdWrites = false } = {}) {
 }
 
 test('Codex app-server launches an explicit Windows npm .cmd shim through cmd.exe', () => {
+  const permissionProfileOverride = "permissions.local_mcp_gateway={filesystem={':minimal'='read','C:\\work'='write'},network={enabled=false}}";
   const launch = codexAppServerInternals.codexAppServerLaunchSpec(
     'C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd',
     'C:\\work',
-    { platform: 'win32', env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' } }
+    {
+      platform: 'win32',
+      env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' },
+      permissionProfileOverride
+    }
   );
   assert.equal(launch.command, 'C:\\Windows\\System32\\cmd.exe');
   assert.deepEqual(launch.args, [
@@ -81,10 +91,123 @@ test('Codex app-server launches an explicit Windows npm .cmd shim through cmd.ex
     '/v:off',
     '/s',
     '/c',
-    '""C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd" app-server --listen stdio://"'
+    `""C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd" -c "${permissionProfileOverride}" app-server --listen stdio://"`
   ]);
   assert.equal(launch.options.shell, false);
   assert.equal(launch.options.windowsVerbatimArguments, true);
+});
+
+test('Windows MCP sandbox uses codex sandbox with inherited stdio instead of streaming command/exec', () => {
+  const childEnvironment = {
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+    LOCAL_MCP_ALLOWED_DIRECTORIES: '["C:\\\\work"]'
+  };
+  const launch = codexWindowsSandboxLaunchSpec(
+    'C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd',
+    {
+      name: 'files',
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
+      cwd: 'C:\\work',
+      sandbox: 'elevated',
+      allowedDirectories: ['C:\\work'],
+      allowedFiles: [],
+      sandboxReadOnlyDirectories: [],
+      isBundled: false
+    },
+    childEnvironment
+  );
+
+  assert.equal(launch.command, 'C:\\Windows\\System32\\cmd.exe');
+  assert.equal(launch.options.env, childEnvironment);
+  assert.equal(launch.options.shell, false);
+  assert.equal(launch.options.windowsVerbatimArguments, true);
+  assert.equal(launch.args[0], '/d');
+  assert.equal(launch.args[1], '/v:off');
+  assert.equal(launch.args[2], '/s');
+  assert.equal(launch.args[3], '/c');
+  assert.equal(
+    launch.args[4],
+    `""C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd" "-c" "permissions.local_mcp_gateway={filesystem={':minimal'='read','C:\\Program Files\\nodejs'='read','C:\\repo\\mcp\\safe-files'='read','C:\\work'='write'},network={enabled=false}}" "-c" "windows.sandbox='elevated'" "-c" "${codexWindowsSandboxInternals.SANITIZED_CHILD_ENVIRONMENT_OVERRIDE}" "sandbox" "--permission-profile" "local_mcp_gateway" "-C" "C:\\work" "--" "C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\mcp\\safe-files\\server.mjs""`
+  );
+});
+
+test('Windows Codex sandbox process carries MCP JSON-RPC bidirectionally over inherited stdio', async () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    return true;
+  };
+
+  let childInput = '';
+  let gatewayOutput = '';
+  child.stdin.setEncoding('utf8');
+  child.stdin.on('data', (chunk) => { childInput += chunk; });
+  const sandboxed = new CodexWindowsSandboxedProcess({
+    name: 'files',
+    codexExecutable: 'C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd',
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
+    cwd: 'C:\\work',
+    sandbox: 'elevated',
+    allowedDirectories: ['C:\\work']
+  }, {
+    env: { PATH: 'C:\\Windows\\System32' },
+    canonicalize: async (path) => path,
+    spawnSandbox: () => child,
+    onStdout: (chunk) => { gatewayOutput += chunk; },
+    stderr: new PassThrough()
+  });
+
+  await sandboxed.start();
+  sandboxed.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
+  child.stdout.write('{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"safe-files"}}}\n');
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+
+  assert.equal(childInput, '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n');
+  assert.equal(gatewayOutput, '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"safe-files"}}}\n');
+  await sandboxed.close();
+});
+
+test('Codex app-server builds a restricted temporary permission profile for the child MCP', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\tools\\safe-files\\server.mjs'],
+    allowedDirectories: ['C:\\workspace', 'C:\\repo'],
+    allowedFiles: ['C:\\inputs\\one.txt'],
+    sandboxReadOnlyDirectories: ['C:\\readonly'],
+    isBundled: false
+  });
+  assert.equal(override.startsWith('permissions.local_mcp_gateway={filesystem={'), true);
+  assert.equal(override.includes("':minimal'='read'"), true);
+  assert.equal(override.includes("'C:\\workspace'='write'"), true);
+  assert.equal(override.includes("'C:\\repo'='write'"), true);
+  assert.equal(override.includes("'C:\\inputs\\one.txt'='read'"), true);
+  assert.equal(override.includes("'C:\\readonly'='read'"), true);
+  assert.equal(override.includes("'C:\\Program Files\\nodejs'='read'"), true);
+  assert.equal(override.includes("'C:\\tools\\safe-files'='read'"), true);
+  assert.equal(override.endsWith('},network={enabled=false}}'), true);
+});
+
+test('Codex permission profile does not narrow a writable parent with redundant read-only child entries', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
+    allowedDirectories: ['C:\\repo'],
+    allowedFiles: [],
+    sandboxReadOnlyDirectories: ['C:\\repo\\readonly-helper'],
+    isBundled: false
+  });
+  assert.equal(override.includes("'C:\\repo'='write'"), true);
+  assert.equal(override.includes("'C:\\repo\\mcp\\safe-files'='read'"), false);
+  assert.equal(override.includes("'C:\\repo\\readonly-helper'='read'"), false);
 });
 
 test('Codex app-server forwards streamed text deltas without dropping MCP stdout', async () => {
@@ -179,9 +302,8 @@ test('Codex app-server adds a command timeout only when explicitly requested', a
   });
   await persistent.start();
   assert.equal(Object.hasOwn(persistentFake.execRequest().params, 'timeoutMs'), false);
-  assert.equal(persistentFake.execRequest().params.sandboxPolicy.networkAccess, false);
-  assert.deepEqual(persistentFake.execRequest().params.sandboxPolicy.writableRoots, [process.cwd()]);
-  assert.ok(persistentFake.execRequest().params.sandboxPolicy.readOnlyAccess.readableRoots.includes(dirname(process.execPath)));
+  assert.equal(Object.hasOwn(persistentFake.execRequest().params, 'sandboxPolicy'), false);
+  assert.equal(persistentFake.execRequest().params.permissionProfile, 'local_mcp_gateway');
   await persistent.close();
 
   const boundedFake = fakeAppServer();

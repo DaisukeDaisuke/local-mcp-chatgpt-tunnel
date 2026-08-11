@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { buildChildEnvironment } from './child-environment.mjs';
 import { CodexAppServerSandboxedProcess } from './codex-app-server.mjs';
+import { CodexWindowsSandboxedProcess } from './codex-windows-sandbox.mjs';
 
 const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
 
@@ -46,7 +47,10 @@ export class StdioMcpChild {
     };
     const childEnvironment = buildChildEnvironment({ ...env, ...policyEnvironment });
     if (this.config.sandbox && this.config.sandbox !== 'never' && !this.config.sandboxDelegated) {
-      this.sandboxedChild = new CodexAppServerSandboxedProcess(this.config, {
+      const SandboxedProcess = process.platform === 'win32'
+        ? CodexWindowsSandboxedProcess
+        : CodexAppServerSandboxedProcess;
+      this.sandboxedChild = new SandboxedProcess(this.config, {
         env: childEnvironment,
         onStdout: (chunk) => this.accept(chunk),
         onStderr: (chunk) => this.writeStderr(chunk),
