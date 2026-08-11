@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -166,6 +166,10 @@ test('isolated access-scope descriptions omit denied log directories outside the
     mkdir(source),
     mkdir(logs)
   ]);
+  const [canonicalSource, canonicalLogs] = await Promise.all([
+    realpath(source),
+    realpath(logs)
+  ]);
   const policy = new ToolPathPolicy({
     serverName: 'files',
     cwd: root,
@@ -174,10 +178,10 @@ test('isolated access-scope descriptions omit denied log directories outside the
   });
 
   const rootScope = await policy.describeForAllowedDirectories([root], root);
-  assert.deepEqual(rootScope.configured.disallowedDirectories, [logs]);
+  assert.deepEqual(rootScope.configured.disallowedDirectories, [canonicalLogs]);
 
   const sourceScope = await policy.describeForAllowedDirectories([source], source);
-  assert.deepEqual(sourceScope.configured.allowedDirectories, [source]);
+  assert.deepEqual(sourceScope.configured.allowedDirectories, [canonicalSource]);
   assert.deepEqual(sourceScope.configured.disallowedDirectories, []);
   assert.deepEqual(sourceScope.effective.disallowedDirectories, []);
 });

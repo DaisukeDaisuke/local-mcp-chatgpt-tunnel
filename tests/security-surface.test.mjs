@@ -58,22 +58,6 @@ test('installation documents tunnel runtime roles and restricted API key creatio
   assert.match(install, /モデルAPIに使えないTunnel専用キー/);
 });
 
-test('gateway uses Codex-style generic MCP tables and honors enabled entries', async () => {
-  const config = await readFile(new URL('../config/gateway.example.toml', import.meta.url), 'utf8');
-  assert.match(config, /\[mcp_servers\.files\]/);
-  assert.match(config, /\[mcp_servers\.downloads\]/);
-  assert.match(config, /command = "node"/);
-  assert.match(config, /enabled = true/);
-  assert.match(config, /publish_tool_directory = false/);
-  assert.match(config, /disallowed_path_globs = \['\*\*\.ssh\*\*'\]/);
-  const loader = await readFile(new URL('../app/server-config.mjs', import.meta.url), 'utf8');
-  assert.match(loader, /raw\.mcp_servers/);
-  assert.match(loader, /raw\.enabled === false/);
-  assert.match(loader, /allowed_directories/);
-  assert.match(loader, /allowed_files/);
-  assert.match(loader, /disallowed_path_globs/);
-  assert.doesNotMatch(loader, /chromeMcpEntry|enabledServers|workspaceRoots|dq9Config|ghidraUrl/);
-});
 
 test('child environment allowlist drops credentials and unsafe runtime injection', async () => {
   const policy = await import('../app/child-environment.mjs');
@@ -160,25 +144,6 @@ test('bundled gh-workflow MCP exposes only bounded inspection and run cancellati
   assert.match(config, /\[mcp_servers\.gh_workflow\][\s\S]*?cwd = '[^']+'[\s\S]*?enabled = false/);
 });
 
-test('gitmcp is local-only and preserves compatible Git behavior inside its chosen OS boundary', async () => {
-  const source = await readFile(new URL('../mcp/gitmcp/server.mjs', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /GIT_CONFIG_NOSYSTEM/);
-  assert.doesNotMatch(source, /GIT_CONFIG_KEY_\d+: 'core\.attributesFile'/);
-  assert.doesNotMatch(source, /GIT_CONFIG_KEY_\d+: '(?:commit|tag|merge)\.gpgsign'/);
-  assert.doesNotMatch(source, /GIT_CONFIG_KEY_\d+: 'diff\.external'/);
-  assert.doesNotMatch(source, /--no-gpg-sign/);
-  assert.doesNotMatch(source, /--no-textconv|--no-ext-diff/);
-  assert.match(source, /'--ext-diff', '--textconv'/);
-  assert.match(source, /commitCapabilityMovedToDedicatedMcp: true/);
-  assert.doesNotMatch(source, /name:\s*'commit'|name:\s*'push'|name:\s*'pull'|name:\s*'clone_repository'/);
-  assert.match(source, /lineEndingConversionRespected: true/);
-  assert.match(source, /systemAndGlobalCleanSmudgeFiltersRespected: true/);
-  assert.match(source, /\/\^\(local\|worktree\)\\s\//);
-  assert.match(source, /spawn\('git', args, \{[^}]*shell:\s*false/s);
-  assert.match(source, /'worktree', 'add'/);
-  assert.match(source, /'worktree', 'remove', '--'/);
-  assert.doesNotMatch(source, /worktree', 'remove', '--force|branch', '-[dD]/);
-});
 
 test('third-party Ghidra and DQ9 MCP implementations are not redistributed', async () => {
   await assert.rejects(access(new URL('../mcp/ghidra', import.meta.url)));

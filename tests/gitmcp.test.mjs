@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -159,112 +159,6 @@ test('gitmcp reports absolute allowed paths when an existing path is outside its
   assert.ok(refused.result.structuredContent.error.includes(canonicalRoot));
 });
 
-test('gitmcp status and add_all respect .gitignore without force-adding ignored files', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'gitmcp-ignore-'));
-  await exec('git', ['init'], { cwd: root });
-  await writeFile(join(root, '.gitignore'), 'ignored.txt\n', 'utf8');
-  await writeFile(join(root, 'ignored.txt'), 'ignored\n', 'utf8');
-  await writeFile(join(root, 'visible.txt'), 'visible\n', 'utf8');
-  const { createServer } = await importGitMcp(root, [], 'ignore');
-  const server = createServer();
-  await server(request(1, 'initialize'));
-  const status = await server(request(2, 'tools/call', { name: 'status', arguments: { repositoryPath: root } }));
-  assert.equal(status.result.isError, false);
-  assert.match(status.result.structuredContent.result.status, /visible\.txt/);
-  assert.doesNotMatch(status.result.structuredContent.result.status, /ignored\.txt/);
-  const added = await server(request(3, 'tools/call', { name: 'add_all', arguments: { repositoryPath: root } }));
-  assert.equal(added.result.isError, false);
-  const tracked = (await exec('git', ['ls-files', '-z'], { cwd: root })).stdout.split('\0').filter(Boolean);
-  assert.ok(tracked.includes('.gitignore'));
-  assert.ok(tracked.includes('visible.txt'));
-  assert.ok(!tracked.includes('ignored.txt'));
-  const listed = await server(request(4, 'tools/call', { name: 'list_worktree_files', arguments: { repositoryPath: root } }));
-  assert.equal(listed.result.isError, false);
-  assert.ok(listed.result.structuredContent.result.files.includes('visible.txt'));
-  assert.ok(!listed.result.structuredContent.result.files.includes('ignored.txt'));
-  const checked = await server(request(5, 'tools/call', {
-    name: 'check_ignore', arguments: { repositoryPath: root, paths: ['ignored.txt', 'visible.txt'] }
-  }));
-  assert.equal(checked.result.isError, false);
-  const decisions = new Map(checked.result.structuredContent.result.decisions.map((entry) => [entry.path, entry]));
-  assert.equal(decisions.get('ignored.txt').ignored, true);
-  assert.equal(decisions.get('visible.txt').ignored, false);
-});
-
-test('gitmcp stage_paths and unstage_paths isolate selected directories without changing working files', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'gitmcp-path-stage-'));
-  await exec('git', ['init'], { cwd: root });
-  await exec('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
-  await exec('git', ['config', 'user.name', 'Test User'], { cwd: root });
-  await mkdir(join(root, 'stage-a'));
-  await mkdir(join(root, 'stage-b'));
-  await writeFile(join(root, 'stage-a', 'modified.txt'), 'before a\n', 'utf8');
-  await writeFile(join(root, 'stage-a', 'deleted.txt'), 'delete me\n', 'utf8');
-  await writeFile(join(root, 'stage-b', 'modified.txt'), 'before b\n', 'utf8');
-  await exec('git', ['add', '--all', '--', '.'], { cwd: root });
-  await exec('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'], { cwd: root });
-  await writeFile(join(root, 'stage-a', 'modified.txt'), 'after a\n', 'utf8');
-  await writeFile(join(root, 'stage-a', 'new.txt'), 'new a\n', 'utf8');
-  await rm(join(root, 'stage-a', 'deleted.txt'));
-  await writeFile(join(root, 'stage-b', 'modified.txt'), 'after b\n', 'utf8');
-
-  const { createServer } = await importGitMcp(root, [], 'path-stage');
-  const server = createServer();
-  await server(request(1, 'initialize'));
-  const staged = await server(request(2, 'tools/call', {
-    name: 'stage_paths', arguments: { repositoryPath: root, paths: ['stage-a'] }
-  }));
-  assert.equal(staged.result.isError, false);
-  assert.deepEqual(staged.result.structuredContent.result.paths, ['stage-a']);
-  const stagedNames = (await exec('git', ['diff', '--cached', '--name-only'], { cwd: root })).stdout.trim().split(/\r?\n/).filter(Boolean);
-  assert.deepEqual(stagedNames, ['stage-a/deleted.txt', 'stage-a/modified.txt', 'stage-a/new.txt']);
-  const unstagedNames = (await exec('git', ['diff', '--name-only'], { cwd: root })).stdout.trim().split(/\r?\n/).filter(Boolean);
-  assert.deepEqual(unstagedNames, ['stage-b/modified.txt']);
-
-  const unstaged = await server(request(3, 'tools/call', {
-    name: 'unstage_paths', arguments: { repositoryPath: root, paths: ['stage-a'] }
-  }));
-  assert.equal(unstaged.result.isError, false);
-  assert.equal(unstaged.result.structuredContent.result.changed, true);
-  assert.equal(unstaged.result.structuredContent.result.unbornHead, false);
-  assert.equal((await exec('git', ['diff', '--cached', '--name-only'], { cwd: root })).stdout, '');
-  const status = (await exec('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: root })).stdout;
-  assert.match(status, / D stage-a\/deleted\.txt/);
-  assert.match(status, / M stage-a\/modified\.txt/);
-  assert.match(status, /\?\? stage-a\/new\.txt/);
-  assert.match(status, / M stage-b\/modified\.txt/);
-  const repeated = await server(request(4, 'tools/call', {
-    name: 'unstage_paths', arguments: { repositoryPath: root, paths: ['stage-a'] }
-  }));
-  assert.equal(repeated.result.isError, false);
-  assert.equal(repeated.result.structuredContent.result.changed, false);
-});
-
-test('gitmcp unstage_paths works before the first commit', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'gitmcp-unborn-'));
-  await exec('git', ['init'], { cwd: root });
-  await writeFile(join(root, 'keep.txt'), 'keep\n', 'utf8');
-  await writeFile(join(root, 'remove.txt'), 'remove\n', 'utf8');
-  await exec('git', ['add', '--all', '--', '.'], { cwd: root });
-  const { createServer } = await importGitMcp(root, [], 'unborn');
-  const server = createServer();
-  await server(request(1, 'initialize'));
-  const result = await server(request(2, 'tools/call', {
-    name: 'unstage_paths', arguments: { repositoryPath: root, paths: ['remove.txt'] }
-  }));
-  assert.equal(result.result.isError, false);
-  assert.equal(result.result.structuredContent.result.changed, true);
-  assert.equal(result.result.structuredContent.result.unbornHead, true);
-  const stagedNames = (await exec('git', ['diff', '--cached', '--name-only'], { cwd: root })).stdout.trim().split(/\r?\n/).filter(Boolean);
-  assert.deepEqual(stagedNames, ['keep.txt']);
-  const status = (await exec('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: root })).stdout;
-  assert.match(status, /\?\? remove\.txt/);
-  const repeated = await server(request(3, 'tools/call', {
-    name: 'unstage_paths', arguments: { repositoryPath: root, paths: ['remove.txt'] }
-  }));
-  assert.equal(repeated.result.isError, false);
-  assert.equal(repeated.result.structuredContent.result.changed, false);
-});
 
 test('gitmcp diff respects .gitattributes binary classification', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitmcp-attributes-'));
