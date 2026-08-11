@@ -87,7 +87,7 @@ test('Codex app-server launches an explicit Windows npm .cmd shim through cmd.ex
   assert.equal(launch.options.windowsVerbatimArguments, true);
 });
 
-test('Codex app-server transport preserves UTF-8 split across output deltas', async () => {
+test('Codex app-server forwards streamed text deltas without dropping MCP stdout', async () => {
   const fake = fakeAppServer();
   let stdout = '';
   let stdoutAtExit = null;
@@ -107,6 +107,45 @@ test('Codex app-server transport preserves UTF-8 split across output deltas', as
   });
 
   await sandboxed.start();
+  fake.notify('command/exec/outputDelta', {
+    processId: sandboxed.processId,
+    stream: 'stdout',
+    delta: '{"jsonrpc":"2.0",'
+  });
+  fake.notify('command/exec/outputDelta', {
+    processId: sandboxed.processId,
+    stream: 'stdout',
+    delta: '"id":1,"result":{"serverInfo":{"name":"safe-files"}}}\n'
+  });
+  fake.notify('command/exec/exited', { processId: sandboxed.processId, exitCode: 0 });
+  await sandboxed.closeStdin();
+  fake.resolveExec({ exitCode: 0, stdout: 'must-not-be-duplicated' });
+
+  await sandboxed.waitForExit();
+  const expected = '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"safe-files"}}}\n';
+  assert.equal(stdout, expected);
+  assert.equal(stdoutAtExit, expected);
+  await sandboxed.close();
+});
+
+test('Codex app-server keeps legacy base64 output deltas UTF-8 safe', async () => {
+  const fake = fakeAppServer();
+  let stdout = '';
+  const sandboxed = new CodexAppServerSandboxedProcess({
+    name: 'legacy-base64-test',
+    command: process.execPath,
+    codexExecutable: process.execPath,
+    args: ['server.mjs'],
+    cwd: process.cwd(),
+    sandbox: 'never',
+    allowedDirectories: [process.cwd()]
+  }, {
+    spawnAppServer: () => fake.child,
+    onStdout: (chunk) => { stdout += chunk; },
+    stderr: new PassThrough()
+  });
+
+  await sandboxed.start();
   const bytes = Buffer.from('あ', 'utf8');
   fake.notify('command/exec/outputDelta', {
     processId: sandboxed.processId,
@@ -118,13 +157,9 @@ test('Codex app-server transport preserves UTF-8 split across output deltas', as
     stream: 'stdout',
     deltaBase64: bytes.subarray(2).toString('base64')
   });
-  fake.notify('command/exec/exited', { processId: sandboxed.processId, exitCode: 0 });
-  await sandboxed.closeStdin();
-  fake.resolveExec({ exitCode: 0, stdout: 'あ' });
-
+  fake.resolveExec({ exitCode: 0 });
   await sandboxed.waitForExit();
   assert.equal(stdout, 'あ');
-  assert.equal(stdoutAtExit, 'あ');
   await sandboxed.close();
 });
 
@@ -214,11 +249,11 @@ test('Codex app-server serializes MCP stdin writes', async () => {
   const closeStdinPromise = sandboxed.closeStdin();
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   assert.equal(fake.writeRequests().length, 1);
-  assert.equal(Buffer.from(fake.writeRequests()[0].params.deltaBase64, 'base64').toString('utf8'), 'first\n');
+  assert.equal(fake.writeRequests()[0].params.delta, 'first\n');
   fake.resolveNextWrite();
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   assert.equal(fake.writeRequests().length, 2);
-  assert.equal(Buffer.from(fake.writeRequests()[1].params.deltaBase64, 'base64').toString('utf8'), 'second\n');
+  assert.equal(fake.writeRequests()[1].params.delta, 'second\n');
   fake.resolveNextWrite();
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   assert.equal(fake.writeRequests().length, 3);

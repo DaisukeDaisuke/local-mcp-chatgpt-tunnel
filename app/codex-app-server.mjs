@@ -198,8 +198,7 @@ export class CodexAppServerSandboxedProcess {
 
   write(chunk) {
     if (!this.writable) throw new Error(`${this.config.name} sandboxed process is not ready`);
-    const deltaBase64 = Buffer.from(chunk, 'utf8').toString('base64');
-    void this.#enqueueWrite({ processId: this.processId, deltaBase64 }, this.config.requestTimeoutMs).catch(() => {});
+    void this.#enqueueWrite({ processId: this.processId, delta: String(chunk) }, this.config.requestTimeoutMs).catch(() => {});
   }
 
   async closeStdin(timeoutMs = 5_000) {
@@ -277,14 +276,20 @@ export class CodexAppServerSandboxedProcess {
     if (message?.method === 'command/exec/outputDelta') {
       const params = message.params ?? {};
       if (params.processId !== this.processId) return;
-      const bytes = Buffer.from(String(params.deltaBase64 ?? ''), 'base64');
+      const hasTextDelta = typeof params.delta === 'string';
+      const hasLegacyBase64Delta = typeof params.deltaBase64 === 'string';
+      if (!hasTextDelta && !hasLegacyBase64Delta) return;
       if (params.stream === 'stderr') {
         this.sawStderrDelta = true;
-        const text = this.stderrDecoder.write(bytes);
+        const text = hasTextDelta
+          ? params.delta
+          : this.stderrDecoder.write(Buffer.from(params.deltaBase64, 'base64'));
         if (text) this.onStderr?.(text);
       } else {
         this.sawStdoutDelta = true;
-        const text = this.stdoutDecoder.write(bytes);
+        const text = hasTextDelta
+          ? params.delta
+          : this.stdoutDecoder.write(Buffer.from(params.deltaBase64, 'base64'));
         if (text) this.onStdout?.(text);
       }
       return;

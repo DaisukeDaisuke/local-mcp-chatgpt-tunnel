@@ -37,6 +37,7 @@ import {
   toolDirectoryMcpResult
 } from './tool-directory.mjs';
 import { assertNotElevatedWindows } from './windows-integrity.mjs';
+import { assertSandboxPathPolicyCompatible } from './sandbox-path-policy.mjs';
 
 scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
@@ -48,23 +49,6 @@ const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, 
 function pathInside(directory, candidate) {
   const path = relative(directory, candidate);
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
-}
-
-function assertSandboxHasNoPolicyHoles(childConfig, allowedPolicy) {
-  if (!childConfig.sandbox || childConfig.sandbox === 'never') return;
-  if (childConfig.sandboxDelegated) return;
-  if ((childConfig.disallowedPathGlobs ?? []).length > 0) {
-    throw new Error(`${childConfig.name}: sandboxed MCPs cannot enforce disallowed_path_globs against arbitrary internal file access; narrow allowed_directories instead`);
-  }
-  const deniedEntries = [
-    ...allowedPolicy.disallowedDirectories,
-    ...allowedPolicy.disallowedFiles,
-    ...allowedPolicy.protectedFiles
-  ];
-  const deniedInsideWritableRoot = deniedEntries.find((denied) => allowedPolicy.directories.some((allowed) => pathInside(allowed.canonical, denied.canonical)));
-  if (deniedInsideWritableRoot) {
-    throw new Error(`${childConfig.name}: sandboxed MCPs cannot express disallowed/protected holes inside a workspaceWrite root; narrow or split allowed_directories`);
-  }
 }
 
 async function canonicalExecutable(path, label) {
@@ -302,7 +286,7 @@ async function startChild(childConfig) {
     });
     try {
       const allowedPolicy = await child.pathPolicy.allowed();
-      assertSandboxHasNoPolicyHoles(childConfig, allowedPolicy);
+      assertSandboxPathPolicyCompatible(childConfig, allowedPolicy);
       if (childConfig.sandbox && childConfig.sandbox !== 'never') {
         childConfig.allowedDirectories = allowedPolicy.directories.map((entry) => entry.canonical);
         childConfig.allowedFiles = allowedPolicy.files.map((entry) => entry.canonical);

@@ -181,7 +181,7 @@ process.stdin.on('data', (chunk) => {
   assert.match(log, /tool="dangerous".*blocked_tools exact match/);
 });
 
-gatewayIntegrationTest('gateway rejects sandbox policy holes before launching Codex', async (t) => {
+gatewayIntegrationTest('gateway rejects external sandbox policy holes before launching Codex', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-sandbox-hole-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-hole-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
@@ -211,7 +211,7 @@ gatewayIntegrationTest('gateway rejects sandbox policy holes before launching Co
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   const initialized = await nextLine(child.stdout);
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
-  await stderr.waitFor((text) => text.includes('sandboxed MCPs cannot express disallowed/protected holes inside a workspaceWrite root'));
+  await stderr.waitFor((text) => text.includes('sandboxed external MCPs cannot express disallowed/protected holes inside a workspaceWrite root'));
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
