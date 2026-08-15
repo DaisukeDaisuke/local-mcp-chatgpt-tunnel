@@ -68,6 +68,7 @@ function permissionProfileOverrideFor(config) {
     : null;
   const readableRoots = [...new Set([
     ...(config.allowedFiles ?? []),
+    ...(config.sandboxReadOnlyFiles ?? []),
     ...(config.sandboxReadOnlyDirectories ?? []),
     ...(absolutePath(config.command) ? [pathDirname(config.command)] : []),
     ...(interpreterEntryDirectory ? [interpreterEntryDirectory] : []),

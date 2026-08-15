@@ -43,6 +43,7 @@ import {
 import { assertNotElevatedWindows } from './windows-integrity.mjs';
 import { assertSandboxPathPolicyCompatible } from './sandbox-path-policy.mjs';
 import { createGatewayInfoLogger } from './gateway-info-log.mjs';
+import { gatewayPathPolicyArguments } from './gateway-path-arguments.mjs';
 
 scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
@@ -630,7 +631,8 @@ async function handle(request) {
       const result = await queues.run(routeQueueGroup(route, isolatedId), async () => {
         const context = state ? await isolationContextForChild(state, route.child) : null;
         const base = context?.base ?? route.child.pathPolicy.cwd;
-        await route.child.pathPolicy.assertToolArguments(route.originalName, childArguments, base);
+        const pathArguments = gatewayPathPolicyArguments(route.child.config, route.originalName, childArguments);
+        await route.child.pathPolicy.assertToolArguments(route.originalName, pathArguments, base);
         if (context) {
           const isolationPolicy = new ToolPathPolicy({
             serverName: `${route.child.config.name}[${isolatedId}]`,
@@ -638,7 +640,7 @@ async function handle(request) {
             allowedDirectories: context.roots
           });
           await isolationPolicy.allowed();
-          await isolationPolicy.assertToolArguments(route.originalName, childArguments, context.base);
+          await isolationPolicy.assertToolArguments(route.originalName, pathArguments, context.base);
         }
         const childResult = await route.child.request('tools/call', {
           name: route.originalName,

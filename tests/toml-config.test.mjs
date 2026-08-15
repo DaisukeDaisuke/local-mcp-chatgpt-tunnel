@@ -197,6 +197,79 @@ test('internet bundled MCP requires onlineworkspace and keeps the sandbox at MCP
   await assert.rejects(loadGatewayConfig(badPath), /sandbox must be onlineworkspace for internet/);
 });
 
+test('codespace bundled MCP requires onlineworkspace', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-sandbox-'));
+  const workspace = join(directory, 'workspace');
+  const serverPath = resolve('mcp/codespace/server.mjs');
+  const goodPath = join(directory, 'good.toml');
+  await writeFile(goodPath, [
+    'private_use_only = true',
+    '[mcp_servers.codespace]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "onlineworkspace"',
+    `codex_executable = '${process.execPath}'`,
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(goodPath);
+  assert.equal(config.servers[0].isBundled, true);
+  assert.equal(config.servers[0].sandbox, 'onlineworkspace');
+
+  const badPath = join(directory, 'bad.toml');
+  await writeFile(badPath, [
+    'private_use_only = true',
+    '[mcp_servers.codespace]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${process.execPath}'`,
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(badPath), /sandbox must be onlineworkspace for codespace/);
+});
+
+test('codespace fixed token/key files become read-only sandbox trust inputs', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-trust-files-'));
+  const workspace = join(directory, 'workspace');
+  const tokenFile = join(directory, 'gh-token.txt');
+  const sshKeyFile = join(directory, 'codespace-key');
+  const serverPath = resolve('mcp/codespace/server.mjs');
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.codespace]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${tokenFile}', '--ssh-key-file=${sshKeyFile}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "onlineworkspace"',
+    `codex_executable = '${process.execPath}'`,
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(path);
+  assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [process.execPath, tokenFile, sshKeyFile]);
+});
+
+test('codespace fixed trust files may not live inside writable workspace roots', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-trust-files-writable-'));
+  const workspace = join(directory, 'workspace');
+  const fixedFile = join(workspace, 'fixed-input.txt');
+  const serverPath = resolve('mcp/codespace/server.mjs');
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.codespace]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${fixedFile}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "onlineworkspace"',
+    `codex_executable = '${process.execPath}'`,
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /fixed trust files must be outside allowed_directories/);
+});
+
 test('gateway requires absolute command paths only for elevated sandbox mode', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-executables-'));
   const commandPath = join(directory, 'relative-command.toml');

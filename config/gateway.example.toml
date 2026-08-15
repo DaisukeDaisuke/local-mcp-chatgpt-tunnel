@@ -197,9 +197,10 @@ SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 # `codex_executable` is always an explicit absolute path. On Windows, npm-installed `codex.cmd` is supported and is launched through cmd.exe.
 # The sandbox automatically grants read-only access to the selected MCP/runtime executable directory and known interpreter entry-script directory.
 # Codex and runtime/MCP executable files must stay outside allowed_directories so workspaceWrite cannot modify them.
-# For external MCPs, a workspaceWrite sandbox cannot represent deny holes inside a writable root, so keep
-# disallowed_directories, disallowed_files, and disallowed_path_globs empty and narrow/split allowed_directories instead.
-# Bundled safe MCPs enforce the configured deny policy internally and may keep these settings while sandboxed.
+# Sandboxed external MCPs can use exact disallowed_directories/disallowed_files because Gateway translates
+# them to Codex filesystem deny entries. Gateway disallowed_path_globs are rejected for external sandboxed
+# MCPs because their semantics are not assumed equivalent to Codex glob semantics. Bundled MCPs also enforce
+# the configured Gateway deny policy internally.
 # Tool exclusion is per MCP server. `blocked_tools` is an exact-name list.
 # `blocked_tool_substrings` is a case-insensitive literal substring list; it is
 # not glob or regular-expression syntax. Multiple values are allowed. Setting

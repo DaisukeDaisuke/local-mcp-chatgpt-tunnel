@@ -340,12 +340,6 @@ async function assertSandboxPolicyRepresentable(roots, base) {
   if (configuredDisallowedPathGlobs.length > 0) {
     throw new Error('codex-script cannot safely enforce disallowed_path_globs inside arbitrary-code sandbox roots; remove the glob deny rules and narrow allowed_directories instead');
   }
-  const scope = await policy.describeForAllowedDirectories(roots, base);
-  const deniedDirectories = scope.effective.disallowedDirectories ?? [];
-  const deniedFiles = scope.effective.disallowedFiles ?? [];
-  if (deniedDirectories.length > 0 || deniedFiles.length > 0) {
-    throw new Error('codex-script cannot safely express disallowed_directories or disallowed_files as holes inside a Codex workspaceWrite root; split or narrow allowed_directories so the denied paths are outside every execution root');
-  }
 }
 
 async function runSandboxedCommand({ command, commandArgs, cwd, timeoutMs, maxOutputBytes, truncateOutput = false }) {

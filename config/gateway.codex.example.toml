@@ -276,21 +276,50 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
+# Existing GitHub Codespaces only. There is intentionally no create/start/stop/delete/rebuild tool.
+# Use a fixed token file when Windows Credential Manager is not visible from the Codex sandbox user.
+# The token file, SSH private key, and gh.exe are added to the permission profile as read-only trust inputs.
+[mcp_servers.codespace]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codespace\server.mjs', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt', '--ssh-key-file=C:\ABSOLUTE\PATH\TO\codespaces_ed25519']
+cwd = 'C:\ABSOLUTE\PATH\TO\PROJECT\WORKSPACE'
+enabled = false
+sandbox = "onlineworkspace"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "codespace"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\PROJECT\WORKSPACE']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.codespace.env]
+# Transfers whose selected total size is >= this value are rejected before gh cp.
+# This setting itself may not exceed 500,000,000 bytes.
+CODESPACE_MCP_MAX_TRANSFER_BYTES = "500000000"
+CODESPACE_MCP_MAX_OUTPUT_BYTES = "8388608"
+CODESPACE_MCP_MAX_SCAN_ENTRIES = "20000"
+
 # Add any other stdio MCP in the same Codex-style shape.
 # Path-looking tool arguments are denied unless they match allowed_directories
 # or allowed_files. Directory entries include descendants. File entries are exact.
 # `enabled = false` keeps an entry without starting it.
 # `sandbox = "elevated"`, `sandbox = "unelevated"`, or `sandbox = "onlineworkspace"` starts that MCP inside a Codex OS sandbox.
-# `onlineworkspace` keeps the workspace-write filesystem boundary but enables network and is reserved for the bundled Internet MCP.
+# `onlineworkspace` keeps the workspace-write filesystem boundary but enables network. Bundled Internet and Codespace MCPs require it.
 # On Windows, Gateway uses Codex's direct sandbox stdio path so long-running stdio MCPs remain connected.
 # `sandbox = "never"` keeps the old direct stdio behavior. Do not enable arbitrary script runners with sandbox="never".
 # `sandbox = "elevated"` requires an absolute native MCP command path; `unelevated` and `never` keep PATH command compatibility.
 # `codex_executable` is always an explicit absolute path. On Windows, npm-installed `codex.cmd` is supported and is launched through cmd.exe.
 # The sandbox automatically grants read-only access to the selected MCP/runtime executable directory and known interpreter entry-script directory.
 # Codex and runtime/MCP executable files must stay outside allowed_directories so workspaceWrite cannot modify them.
-# For external MCPs, a workspaceWrite sandbox cannot represent deny holes inside a writable root, so keep
-# disallowed_directories, disallowed_files, and disallowed_path_globs empty and narrow/split allowed_directories instead.
-# Bundled safe MCPs enforce the configured deny policy internally and may keep these settings while sandboxed.
+# Sandboxed external MCPs can use exact disallowed_directories/disallowed_files because Gateway translates
+# them to Codex filesystem deny entries. Gateway disallowed_path_globs are rejected for external sandboxed
+# MCPs because their semantics are not assumed equivalent to Codex glob semantics. Bundled MCPs also enforce
+# the configured Gateway deny policy internally.
 # Tool exclusion is per MCP server. `blocked_tools` is an exact-name list.
 # `blocked_tool_substrings` is a case-insensitive literal substring list; it is
 # not glob or regular-expression syntax. Multiple values are allowed. Setting

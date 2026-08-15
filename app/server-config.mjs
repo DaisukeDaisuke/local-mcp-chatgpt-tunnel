@@ -11,6 +11,7 @@ const CODEX_SCRIPT_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codex-script', 
 const BUILD_V5T_ASSEMBLY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'buildv5tassembly', 'server.mjs');
 const INTERNET_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'internet', 'server.mjs');
 const ARCHIVE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'archive', 'server.mjs');
+const CODESPACE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codespace', 'server.mjs');
 const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-files', 'server.mjs'],
   ['mcp', 'safe-images', 'server.mjs'],
@@ -21,7 +22,8 @@ const BUNDLED_SERVER_PATHS = [
   ['mcp', 'codex-script', 'server.mjs'],
   ['mcp', 'buildv5tassembly', 'server.mjs'],
   ['mcp', 'internet', 'server.mjs'],
-  ['mcp', 'archive', 'server.mjs']
+  ['mcp', 'archive', 'server.mjs'],
+  ['mcp', 'codespace', 'server.mjs']
 ].map((parts) => resolve(repositoryRoot, ...parts));
 
 const SERVER_SANDBOX_MODES = new Set(['never', 'elevated', 'unelevated', 'onlineworkspace']);
@@ -126,6 +128,23 @@ function isArchiveServer(command, args, cwd, platform = process.platform) {
   return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(ARCHIVE_SERVER_PATH, platform);
 }
 
+function isCodespaceServer(command, args, cwd, platform = process.platform) {
+  if (platform !== process.platform || args.length === 0) return false;
+  const executable = platformPath(platform).basename(command).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe') return false;
+  return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(CODESPACE_SERVER_PATH, platform);
+}
+
+function startupPathOption(args, name, platform = process.platform) {
+  const prefix = `--${name}=`;
+  const matches = args.filter((argument) => argument.startsWith(prefix));
+  if (matches.length > 1) throw new Error(`${prefix}<absolute-path> may be specified only once`);
+  if (matches.length === 0) return undefined;
+  const value = matches[0].slice(prefix.length);
+  if (!value || !platformPath(platform).isAbsolute(value)) throw new Error(`${prefix}<absolute-path> must be absolute`);
+  return value;
+}
+
 function normalizeSandbox(raw, serverName) {
   const value = raw.sandbox ?? 'never';
   if (typeof value !== 'string' || !SERVER_SANDBOX_MODES.has(value)) {
@@ -209,10 +228,12 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const buildV5tAssemblyServer = isBuildV5tAssemblyServer(raw.command, args, cwd, platform);
   const internetServer = isInternetServer(raw.command, args, cwd, platform);
   const archiveServer = isArchiveServer(raw.command, args, cwd, platform);
+  const codespaceServer = isCodespaceServer(raw.command, args, cwd, platform);
   const bundledServer = codexScriptServer
     || buildV5tAssemblyServer
     || internetServer
     || archiveServer
+    || codespaceServer
     || isBundledServer(raw.command, args, cwd, platform);
   if (codexScriptServer && sandbox !== 'elevated' && sandbox !== 'unelevated') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for codex-script`);
@@ -226,6 +247,9 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if (archiveServer && sandbox !== 'elevated' && sandbox !== 'unelevated') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for archive`);
   }
+  if (codespaceServer && sandbox !== 'onlineworkspace') {
+    throw new Error(`mcp_servers.${name}.sandbox must be onlineworkspace for codespace`);
+  }
   const sandboxDelegated = false;
   const command = sandbox === 'elevated' || sandbox === 'onlineworkspace'
     ? normalizeNativeExecutable(raw.command, `mcp_servers.${name}.command`, platform)
@@ -235,6 +259,9 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     : undefined;
   const allowedDirectories = absolutePathArray(raw.allowed_directories, `mcp_servers.${name}.allowed_directories`, platform);
   const allowedFiles = absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform);
+  const sandboxReadOnlyFiles = codespaceServer
+    ? [startupPathOption(args, 'gh-executable', platform), startupPathOption(args, 'token-file', platform), startupPathOption(args, 'ssh-key-file', platform)].filter(Boolean)
+    : [];
   const protectedGatewayLogs = protectedLogPolicyEntries(
     allowedDirectories,
     allowedFiles,
@@ -250,6 +277,11 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   }
   if ((sandbox === 'elevated' || sandbox === 'onlineworkspace') && allowedDirectories.some((directory) => pathWithin(directory, command, platform))) {
     throw new Error(`mcp_servers.${name}.command must be outside allowed_directories so the sandboxed MCP cannot modify its executable`);
+  }
+  for (const trustFile of sandboxReadOnlyFiles) {
+    if (allowedDirectories.some((directory) => pathWithin(directory, trustFile, platform))) {
+      throw new Error(`mcp_servers.${name} fixed trust files must be outside allowed_directories so sandboxed code cannot modify them`);
+    }
   }
   return {
     name,
@@ -271,8 +303,10 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     stopAfter: normalizeLifecycle(raw, 'stop_after', name),
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
+    gatewayArgumentPolicy: codespaceServer ? 'codespace' : 'default',
     allowedDirectories,
     allowedFiles,
+    sandboxReadOnlyFiles,
     sandboxReadOnlyDirectories,
     disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`, platform),
     disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform),
