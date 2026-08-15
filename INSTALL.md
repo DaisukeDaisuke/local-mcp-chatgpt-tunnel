@@ -27,10 +27,6 @@ winget install -e --id Git.Git
 
 Chrome、Ghidra、その他の外部MCPは、実際に使うものだけを各プロジェクトの公式手順で導入します。<br>安全上の理由から、このスクリプトで一括導入はしません。<br>
 
-## nodejsのインストール
-nodejsをインストールしてください。<br>
-https://nodejs.org/ja/download
-
 ### 1.1 Codex elevated sandboxを使う場合（推奨）
 通常の`config/gateway.example.toml`では、Gatewayのパス検証と各MCP自身の検証が主な境界になります。<br>
 WindowsでCodexのelevated sandboxをセットアップすると、`config/gateway.codex.example.toml`を使ってMCPプロセス自体をCodexのOSサンドボックス内で起動でき、許可したWorkspaceの外へのアクセスに対して追加の防御層を持たせられます。<br>
