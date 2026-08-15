@@ -354,7 +354,7 @@ async function startChild(childConfig) {
         childConfig.allowedDirectories = allowedPolicy.directories.map((entry) => entry.canonical);
         childConfig.allowedFiles = allowedPolicy.files.map((entry) => entry.canonical);
         childConfig.codexExecutable = await canonicalExecutable(childConfig.codexExecutable, `${childConfig.name} codex_executable`);
-        if (childConfig.sandbox === 'elevated') {
+        if (childConfig.sandbox === 'elevated' || childConfig.sandbox === 'onlineworkspace') {
           childConfig.command = await canonicalExecutable(childConfig.command, `${childConfig.name} command`);
           if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.command))) {
             throw new Error(`${childConfig.name}: command resolves inside a writable sandbox root`);

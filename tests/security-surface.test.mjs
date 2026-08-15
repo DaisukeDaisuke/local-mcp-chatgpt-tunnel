@@ -95,7 +95,9 @@ test('bundled isolation uses a private HMAC-signed multi-root context and reject
     '../mcp/safe-download/server.mjs',
     '../mcp/gitmcp/server.mjs',
     '../mcp/git-capability/server.mjs',
-    '../mcp/gh-workflow/server.mjs'
+    '../mcp/gh-workflow/server.mjs',
+    '../mcp/internet/server.mjs',
+    '../mcp/archive/server.mjs'
   ]) {
     const source = await readFile(new URL(path, import.meta.url), 'utf8');
     assert.match(source, /createBundledIsolation/);

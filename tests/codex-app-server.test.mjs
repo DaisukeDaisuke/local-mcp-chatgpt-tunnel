@@ -249,6 +249,21 @@ test('Codex permission profile does not narrow a writable parent with redundant 
   assert.equal(override.includes("'C:\\repo\\readonly-helper'='read'"), false);
 });
 
+test('onlineworkspace permission profile enables network without widening filesystem roots', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\repo\\mcp\\internet\\server.mjs'],
+    allowedDirectories: ['C:\\workspace'],
+    allowedFiles: [],
+    sandboxReadOnlyDirectories: [],
+    isBundled: true,
+    sandbox: 'onlineworkspace'
+  });
+  assert.equal(override.includes("'C:\\workspace'='write'"), true);
+  assert.equal(override.includes("'C:\\repo'='write'"), false);
+  assert.equal(override.endsWith('},network={enabled=true}}'), true);
+});
+
 test('Codex app-server forwards streamed text deltas without dropping MCP stdout', async () => {
   const fake = fakeAppServer();
   let stdout = '';

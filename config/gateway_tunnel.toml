@@ -1,0 +1,383 @@
+private_use_only = true
+# Publishes gateway__list_available_tools. It reads only the gateway's existing in-memory tool registry.
+publish_tool_directory = true
+tool_annotations_path = "tool-annotations.toml"
+enable-logging-files = true
+
+# Every started child MCP also receives <prefix>__get_gateway_access_scope.
+# It reports the gateway's current relative-path base and configured/effective path policy.
+# Bundled MCP tools require a unique isolatedId created with isolated__create.
+# isolated__create accepts one or more absolute workspaces and intersects them with each MCP allowlist.
+# Gateway-signed roots cannot be replaced by public root, roots, workspace, or workspaces arguments.
+
+# safe-files uses cwd as its workspace root. The server script path must therefore be absolute.
+[mcp_servers.files]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\safe-files\server.mjs']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness'
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+enabled = true
+prefix = "files"
+annotation_config = false
+# Default false. Only path arguments are canonicalized, then reads and edits of the loaded gateway config are denied.
+# This is not an OS sandbox; a child MCP process can still ignore the path policy internally.
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 1800
+# Add every directory that an isolated workspace may select; each isolatedId receives only its requested subset.
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\config\gateway.toml']
+disallowed_path_globs = ['**.ssh**']
+
+# Git operations for explicitly allowed repositories only. Set enabled=true only when needed.
+# enabled=false prevents the entire gitmcp server from starting.
+# --disable-push=true removes push from the published tool list. Default when omitted: false.
+# --disable-pull=true removes pull from the published tool list. Default when omitted: true.
+# --disable-clone=true removes clone_repository from the published tool list. Default when omitted: true.
+# These flags do not disable branch, checkout, worktree, status, diff, show, staging, or commit tools.
+# Branch deletion and forced worktree removal are not exposed.
+[mcp_servers.git]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\gitmcp\server.mjs', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness'
+enabled = true
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+prefix = "git"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 60
+tool_timeout_sec = 1800
+serial_group = "git"
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly']
+allowed_files = []
+# Deny secrets or private subtrees even when they are inside allowed_directories.
+disallowed_path_globs = ['**.ssh**']
+
+
+# Commit is intentionally a separate process so signing access does not force the larger gitmcp
+# outside the OS sandbox. This example uses sandbox="never" for compatibility with local signing agents.
+# Users who do not need that access may choose elevated/unelevated instead.
+[mcp_servers.git_commit]
+command = 'node'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=commit', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness'
+enabled = true
+sandbox = "never"
+prefix = "git_commit"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+# CodexのWindows sandboxは: minimal readでC:\Program Filesをsystem read rootとして扱うため、
+# 上記の標準Git for Windows配置は追加設定不要です。Portable Gitなどを別の場所へ置く場合だけ、
+# そのGitインストールディレクトリをsandbox_read_only_directoriesへ追加してください。
+
+# git add/restore writes .git/index and .git/index.lock. The Codex Windows sandbox deliberately
+# blocks writable dot-directories, so keep index mutation in its own unsandboxed capability.
+[mcp_servers.git_stage]
+command = 'node'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=stage', '--git-executable=C:\Program Files\Git\cmd\git.exe']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness'
+enabled = true
+sandbox = "never"
+prefix = "git_stage"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+
+# The current Codex permission profile disables network. Remote Git capabilities therefore use
+# sandbox="never" in this example; they remain separate MCPs so a future/network-capable boundary
+# or a deliberately different policy can be selected per capability without moving gitmcp itself.
+# push/pull pin the remote name and GitHub OWNER/REPO identity at startup and accept no remote/refspec/URL tool arguments.
+[mcp_servers.git_push]
+command = 'node'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=push', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--repository=DaisukeDaisuke/dqixToGPT' , '--repository=DaisukeDaisuke/local-mcp-chatgpt-tunnel', '--repository=DaisukeDaisuke/desmume_webassembly_harness']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness'
+enabled = true
+sandbox = "never"
+prefix = "git_push"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 600
+serial_group = "git"
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+# GitHub Actions inspection and explicit run cancellation for a repository allowlist.
+# The MCP never invokes a shell and does not expose dispatch, rerun, delete, artifact download, or arbitrary gh commands.
+# Repeat --repository=OWNER/REPO to allow multiple repositories. No other repository can be selected.
+# cwd is mandatory here even though every GitHub repository argument is allowlisted by --repository.
+[mcp_servers.gh_workflow]
+command = "node"
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs', '--repository=DaisukeDaisuke/desmume_webassembly',  '--repository=DaisukeDaisuke/desmume_webassembly_harness',  '--repository=DaisukeDaisuke/local-mcp-chatgpt-tunnel']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness'
+enabled = true
+prefix = "gh_workflow"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 1800
+serial_group = "gh_workflow"
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+# Read-only image transfer for ChatGPT vision. Enable it only after replacing every dummy path.
+[mcp_servers.images]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\safe-images\server.mjs']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness\harness\screenshots'
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+enabled = true
+prefix = "images"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+allowed_directories = ['C:\Users\owner\Downloads', 'C:\Users\owner\Documents\desmume_webassembly_harness\harness\screenshots']
+allowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.images.env]
+SAFE_IMAGES_MAX_BYTES = "8388608"
+SAFE_IMAGES_MAX_PIXELS = "52428800"
+
+# Read-only ZIP download. Keep this disabled until its cwd and allowlist are replaced with a dedicated source-export root.
+[mcp_servers.downloads]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\safe-download\server.mjs']
+cwd = 'C:\Users\owner\Documents\desmume_webassembly_harness'
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+enabled = true
+prefix = "downloads"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel']
+allowed_files = []
+disallowed_path_globs = ['**.ssh**']
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+
+[mcp_servers.downloads.env]
+SAFE_DOWNLOAD_MAX_FILES = "500"
+SAFE_DOWNLOAD_MAX_INPUT_BYTES = "16777216"
+SAFE_DOWNLOAD_MAX_ZIP_BYTES = "20971520"
+SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
+
+[mcp_servers.internet]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\internet\server.mjs']
+cwd = 'C:\Users\owner\Downloads'
+sandbox = "onlineworkspace"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+enabled = true
+prefix = "internet"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 3600
+allowed_directories = ['C:\Users\owner\Downloads', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\desmume_webassembly']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\config\gateway.toml']
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.internet.env]
+INTERNET_MAX_BYTES = "4294967296"
+
+[mcp_servers.archive]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\archive\server.mjs', '--seven-zip-executable=C:\Program Files\7-Zip\7z.exe']
+cwd = 'C:\Users\owner\Downloads'
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+enabled = true
+prefix = "archive"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 3600
+allowed_directories = ['C:\Users\owner\Downloads', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\desmume_webassembly']
+sandbox_read_only_directories = ['C:\Program Files\7-Zip']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\config\gateway.toml']
+disallowed_path_globs = ['**.ssh**']
+
+
+[mcp_servers.chrome-devtools]
+command = "cmd.exe"
+args = ["/d", "/s", "/c", "npx.cmd --yes chrome-devtools-mcp@latest --categoryExperimentalWebmcp=true --chromeArg=--enable-features=WebMCPTesting,DevToolsWebMCPSupport --allow-unrestricted-paths"]
+cwd = 'C:\Users\owner\Downloads\a'
+enabled = false
+prefix = "chrome-devtools"
+annotation_config = false
+startup_timeout_sec = 10000
+tool_timeout_sec = 100000
+tool_output_token_limit = 1000000
+
+[mcp_servers.desmume_harness]
+command = "node"
+args = ["C:\\Users\\owner\\Documents\\desmume_webassembly_harness\\src\\mcpMain.js", "C:\\Users\\owner\\Documents\\desmume_webassembly_harness\\harness.toml"]
+cwd = "C:\\Users\\owner\\Documents\\desmume_webassembly_harness"
+startup_timeout_sec = 30
+tool_timeout_sec = 3000
+tool_output_token_limit = 1000000
+allowed_directories = ['C:\Users\owner\Downloads', 'D:\software\desmume-win-x64_2025_8_11\nds', 'C:\Users\owner\Documents\dqixToGPT']
+
+[mcp_servers.ghidra-mcp]
+command = "py"
+args = ["C:\\Users\\owner\\Documents\\ghidra_12.0.4_PUBLIC_20260303\\bridge_mcp_ghidra.py"]
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 3000
+tool_output_token_limit = 1000000
+blocked_tool_substrings = ["launch", "shell", "execute", "debugger_"]
+
+[mcp_servers.mjs_script]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=mjs', '--runtime-executable=C:\Program Files\nodejs\node.exe']
+cwd = 'C:\Users\owner\Documents\dqixToGPT'
+enabled = true
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+prefix = "mjs_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+tool_output_token_limit = 1000000
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+allowed_directories = ['C:\Users\owner\Documents\dqixToGPT', 'D:\dq9_new\data\data']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = []
+
+[mcp_servers.nodejs_script]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=run', '--runtime=nodejs', '--runtime-executable=C:\Program Files\nodejs\node.exe']
+cwd = 'C:\Users\owner\Documents\dqixToGPT'
+enabled = true
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+prefix = "nodejs_script"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+tool_output_token_limit = 1000000
+allowed_directories = ['C:\Users\owner\Documents\dqixToGPT', 'D:\dq9_new\data\data']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = []
+
+
+# Strict allowlisted checkers. These expose check_file only and never run npm scripts,
+# package managers, shell commands, or arbitrary executables.
+[mcp_servers.nodejs_check]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\codex-script\server.mjs', '--mode=check', '--runtime=nodejs', '--runtime-executable=C:\Program Files\nodejs\node.exe']
+cwd = 'C:\Users\owner\Documents\dqixToGPT'
+enabled = true
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+prefix = "nodejs_check"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+tool_output_token_limit = 1000000
+allowed_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\Documents\local-mcp-chatgpt-tunnel', 'C:\Users\owner\Documents\desmume_webassembly']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = []
+
+
+# Fixed sandboxed ARMv5T builder. The preprocessing module and GNU Arm toolchain
+# are read-only trust inputs; only BUILD_WORKSPACE is writable. sourcePath and
+# outputDirectory passed to build must both be absolute paths inside BUILD_WORKSPACE.
+[mcp_servers.buildv5tassembly]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\owner\Documents\local-mcp-chatgpt-tunnel\mcp\buildv5tassembly\server.mjs', '--preprocessor-module=C:\Users\owner\Documents\desmume_webassembly_harness\src\armv5t-assembly-preprocessor.js', '--gcc-executable=C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\14.2 rel1\bin\arm-none-eabi-gcc.exe', '--objcopy-executable=C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi\14.2 rel1\bin\arm-none-eabi-objcopy.exe']
+cwd = 'C:\Users\owner\Documents\dqixToGPT'
+enabled = true
+sandbox = "elevated"
+codex_executable = 'C:\Users\owner\AppData\Roaming\npm\codex.cmd'
+prefix = "buildv5tassembly"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 660
+tool_output_token_limit = 1000000
+allowed_directories = ['C:\Users\owner\Documents\dqixToGPT', 'C:\Users\owner\AppData\Local\Temp']
+sandbox_read_only_directories = ['C:\Users\owner\Documents\desmume_webassembly_harness', 'C:\Program Files (x86)\Arm GNU Toolchain arm-none-eabi']
+allowed_files = []
+disallowed_directories = ['C:\Users\owner\Documents\dqixToGPT\armv5tAssemblyPlayground\dqvchax']
+disallowed_files = []
+disallowed_path_globs = []
+
+
+# "C:\Users\owner\Downloads\avc3.dst"
+
+# Add any other stdio MCP in the same Codex-style shape.
+# Path-looking tool arguments are denied unless they match allowed_directories
+# or allowed_files. Directory entries include descendants. File entries are exact.
+# `enabled = false` keeps an entry without starting it.
+# Tool exclusion is per MCP server. `blocked_tools` is an exact-name list.
+# `blocked_tool_substrings` is a case-insensitive literal substring list; it is
+# not glob or regular-expression syntax. Multiple values are allowed. Setting
+# `blocked_tool_substrings = ["script"]` hides every original tool name that
+# contains script, including evaluate_script, runScript, and SCRIPT_debug.
+# On every gateway initialize, INFO logs list each disabled tool on its own line,
+# then report the discovered, disabled, and actually published totals.
+#
+# [mcp_servers.my_server]
+# command = "py"
+# args = ['C:\path\to\server.py']
+# cwd = 'C:\path\to'
+# enabled = false
+# prefix = "my_server"
+# annotation_config = true
+# dangerous_allow_gateway_config_access = false
+# startup_timeout_sec = 30
+# tool_timeout_sec = 1800
+# blocked_tools = ["dangerous_tool"]
+# blocked_tool_substrings = ["script", "shell", "execute"]
+# allowed_directories = ['C:\work\project']
+# allowed_files = ['C:\Users\owner\Downloads\one-upload-file.png']
+# disallowed_directories = ['C:\work\project\private']
+# disallowed_files = ['C:\work\project\.env']
+# disallowed_path_globs = ['**.ssh**']
+#
+# [mcp_servers.my_server.env]
+# EXAMPLE_CONFIG = 'C:\path\to\config.json'

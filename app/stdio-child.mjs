@@ -5,6 +5,7 @@ import { CodexAppServerSandboxedProcess } from './codex-app-server.mjs';
 import { CodexWindowsSandboxedProcess } from './codex-windows-sandbox.mjs';
 
 const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
+const STDERR_TAIL_LIMIT = 8192;
 
 function pathInside(directory, candidate) {
   const path = relative(directory, candidate);
@@ -32,6 +33,7 @@ export class StdioMcpChild {
     this.pending = new Map();
     this.tools = [];
     this.closed = false;
+    this.stderrTail = '';
   }
 
   async start() {
@@ -72,10 +74,10 @@ export class StdioMcpChild {
         onStdout: (chunk) => this.accept(chunk),
         onStderr: (chunk) => this.writeStderr(chunk),
         onExit: (code, signal) => {
-          if (!this.closed) this.failAll(new Error(`${this.config.name} exited (${signal ?? code ?? 'unknown'})`));
+          if (!this.closed) this.failAll(this.exitError(code, signal));
         },
         onFailure: (error) => {
-          if (!this.closed) this.failAll(error);
+          if (!this.closed) this.failAll(this.withStderrTail(error));
         },
         stderr: this.stderr
       });
@@ -92,9 +94,9 @@ export class StdioMcpChild {
       this.child.stdout.on('data', (chunk) => this.accept(chunk));
       this.child.stderr.setEncoding('utf8');
       this.child.stderr.on('data', (chunk) => this.writeStderr(chunk));
-      this.child.once('error', (error) => this.failAll(error));
+      this.child.once('error', (error) => this.failAll(this.withStderrTail(error)));
       this.child.once('exit', (code, signal) => {
-        if (!this.closed) this.failAll(new Error(`${this.config.name} exited (${signal ?? code ?? 'unknown'})`));
+        if (!this.closed) this.failAll(this.exitError(code, signal));
       });
     }
 
@@ -185,10 +187,21 @@ export class StdioMcpChild {
   }
 
   writeStderr(chunk) {
+    this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-STDERR_TAIL_LIMIT);
     const prefix = `[${this.config.name}] `;
     for (const line of String(chunk).split(/(?<=\n)/)) {
       if (line) this.stderr.write(`${prefix}${line}`);
     }
+  }
+
+  withStderrTail(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const detail = this.stderrTail.trim();
+    return new Error(detail ? `${message}; stderr: ${detail}` : message);
+  }
+
+  exitError(code, signal) {
+    return this.withStderrTail(new Error(`${this.config.name} exited (${signal ?? code ?? 'unknown'})`));
   }
 
   failAll(error) {

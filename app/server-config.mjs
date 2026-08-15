@@ -9,6 +9,8 @@ export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '
 export const gatewayLogsDirectory = resolve(repositoryRoot, 'logs');
 const CODEX_SCRIPT_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codex-script', 'server.mjs');
 const BUILD_V5T_ASSEMBLY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'buildv5tassembly', 'server.mjs');
+const INTERNET_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'internet', 'server.mjs');
+const ARCHIVE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'archive', 'server.mjs');
 const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-files', 'server.mjs'],
   ['mcp', 'safe-images', 'server.mjs'],
@@ -17,10 +19,12 @@ const BUNDLED_SERVER_PATHS = [
   ['mcp', 'git-capability', 'server.mjs'],
   ['mcp', 'gh-workflow', 'server.mjs'],
   ['mcp', 'codex-script', 'server.mjs'],
-  ['mcp', 'buildv5tassembly', 'server.mjs']
+  ['mcp', 'buildv5tassembly', 'server.mjs'],
+  ['mcp', 'internet', 'server.mjs'],
+  ['mcp', 'archive', 'server.mjs']
 ].map((parts) => resolve(repositoryRoot, ...parts));
 
-const SERVER_SANDBOX_MODES = new Set(['never', 'elevated', 'unelevated']);
+const SERVER_SANDBOX_MODES = new Set(['never', 'elevated', 'unelevated', 'onlineworkspace']);
 
 const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_ALLOWED_DIRECTORIES',
@@ -108,10 +112,24 @@ function isBuildV5tAssemblyServer(command, args, cwd, platform = process.platfor
   return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(BUILD_V5T_ASSEMBLY_SERVER_PATH, platform);
 }
 
+function isInternetServer(command, args, cwd, platform = process.platform) {
+  if (platform !== process.platform || args.length === 0) return false;
+  const executable = platformPath(platform).basename(command).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe') return false;
+  return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(INTERNET_SERVER_PATH, platform);
+}
+
+function isArchiveServer(command, args, cwd, platform = process.platform) {
+  if (platform !== process.platform || args.length === 0) return false;
+  const executable = platformPath(platform).basename(command).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe') return false;
+  return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(ARCHIVE_SERVER_PATH, platform);
+}
+
 function normalizeSandbox(raw, serverName) {
   const value = raw.sandbox ?? 'never';
   if (typeof value !== 'string' || !SERVER_SANDBOX_MODES.has(value)) {
-    throw new Error(`mcp_servers.${serverName}.sandbox must be one of: never, elevated, unelevated`);
+    throw new Error(`mcp_servers.${serverName}.sandbox must be one of: never, elevated, unelevated, onlineworkspace`);
   }
   return value;
 }
@@ -189,14 +207,22 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const sandbox = normalizeSandbox(raw, name);
   const codexScriptServer = isCodexScriptServer(raw.command, args, cwd, platform);
   const buildV5tAssemblyServer = isBuildV5tAssemblyServer(raw.command, args, cwd, platform);
-  if (codexScriptServer && sandbox === 'never') {
+  const internetServer = isInternetServer(raw.command, args, cwd, platform);
+  const archiveServer = isArchiveServer(raw.command, args, cwd, platform);
+  if (codexScriptServer && sandbox !== 'elevated' && sandbox !== 'unelevated') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for codex-script`);
   }
-  if (buildV5tAssemblyServer && sandbox === 'never') {
+  if (buildV5tAssemblyServer && sandbox !== 'elevated' && sandbox !== 'unelevated') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for buildv5tassembly`);
   }
+  if (internetServer && sandbox !== 'onlineworkspace') {
+    throw new Error(`mcp_servers.${name}.sandbox must be onlineworkspace for internet`);
+  }
+  if (archiveServer && sandbox !== 'elevated' && sandbox !== 'unelevated') {
+    throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for archive`);
+  }
   const sandboxDelegated = false;
-  const command = sandbox === 'elevated'
+  const command = sandbox === 'elevated' || sandbox === 'onlineworkspace'
     ? normalizeNativeExecutable(raw.command, `mcp_servers.${name}.command`, platform)
     : raw.command;
   const codexExecutable = sandbox !== 'never'
@@ -217,7 +243,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if (sandbox !== 'never' && allowedDirectories.some((directory) => pathWithin(directory, codexExecutable, platform))) {
     throw new Error(`mcp_servers.${name}.codex_executable must be outside allowed_directories so sandboxed code cannot modify it`);
   }
-  if (sandbox === 'elevated' && allowedDirectories.some((directory) => pathWithin(directory, command, platform))) {
+  if ((sandbox === 'elevated' || sandbox === 'onlineworkspace') && allowedDirectories.some((directory) => pathWithin(directory, command, platform))) {
     throw new Error(`mcp_servers.${name}.command must be outside allowed_directories so the sandboxed MCP cannot modify its executable`);
   }
   return {

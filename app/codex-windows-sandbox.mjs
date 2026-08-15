@@ -20,6 +20,7 @@ async function canonicalRegularFile(path, label) {
 }
 
 function windowsSandboxOverride(mode) {
+  if (mode === 'onlineworkspace') return "windows.sandbox='elevated'";
   if (mode !== 'elevated' && mode !== 'unelevated') {
     throw new Error(`unsupported Windows Codex sandbox mode: ${mode}`);
   }
@@ -122,14 +123,14 @@ export class CodexWindowsSandboxedProcess {
   async start() {
     if (this.ready) return;
     const codexExecutable = await this.canonicalize(this.config.codexExecutable, 'codexExecutable');
-    const command = this.config.sandbox === 'elevated'
+    const command = this.config.sandbox === 'elevated' || this.config.sandbox === 'onlineworkspace'
       ? await this.canonicalize(this.config.command, `${this.config.name} command`)
       : this.config.command;
     const roots = this.config.allowedDirectories ?? [];
     if (roots.some((root) => within(root, codexExecutable))) {
       throw new Error(`${this.config.name} codexExecutable resolves inside a writable sandbox root`);
     }
-    if (this.config.sandbox === 'elevated' && roots.some((root) => within(root, command))) {
+    if ((this.config.sandbox === 'elevated' || this.config.sandbox === 'onlineworkspace') && roots.some((root) => within(root, command))) {
       throw new Error(`${this.config.name} command resolves inside a writable sandbox root`);
     }
 

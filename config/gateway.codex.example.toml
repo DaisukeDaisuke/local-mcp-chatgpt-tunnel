@@ -229,6 +229,51 @@ SAFE_DOWNLOAD_MAX_INPUT_BYTES = "16777216"
 SAFE_DOWNLOAD_MAX_ZIP_BYTES = "20971520"
 SAFE_DOWNLOAD_MAX_RG_OUTPUT_BYTES = "8388608"
 
+# Network-enabled downloader. onlineworkspace keeps filesystem writes inside the configured
+# workspace boundary while allowing HTTP/HTTPS access. destinationPath must remain inside
+# allowed_directories/allowed_files after Gateway isolation is applied.
+[mcp_servers.internet]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\internet\server.mjs']
+cwd = 'C:\ABSOLUTE\PATH\TO\DOWNLOAD\WORKSPACE'
+enabled = false
+sandbox = "onlineworkspace"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "internet"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 3600
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\DOWNLOAD\WORKSPACE']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
+[mcp_servers.internet.env]
+INTERNET_MAX_BYTES = "4294967296"
+
+# Fixed 7-Zip archive capability. The MCP exposes only extract_archive, create_zip, and
+# create_7z; it does not accept arbitrary 7-Zip command-line arguments.
+[mcp_servers.archive]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\archive\server.mjs', '--seven-zip-executable=C:\Program Files\7-Zip\7z.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\ARCHIVE\WORKSPACE'
+enabled = false
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = "archive"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 3600
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\ARCHIVE\WORKSPACE']
+sandbox_read_only_directories = ['C:\Program Files\7-Zip']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
+
 # Add any other stdio MCP in the same Codex-style shape.
 # Path-looking tool arguments are denied unless they match allowed_directories
 # or allowed_files. Directory entries include descendants. File entries are exact.
@@ -428,7 +473,7 @@ annotation_config = false
 dangerous_allow_gateway_config_access = false
 startup_timeout_sec = 30
 tool_timeout_sec = 660
-allowed_directories = ['C:\ABSOLUTE\PATH\TO\BUILD_WORKSPACE']
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\BUILD_WORKSPACE', 'C:\Users\owner\AppData\Local\Temp']
 sandbox_read_only_directories = ['C:\ABSOLUTE\PATH\TO\desmume_webassembly_harness', 'C:\ABSOLUTE\PATH\TO\GNU-ARM-TOOLCHAIN']
 allowed_files = []
 disallowed_directories = []

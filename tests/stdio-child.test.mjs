@@ -69,3 +69,32 @@ test('stdio child passes gateway config protection only when the config is insid
   assert.deepEqual(await observedDisallowedFiles([outsideConfig]), []);
   assert.deepEqual(await observedDisallowedFiles([insideConfig]), [insideConfig]);
 });
+
+test('stdio child includes captured stderr when a child exits during initialization', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'stdio-child-failed-start-'));
+  const serverPath = join(workspace, 'failed-server.mjs');
+  await writeFile(serverPath, "process.stderr.write('sandbox startup detail\\n'); process.exitCode = 1;\n", 'utf8');
+  const child = new StdioMcpChild({
+    name: 'failed-fixture',
+    command: process.execPath,
+    args: [serverPath],
+    cwd: workspace,
+    env: {},
+    allowedDirectories: [workspace],
+    allowedFiles: [],
+    disallowedDirectories: [],
+    disallowedFiles: [],
+    disallowedPathGlobs: [],
+    protectedGatewayConfigPaths: [],
+    dangerousAllowGatewayConfigAccess: false,
+    startupTimeoutMs: 5000,
+    requestTimeoutMs: 5000,
+    sandbox: 'never'
+  });
+  t.after(() => child.close());
+  await assert.rejects(child.start(), (error) => {
+    assert.match(error.message, /exited \(1\)/);
+    assert.match(error.message, /stderr: sandbox startup detail/);
+    return true;
+  });
+});

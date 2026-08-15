@@ -98,6 +98,12 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 ### safe-download
 `safe-download`は読み取り専用で、単一ファイルまたはディレクトリを常にZIPとして返します。`safe-files`とは別の`cwd`と許可リストを設定し、ChatGPTへ渡してよいソースだけを公開します。<br>
 ディレクトリは固定された`rg --files --hidden`で列挙し、`.git`内部、ROM、Save、State、秘密鍵形式、資格情報らしい内容、許可範囲外、シンボリックリンクを拒否します。`disallowed_path_globs`が設定されている場合は、利用者指定の`globs`や`excludePaths`を適用する前に対象ディレクトリ全体を確認し、拒否パターンへ一致するファイルまたはフォルダが1件でもあればZIP作成全体を拒否します。エラーには一致した設定パターンと対象パスを含めます。<br>
+### internet
+`internet`は任意のHTTP/HTTPS URLから1ファイルを取得する同梱MCPです。公開ツールは`download_file`だけで、送信先はGateway署名済み`isolatedId`のworkspace内に限定されます。既存ファイルの上書き、UNC/ADS、workspace外への書き込み、任意header・cookie・credential注入は受け付けません。途中失敗時は一時ファイルを削除します。<br>
+このMCPは必ず`sandbox = "onlineworkspace"`で起動します。`onlineworkspace`はCodexのworkspace-write filesystem境界を維持したまま、そのpermission profileのnetworkだけを有効にします。`sandbox = "never"`へフォールバックしません。<br>
+### archive
+`archive`は起動時に`--7z-executable=<absolute-7z.exe-path>`で7-Zipを固定し、`create_zip`、`create_7z`、`extract_archive`だけを公開する同梱MCPです。一般シェル、任意実行ファイル、任意7-Zip引数は公開しません。入力・出力は署名済みworkspace内に限定し、archive作成先と展開先は既存パスへ上書きしません。<br>
+`archive`自体もCodex sandbox内で起動し、7-Zipインストール先は`sandbox_read_only_directories`でread-only trust inputとして渡します。<br>
 ### gitmcp
 `gitmcp`は、許可されたディレクトリ内のGitリポジトリに対するローカル操作だけを固定されたGitサブコマンドとオプションで実行します。起動時に`--git-executable=<absolute-path>`を必須とし、その実体だけを`shell=false`で起動します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、branch削除、force操作には対応しません。indexを書き換える`add_all`、`stage_paths`、`unstage_paths`と、`commit`、`push`、`pull`、`clone_repository`は境界分離のため別の`git-capability` MCPへ移動しました。旧`--disable-push`、`--disable-pull`、`--disable-clone`は古い`gateway.toml`を起動不能にしないためno-opとして受理しますが、これらを`false`にしても移動済みcapabilityは復活しません。<br>
 `status`、追跡ファイル一覧、ブランチ・remote・履歴の確認、作業ツリーまたはstaged差分、特定commitの`show`、既存ブランチへの切り替えとcheckout、親commitを指定したブランチ作成、許可root内のworktree作成・一覧・通常削除を利用できます。ブランチ削除、primary worktree削除、dirtyまたはlocked worktreeの強制削除は実装しません。<br>

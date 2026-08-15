@@ -158,9 +158,43 @@ test('gateway config rejects unsupported MCP sandbox modes', async () => {
     'sandbox = "dangerFullAccess"'
   ].join('\n'), 'utf8');
   await assert.rejects(loadGatewayConfig(path), (error) => {
-    assert.equal(error.message, 'mcp_servers.alpha.sandbox must be one of: never, elevated, unelevated');
+    assert.equal(error.message, 'mcp_servers.alpha.sandbox must be one of: never, elevated, unelevated, onlineworkspace');
     return true;
   });
+});
+
+test('internet bundled MCP requires onlineworkspace and keeps the sandbox at MCP startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-internet-sandbox-'));
+  const workspace = join(directory, 'workspace');
+  const serverPath = resolve('mcp/internet/server.mjs');
+  const goodPath = join(directory, 'good.toml');
+  await writeFile(goodPath, [
+    'private_use_only = true',
+    '[mcp_servers.internet]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "onlineworkspace"',
+    `codex_executable = '${process.execPath}'`,
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(goodPath);
+  assert.equal(config.servers[0].isBundled, true);
+  assert.equal(config.servers[0].sandbox, 'onlineworkspace');
+  assert.equal(config.servers[0].sandboxDelegated, false);
+
+  const badPath = join(directory, 'bad.toml');
+  await writeFile(badPath, [
+    'private_use_only = true',
+    '[mcp_servers.internet]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "elevated"',
+    `codex_executable = '${process.execPath}'`,
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(badPath), /sandbox must be onlineworkspace for internet/);
 });
 
 test('gateway requires absolute command paths only for elevated sandbox mode', async () => {

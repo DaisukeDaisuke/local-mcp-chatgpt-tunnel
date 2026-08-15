@@ -77,7 +77,8 @@ function permissionProfileOverrideFor(config) {
   const filesystem = [...entries.entries()]
     .map(([path, access]) => `${tomlLiteral(path, 'sandbox path')}=${tomlLiteral(access, 'sandbox access')}`)
     .join(',');
-  return `permissions.${CODEX_PERMISSION_PROFILE_ID}={filesystem={${filesystem}},network={enabled=false}}`;
+  const networkEnabled = config.sandbox === 'onlineworkspace';
+  return `permissions.${CODEX_PERMISSION_PROFILE_ID}={filesystem={${filesystem}},network={enabled=${networkEnabled}}}`;
 }
 
 function codexAppServerLaunchSpec(codexExecutable, cwd, { platform = process.platform, env = process.env, permissionProfileOverride } = {}) {
@@ -166,7 +167,7 @@ export class CodexAppServerSandboxedProcess {
   async start() {
     if (this.ready) return;
     const codexExecutable = await canonicalRegularFile(this.config.codexExecutable, 'codexExecutable');
-    const command = this.config.sandbox === 'elevated'
+    const command = this.config.sandbox === 'elevated' || this.config.sandbox === 'onlineworkspace'
       ? await canonicalRegularFile(this.config.command, `${this.config.name} command`)
       : this.config.command;
     if (this.config.sandbox !== 'never') {
@@ -174,7 +175,7 @@ export class CodexAppServerSandboxedProcess {
       if (roots.some((root) => within(root, codexExecutable))) {
         throw new Error(`${this.config.name} codexExecutable resolves inside a writable sandbox root`);
       }
-      if (this.config.sandbox === 'elevated' && roots.some((root) => within(root, command))) {
+      if ((this.config.sandbox === 'elevated' || this.config.sandbox === 'onlineworkspace') && roots.some((root) => within(root, command))) {
         throw new Error(`${this.config.name} command resolves inside a writable sandbox root`);
       }
     }
