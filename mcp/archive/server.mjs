@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, realpath, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildChildEnvironment } from '../../app/child-environment.mjs';
@@ -10,6 +10,7 @@ const SERVER_VERSION = '0.1.0';
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+const MAX_PATH_CODE_UNITS = 1024;
 const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
@@ -84,12 +85,16 @@ function within(root, candidate) {
 }
 function rejectPath(value, label) {
   if (typeof value !== 'string' || value.length === 0 || /[\0\r\n]/.test(value)) throw new Error(`${label} must be a non-empty path without NUL or line breaks`);
+  if (value.length > MAX_PATH_CODE_UNITS) throw new Error(`${label} exceeds the ${MAX_PATH_CODE_UNITS}-character path limit`);
   if (/^(?:\\\\|\/\/)/.test(value)) throw new Error(`${label} may not be a UNC path`);
   if (process.platform === 'win32') {
     const normalized = value.replace(/\//g, '\\');
     if (/^\\\\[?.]\\/i.test(normalized)) throw new Error(`${label} may not use Windows namespace paths`);
     if (normalized.replace(/^[A-Za-z]:/, '').includes(':')) throw new Error(`${label} may not use NTFS alternate data streams`);
   }
+}
+function assertResolvedPathLength(value, label) {
+  if (value.length > MAX_PATH_CODE_UNITS) throw new Error(`${label} exceeds the ${MAX_PATH_CODE_UNITS}-character path limit after resolution`);
 }
 async function roots() {
   const current = isolation.current();
@@ -107,6 +112,7 @@ async function existingPath(value, label) {
   const selectedRoots = await roots();
   const selectedBase = await base();
   const lexical = resolve(isAbsolute(value) ? value : join(selectedBase, value));
+  assertResolvedPathLength(lexical, label);
   await policy.assertToolArguments(label, { [label]: lexical }, selectedBase);
   const scoped = await scopedPolicy(selectedRoots, selectedBase);
   await scoped.assertToolArguments(label, { [label]: lexical }, selectedBase);
@@ -123,6 +129,7 @@ async function newPath(value, label, expectedExtension) {
   const selectedRoots = await roots();
   const selectedBase = await base();
   const lexical = resolve(isAbsolute(value) ? value : join(selectedBase, value));
+  assertResolvedPathLength(lexical, label);
   if (expectedExtension && extname(lexical).toLowerCase() !== expectedExtension) throw new Error(`${label} must end with ${expectedExtension}`);
   await policy.assertToolArguments(label, { [label]: lexical }, selectedBase);
   const scoped = await scopedPolicy(selectedRoots, selectedBase);
@@ -133,11 +140,59 @@ async function newPath(value, label, expectedExtension) {
   const canonicalParent = await realpath(parent);
   if (!selectedRoots.some((root) => within(root, canonicalParent))) throw new Error(`${label} parent resolves outside the signed workspace roots`);
   const target = join(canonicalParent, parse(lexical).base);
+  assertResolvedPathLength(target, label);
   try { await lstat(target); throw new Error(`${label} already exists`); }
   catch (error) { if (error?.code !== 'ENOENT') throw error; }
   await policy.assertToolArguments(label, { [label]: target }, selectedBase);
   await scoped.assertToolArguments(label, { [label]: target }, selectedBase);
   return target;
+}
+async function extractionDestination(value) {
+  const label = 'destinationDirectory';
+  rejectPath(value, label);
+  const selectedRoots = await roots();
+  const selectedBase = await base();
+  const lexical = resolve(isAbsolute(value) ? value : join(selectedBase, value));
+  assertResolvedPathLength(lexical, label);
+  await policy.assertToolArguments(label, { [label]: lexical }, selectedBase);
+  const scoped = await scopedPolicy(selectedRoots, selectedBase);
+  await scoped.assertToolArguments(label, { [label]: lexical }, selectedBase);
+
+  try {
+    const info = await lstat(lexical);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`${label} must be a non-symbolic-link directory`);
+    const actual = await realpath(lexical);
+    assertResolvedPathLength(actual, label);
+    if (!selectedRoots.some((root) => within(root, actual))) throw new Error(`${label} resolves outside the signed workspace roots`);
+    await policy.assertToolArguments(label, { [label]: actual }, selectedBase);
+    await scoped.assertToolArguments(label, { [label]: actual }, selectedBase);
+    if ((await readdir(actual)).length !== 0) throw new Error(`${label} must be empty before extraction`);
+    return { path: actual, created: false };
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  const parent = dirname(lexical);
+  const parentInfo = await lstat(parent);
+  if (parentInfo.isSymbolicLink() || !parentInfo.isDirectory()) throw new Error(`${label} parent must be an existing non-symbolic-link directory`);
+  const canonicalParent = await realpath(parent);
+  if (!selectedRoots.some((root) => within(root, canonicalParent))) throw new Error(`${label} parent resolves outside the signed workspace roots`);
+  const target = join(canonicalParent, parse(lexical).base);
+  assertResolvedPathLength(target, label);
+  await policy.assertToolArguments(label, { [label]: target }, selectedBase);
+  await scoped.assertToolArguments(label, { [label]: target }, selectedBase);
+  await mkdir(target);
+  return { path: target, created: true };
+}
+async function cleanupExtractionDestination(destination) {
+  if (destination.created) {
+    await rm(destination.path, { recursive: true, force: true }).catch(() => {});
+    return;
+  }
+  let entries;
+  try { entries = await readdir(destination.path); }
+  catch { return; }
+  await Promise.all(entries.map((entry) => rm(join(destination.path, entry), { recursive: true, force: true }).catch(() => {})));
 }
 function timeout(value) {
   const resolved = value ?? DEFAULT_TIMEOUT_MS;
@@ -188,13 +243,12 @@ async function run7z(args, cwd, timeoutMs) {
 async function extractArchive(args, runner = run7z) {
   const source = await existingPath(args.archivePath, 'archivePath');
   if (!source.info.isFile()) throw new Error('archivePath must be a regular file');
-  const destination = await newPath(args.destinationDirectory, 'destinationDirectory');
-  await mkdir(destination);
+  const destination = await extractionDestination(args.destinationDirectory);
   try {
-    const result = await runner(['x', source.path, `-o${destination}`, '-y'], source.base, timeout(args.timeoutMs));
-    return { archivePath: source.path, destinationDirectory: destination, ...result };
+    const result = await runner(['x', source.path, `-o${destination.path}`, '-y'], source.base, timeout(args.timeoutMs));
+    return { archivePath: source.path, destinationDirectory: destination.path, ...result };
   } catch (error) {
-    await rm(destination, { recursive: true, force: true }).catch(() => {});
+    await cleanupExtractionDestination(destination);
     throw error;
   }
 }

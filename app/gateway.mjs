@@ -107,6 +107,7 @@ const usedIsolatedIds = new Set();
 const pendingIsolatedIds = new Set();
 let started = false;
 let upstreamInitialized = false;
+let exposureReportLogged = false;
 let initializationPromise = null;
 
 function blockedToolReason(childConfig, toolName) {
@@ -431,7 +432,10 @@ async function handle(request) {
   if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') return errorResponse(request?.id, -32600, 'Invalid Request');
   if (request.method === 'initialize') {
     await ensureChildrenStarted();
-    logToolExposureReport();
+    if (!exposureReportLogged) {
+      logToolExposureReport();
+      exposureReportLogged = true;
+    }
     return response(request.id, {
       protocolVersion: request.params?.protocolVersion ?? '2025-03-26',
       capabilities: { tools: { listChanged: true } },

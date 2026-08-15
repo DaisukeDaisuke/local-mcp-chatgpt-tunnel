@@ -70,10 +70,10 @@ test('stdio child passes gateway config protection only when the config is insid
   assert.deepEqual(await observedDisallowedFiles([insideConfig]), [insideConfig]);
 });
 
-test('stdio child includes captured stderr when a child exits during initialization', async (t) => {
+test('stdio child includes captured stdout and stderr when a child exits during initialization', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'stdio-child-failed-start-'));
   const serverPath = join(workspace, 'failed-server.mjs');
-  await writeFile(serverPath, "process.stderr.write('sandbox startup detail\\n'); process.exitCode = 1;\n", 'utf8');
+  await writeFile(serverPath, "process.stdout.write('{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"startup/detail\\\"}\\n'); process.stderr.write('sandbox startup detail\\n'); process.exitCode = 1;\n", 'utf8');
   const child = new StdioMcpChild({
     name: 'failed-fixture',
     command: process.execPath,
@@ -94,7 +94,39 @@ test('stdio child includes captured stderr when a child exits during initializat
   t.after(() => child.close());
   await assert.rejects(child.start(), (error) => {
     assert.match(error.message, /exited \(1\)/);
+    assert.match(error.message, /stdout: .*startup\/detail/);
     assert.match(error.message, /stderr: sandbox startup detail/);
+    return true;
+  });
+});
+
+test('stdio child points setup refresh failures at the Codex sandbox log', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'stdio-child-codex-log-'));
+  const serverPath = join(workspace, 'failed-server.mjs');
+  const codexHome = join(workspace, 'codex-home');
+  await writeFile(serverPath, "process.stderr.write('windows sandbox failed: helper_unknown_error: setup refresh had errors\\n'); process.exitCode = 1;\n", 'utf8');
+  const child = new StdioMcpChild({
+    name: 'failed-codex-fixture',
+    command: process.execPath,
+    args: [serverPath],
+    cwd: workspace,
+    env: { CODEX_HOME: codexHome },
+    allowedDirectories: [workspace],
+    allowedFiles: [],
+    disallowedDirectories: [],
+    disallowedFiles: [],
+    disallowedPathGlobs: [],
+    protectedGatewayConfigPaths: [],
+    dangerousAllowGatewayConfigAccess: false,
+    startupTimeoutMs: 5000,
+    requestTimeoutMs: 5000,
+    sandbox: 'never'
+  });
+  t.after(() => child.close());
+  await assert.rejects(child.start(), (error) => {
+    assert.match(error.message, /setup refresh had errors/);
+    assert.match(error.message, /codex sandbox log:/);
+    assert.match(error.message, /sandbox\.\d{4}-\d{2}-\d{2}\.log/);
     return true;
   });
 });

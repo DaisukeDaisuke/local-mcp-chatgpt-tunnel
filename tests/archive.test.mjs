@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,7 +7,8 @@ import test from 'node:test';
 const request = (id, method, params) => ({ jsonrpc: '2.0', id, method, params });
 
 async function archiveServer(root, suffix, calls) {
-  process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
+  const roots = Array.isArray(root) ? root : [root];
+  process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify(roots);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_FILES = '[]';
@@ -62,4 +63,42 @@ test('archive extraction creates a new destination and removes it when 7-Zip fai
   const failed = await failing(request(4, 'tools/call', { name: 'extract_archive', arguments: { archivePath: archive, destinationDirectory: join(root, 'failed-output') } }));
   assert.equal(failed.result.isError, true);
   await assert.rejects(stat(join(root, 'failed-output')));
+});
+
+test('archive extraction crosses allowed roots and accepts only an empty existing destination', async () => {
+  const sourceRoot = await mkdtemp(join(tmpdir(), 'archive-mcp-source-'));
+  const destinationRoot = await mkdtemp(join(tmpdir(), 'archive-mcp-destination-'));
+  const archive = join(sourceRoot, 'input.zip');
+  await writeFile(archive, 'fake', 'utf8');
+  const emptyDestination = join(destinationRoot, 'empty-output');
+  await mkdir(emptyDestination);
+  const calls = [];
+  const server = await archiveServer([sourceRoot, destinationRoot], 'cross-root', calls);
+
+  const extracted = await server(request(2, 'tools/call', { name: 'extract_archive', arguments: { archivePath: archive, destinationDirectory: emptyDestination } }));
+  assert.equal(extracted.result.isError, false);
+  assert.equal(await readFile(join(emptyDestination, 'inside.txt'), 'utf8'), 'extracted');
+  assert.equal(calls[0].args[1], archive);
+  assert.equal(calls[0].args.find((arg) => arg.startsWith('-o')).slice(2), emptyDestination);
+
+  const nonemptyDestination = join(destinationRoot, 'nonempty-output');
+  await mkdir(nonemptyDestination);
+  await writeFile(join(nonemptyDestination, 'keep.txt'), 'keep', 'utf8');
+  const rejected = await server(request(3, 'tools/call', { name: 'extract_archive', arguments: { archivePath: archive, destinationDirectory: nonemptyDestination } }));
+  assert.equal(rejected.result.isError, true);
+  assert.match(rejected.result.structuredContent.error, /must be empty before extraction/);
+  assert.deepEqual(await readdir(nonemptyDestination), ['keep.txt']);
+});
+
+test('archive extraction enforces a bounded destination path length', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'archive-mcp-path-limit-'));
+  const archive = join(root, 'input.zip');
+  await writeFile(archive, 'fake', 'utf8');
+  const calls = [];
+  const server = await archiveServer(root, 'path-limit', calls);
+  const tooLong = join(root, 'x'.repeat(1100));
+  const rejected = await server(request(2, 'tools/call', { name: 'extract_archive', arguments: { archivePath: archive, destinationDirectory: tooLong } }));
+  assert.equal(rejected.result.isError, true);
+  assert.match(rejected.result.structuredContent.error, /1024-character path limit/);
+  assert.equal(calls.length, 0);
 });

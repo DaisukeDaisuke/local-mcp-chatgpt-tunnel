@@ -115,7 +115,7 @@ test('gateway refuses elevated Windows before MCP initialization', { skip: !elev
   assert.match(stderr.value, /Refusing to run local MCP with (high|system) Windows integrity/);
 });
 
-gatewayIntegrationTest('gateway excludes exact and substring-matched tools and logs every initialization', async (t) => {
+gatewayIntegrationTest('gateway excludes exact and substring-matched tools and logs exposure once per gateway process', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-tool-filter-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-tool-filter-config-'));
   const serverPath = join(workspace, 'server.mjs');
@@ -182,7 +182,7 @@ process.stdin.on('data', (chunk) => {
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   await nextLine(child.stdout);
-  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=2/g) ?? []).length >= 2);
+  assert.equal((stderr.value.match(/INFO tool exposure: found=5 disabled=4 published=2/g) ?? []).length, 1);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
@@ -194,7 +194,7 @@ process.stdin.on('data', (chunk) => {
   assert.match(blockedCall.error.message, /Unknown tool/);
 
   const log = stderr.value;
-  assert.equal((log.match(/INFO tool disabled:/g) ?? []).length, 8);
+  assert.equal((log.match(/INFO tool disabled:/g) ?? []).length, 4);
   assert.match(log, /tool="runScript".*blocked_tool_substrings="script"/);
   assert.match(log, /tool="SCRIPT_debug".*blocked_tool_substrings="script"/);
   assert.match(log, /tool="shell_exec".*blocked_tool_substrings="shell"/);

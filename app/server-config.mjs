@@ -209,6 +209,11 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const buildV5tAssemblyServer = isBuildV5tAssemblyServer(raw.command, args, cwd, platform);
   const internetServer = isInternetServer(raw.command, args, cwd, platform);
   const archiveServer = isArchiveServer(raw.command, args, cwd, platform);
+  const bundledServer = codexScriptServer
+    || buildV5tAssemblyServer
+    || internetServer
+    || archiveServer
+    || isBundledServer(raw.command, args, cwd, platform);
   if (codexScriptServer && sandbox !== 'elevated' && sandbox !== 'unelevated') {
     throw new Error(`mcp_servers.${name}.sandbox must be elevated or unelevated for codex-script`);
   }
@@ -252,7 +257,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     command,
     args,
     cwd,
-    isBundled: isBundledServer(raw.command, args, cwd, platform),
+    isBundled: bundledServer,
     sandbox,
     sandboxDelegated,
     codexExecutable,

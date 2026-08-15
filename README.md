@@ -102,7 +102,7 @@ SVG、HEIC、空ファイル、許可ルート外、シンボリックリンク�
 `internet`は任意のHTTP/HTTPS URLから1ファイルを取得する同梱MCPです。公開ツールは`download_file`だけで、送信先はGateway署名済み`isolatedId`のworkspace内に限定されます。既存ファイルの上書き、UNC/ADS、workspace外への書き込み、任意header・cookie・credential注入は受け付けません。途中失敗時は一時ファイルを削除します。<br>
 このMCPは必ず`sandbox = "onlineworkspace"`で起動します。`onlineworkspace`はCodexのworkspace-write filesystem境界を維持したまま、そのpermission profileのnetworkだけを有効にします。`sandbox = "never"`へフォールバックしません。<br>
 ### archive
-`archive`は起動時に`--7z-executable=<absolute-7z.exe-path>`で7-Zipを固定し、`create_zip`、`create_7z`、`extract_archive`だけを公開する同梱MCPです。一般シェル、任意実行ファイル、任意7-Zip引数は公開しません。入力・出力は署名済みworkspace内に限定し、archive作成先と展開先は既存パスへ上書きしません。<br>
+`archive`は起動時に`--seven-zip-executable=<absolute-7z.exe-path>`で7-Zipを固定し、`create_zip`、`create_7z`、`extract_archive`だけを公開する同梱MCPです。一般シェル、任意実行ファイル、任意7-Zip引数は公開しません。入力・出力は署名済みworkspace内に限定します。`extract_archive`はsourceとdestinationが別々の許可rootにあっても扱えるため、たとえばDownloads内のarchiveをProject workspaceへ直接展開できます。展開先は存在しない場合に作成し、既存の場合は空の通常ディレクトリだけを受け付けます。パスは解決後も1024文字以内に制限します。<br>
 `archive`自体もCodex sandbox内で起動し、7-Zipインストール先は`sandbox_read_only_directories`でread-only trust inputとして渡します。<br>
 ### gitmcp
 `gitmcp`は、許可されたディレクトリ内のGitリポジトリに対するローカル操作だけを固定されたGitサブコマンドとオプションで実行します。起動時に`--git-executable=<absolute-path>`を必須とし、その実体だけを`shell=false`で起動します。一般シェルや任意Git引数は受け取らず、`.git`の直接編集、フック追加、branch削除、force操作には対応しません。indexを書き換える`add_all`、`stage_paths`、`unstage_paths`と、`commit`、`push`、`pull`、`clone_repository`は境界分離のため別の`git-capability` MCPへ移動しました。旧`--disable-push`、`--disable-pull`、`--disable-clone`は古い`gateway.toml`を起動不能にしないためno-opとして受理しますが、これらを`false`にしても移動済みcapabilityは復活しません。<br>
@@ -248,7 +248,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | `args` | `command`へ渡す引数を文字列配列で指定します。省略時は引数なしで起動します。 |
 | `cwd` | 子MCPの作業ディレクトリです。相対パスは`gateway.toml`があるディレクトリを基準に絶対化され、省略時はそのディレクトリを使います。sandbox有効時は、少なくとも1つの`allowed_directories`内に含まれている必要があります。 |
 | `enabled` | `false`にすると設定を残したまま、そのMCPを起動対象から除外します。省略時は有効です。 |
-| `sandbox` | 子MCPの起動境界です。`"never"`、`"elevated"`、`"unelevated"`の3値で、省略時は`"never"`です。`elevated`または`unelevated`ではCodex Windows sandboxを経由してMCPプロセス自体を起動します。`codex-script`では`never`は拒否されます。 |
+| `sandbox` | 子MCPの起動境界です。`"never"`、`"elevated"`、`"unelevated"`、`"onlineworkspace"`の4値で、省略時は`"never"`です。`elevated`、`unelevated`、`onlineworkspace`ではCodex Windows sandboxを経由してMCPプロセス自体を起動します。`onlineworkspace`はworkspace-writeのfilesystem境界を維持したままnetworkを有効化するInternet MCP専用モードです。`codex-script`では`never`と`onlineworkspace`は拒否されます。 |
 | `codex_executable` | `sandbox != "never"`のとき必須となるCodex CLIの絶対パスです。Windowsではnpm shimの`codex.cmd`も使用できます。実在する通常ファイルへ解決され、`allowed_directories`の書き込み可能root内に置くことはできません。 |
 | `sandbox_read_only_directories` | sandbox有効時に追加で読み取り専用としてCodex permission profileへ渡す絶対ディレクトリ配列です。`allowed_directories`のような書き込みrootにはしません。省略時は空です。 |
 | `prefix` | ChatGPTへ公開するツール名の接頭辞です。元の`tool_name`は`<prefix>__<tool_name>`として公開されます。省略時は`[mcp_servers.<name>]`の`<name>`を使います。 |
@@ -273,7 +273,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 <br>
 
 通常のMCPは`deferred = false`または省略で起動します。その場合、`start_after`は不要です。<br>
-`sandbox != "never"`ではCodex permission profileのnetworkは無効化され、`allowed_directories`がwrite、`allowed_files`と`sandbox_read_only_directories`がreadとして構成されます。加えて、MCP実行ファイルのディレクトリ、既知interpreterのentry scriptディレクトリ、同梱MCPではGatewayの`app`ディレクトリが必要に応じてreadで追加されます。`codex_executable`は書き込み可能rootの外に置く必要があり、`elevated`では`command`自身も書き込み可能rootの外に置く必要があります。<br>
+`sandbox = "elevated"`または`"unelevated"`ではCodex permission profileのnetworkは無効化され、`sandbox = "onlineworkspace"`だけnetworkを有効化します。いずれのsandbox有効モードでも`allowed_directories`がwrite、`allowed_files`と`sandbox_read_only_directories`がreadとして構成されます。加えて、MCP実行ファイルのディレクトリ、既知interpreterのentry scriptディレクトリ、同梱MCPではGatewayの`app`ディレクトリが必要に応じてreadで追加されます。`codex_executable`は書き込み可能rootの外に置く必要があり、`elevated`と`onlineworkspace`では`command`自身も書き込み可能rootの外に置く必要があります。<br>
 sandbox化した外部MCPでは、OS sandboxのworkspaceWrite root内部に`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`、保護中の`gateway.toml`といった「deny hole」を正確に表現できません。そのため該当する設定は起動時に拒否されます。外部MCPでは`allowed_directories`を狭くするか分割してください。同梱MCPは自身でもdeny policyを検証するため、この互換性チェックの例外です。<br>
 `url`によるリモートMCP設定は拒否されます。Codex固有の`tool_output_token_limit`は読み取られても使用されず、このGateway上では効果を持ちません。<br>
 ### 内蔵ツールディレクトリ

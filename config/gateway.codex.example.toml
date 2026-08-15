@@ -254,11 +254,13 @@ disallowed_path_globs = ['**.ssh**']
 INTERNET_MAX_BYTES = "4294967296"
 
 # Fixed 7-Zip archive capability. The MCP exposes only extract_archive, create_zip, and
-# create_7z; it does not accept arbitrary 7-Zip command-line arguments.
+# create_7z; it does not accept arbitrary 7-Zip command-line arguments. Give it every
+# workspace that may be either an archive source or destination so extraction can cross
+# roots, for example Downloads -> project workspace.
 [mcp_servers.archive]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\archive\server.mjs', '--seven-zip-executable=C:\Program Files\7-Zip\7z.exe']
-cwd = 'C:\ABSOLUTE\PATH\TO\ARCHIVE\WORKSPACE'
+cwd = 'C:\ABSOLUTE\PATH\TO\DOWNLOAD\WORKSPACE'
 enabled = false
 sandbox = "elevated"
 codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
@@ -267,7 +269,7 @@ annotation_config = false
 dangerous_allow_gateway_config_access = false
 startup_timeout_sec = 30
 tool_timeout_sec = 3600
-allowed_directories = ['C:\ABSOLUTE\PATH\TO\ARCHIVE\WORKSPACE']
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\DOWNLOAD\WORKSPACE', 'C:\ABSOLUTE\PATH\TO\PROJECT\WORKSPACE']
 sandbox_read_only_directories = ['C:\Program Files\7-Zip']
 allowed_files = []
 disallowed_directories = []
@@ -278,7 +280,8 @@ disallowed_path_globs = ['**.ssh**']
 # Path-looking tool arguments are denied unless they match allowed_directories
 # or allowed_files. Directory entries include descendants. File entries are exact.
 # `enabled = false` keeps an entry without starting it.
-# `sandbox = "elevated"` or `sandbox = "unelevated"` starts that MCP inside a Codex OS sandbox.
+# `sandbox = "elevated"`, `sandbox = "unelevated"`, or `sandbox = "onlineworkspace"` starts that MCP inside a Codex OS sandbox.
+# `onlineworkspace` keeps the workspace-write filesystem boundary but enables network and is reserved for the bundled Internet MCP.
 # On Windows, Gateway uses Codex's direct sandbox stdio path so long-running stdio MCPs remain connected.
 # `sandbox = "never"` keeps the old direct stdio behavior. Do not enable arbitrary script runners with sandbox="never".
 # `sandbox = "elevated"` requires an absolute native MCP command path; `unelevated` and `never` keep PATH command compatibility.

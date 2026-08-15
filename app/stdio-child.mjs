@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
-import { isAbsolute, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { buildChildEnvironment } from './child-environment.mjs';
 import { CodexAppServerSandboxedProcess } from './codex-app-server.mjs';
 import { CodexWindowsSandboxedProcess } from './codex-windows-sandbox.mjs';
 
 const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
-const STDERR_TAIL_LIMIT = 8192;
+const STDIO_TAIL_LIMIT = 256 * 1024;
 
 function pathInside(directory, candidate) {
   const path = relative(directory, candidate);
@@ -21,6 +21,16 @@ function protectedPathsInsideConfiguredAccess(config, paths) {
   );
 }
 
+function codexSandboxLogHint(config, text) {
+  if (!/setup refresh had errors/i.test(text)) return '';
+  const codexHome = config.env?.CODEX_HOME
+    ?? process.env.CODEX_HOME
+    ?? (process.env.USERPROFILE ? join(process.env.USERPROFILE, '.codex') : '');
+  if (!codexHome) return '';
+  const utcDate = new Date().toISOString().slice(0, 10);
+  return `codex sandbox log: ${join(codexHome, '.sandbox', `sandbox.${utcDate}.log`)}`;
+}
+
 export class StdioMcpChild {
   constructor(config, { onToolsChanged, stderr = process.stderr } = {}) {
     this.config = config;
@@ -33,6 +43,7 @@ export class StdioMcpChild {
     this.pending = new Map();
     this.tools = [];
     this.closed = false;
+    this.stdoutTail = '';
     this.stderrTail = '';
   }
 
@@ -153,6 +164,7 @@ export class StdioMcpChild {
   }
 
   accept(chunk) {
+    this.stdoutTail = `${this.stdoutTail}${String(chunk)}`.slice(-STDIO_TAIL_LIMIT);
     this.buffer += chunk;
     while (true) {
       const newline = this.buffer.indexOf('\n');
@@ -187,7 +199,7 @@ export class StdioMcpChild {
   }
 
   writeStderr(chunk) {
-    this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-STDERR_TAIL_LIMIT);
+    this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-STDIO_TAIL_LIMIT);
     const prefix = `[${this.config.name}] `;
     for (const line of String(chunk).split(/(?<=\n)/)) {
       if (line) this.stderr.write(`${prefix}${line}`);
@@ -196,8 +208,16 @@ export class StdioMcpChild {
 
   withStderrTail(error) {
     const message = error instanceof Error ? error.message : String(error);
-    const detail = this.stderrTail.trim();
-    return new Error(detail ? `${message}; stderr: ${detail}` : message);
+    const stdout = this.stdoutTail.trim();
+    const stderr = this.stderrTail.trim();
+    const details = [
+      ...(stdout ? [`stdout: ${stdout}`] : []),
+      ...(stderr ? [`stderr: ${stderr}`] : []),
+      ...(codexSandboxLogHint(this.config, `${message}\n${stdout}\n${stderr}`)
+        ? [codexSandboxLogHint(this.config, `${message}\n${stdout}\n${stderr}`)]
+        : [])
+    ];
+    return new Error(details.length > 0 ? `${message}; ${details.join('; ')}` : message);
   }
 
   exitError(code, signal) {
