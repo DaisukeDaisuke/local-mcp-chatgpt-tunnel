@@ -258,12 +258,10 @@ gatewayIntegrationTest('gateway logs public tool name and received arguments bef
   });
 });
 
-gatewayIntegrationTest('gateway rejects external sandbox policy holes before launching Codex', async (t) => {
+gatewayIntegrationTest('gateway rejects external sandbox glob rules it cannot safely translate before launching Codex', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-sandbox-hole-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-hole-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
-  const deniedFile = join(workspace, 'denied.txt');
-  await writeFile(deniedFile, 'blocked', 'utf8');
   await writeFile(configPath, [
     'private_use_only = true',
     '[mcp_servers.demo]',
@@ -272,7 +270,7 @@ gatewayIntegrationTest('gateway rejects external sandbox policy holes before lau
     'sandbox = "elevated"',
     `codex_executable = '${join(configDirectory, 'codex.exe')}'`,
     `allowed_directories = ['${workspace}']`,
-    `disallowed_files = ['${deniedFile}']`,
+    `disallowed_path_globs = ['**.ssh**']`,
     'enabled = true',
     'prefix = "demo"'
   ].join('\n'), 'utf8');
@@ -288,7 +286,7 @@ gatewayIntegrationTest('gateway rejects external sandbox policy holes before lau
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   const initialized = await nextLine(child.stdout);
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
-  await stderr.waitFor((text) => text.includes('sandboxed external MCPs cannot express disallowed/protected holes inside a workspaceWrite root'));
+  await stderr.waitFor((text) => text.includes('cannot safely translate Gateway disallowed_path_globs into Codex filesystem glob semantics'));
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -55,7 +55,7 @@ test('archive extraction creates a new destination and removes it when 7-Zip fai
   const extracted = await server(request(2, 'tools/call', { name: 'extract_archive', arguments: { archivePath: archive, destinationDirectory: join(root, 'output') } }));
   assert.equal(extracted.result.isError, false);
   assert.equal(await readFile(join(root, 'output', 'inside.txt'), 'utf8'), 'extracted');
-  assert.deepEqual(calls[0].args.slice(0, 2), ['x', archive]);
+  assert.deepEqual(calls[0].args.slice(0, 2), ['x', await realpath(archive)]);
 
   const imported = await import(`../mcp/archive/server.mjs?test=failure-${Date.now()}-${Math.random()}`);
   const failing = imported.createServer({ runSevenZip: async () => { throw new Error('7-Zip fixture failure'); } });
@@ -78,8 +78,8 @@ test('archive extraction crosses allowed roots and accepts only an empty existin
   const extracted = await server(request(2, 'tools/call', { name: 'extract_archive', arguments: { archivePath: archive, destinationDirectory: emptyDestination } }));
   assert.equal(extracted.result.isError, false);
   assert.equal(await readFile(join(emptyDestination, 'inside.txt'), 'utf8'), 'extracted');
-  assert.equal(calls[0].args[1], archive);
-  assert.equal(calls[0].args.find((arg) => arg.startsWith('-o')).slice(2), emptyDestination);
+  assert.equal(calls[0].args[1], await realpath(archive));
+  assert.equal(calls[0].args.find((arg) => arg.startsWith('-o')).slice(2), await realpath(emptyDestination));
 
   const nonemptyDestination = join(destinationRoot, 'nonempty-output');
   await mkdir(nonemptyDestination);

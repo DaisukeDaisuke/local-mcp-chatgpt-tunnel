@@ -222,6 +222,8 @@ test('Codex app-server builds a restricted temporary permission profile for the 
     allowedDirectories: ['C:\\workspace', 'C:\\repo'],
     allowedFiles: ['C:\\inputs\\one.txt'],
     sandboxReadOnlyDirectories: ['C:\\readonly'],
+    sandboxDeniedDirectories: ['C:\\workspace\\blocked'],
+    sandboxDeniedFiles: ['C:\\repo\\private.txt'],
     isBundled: false
   });
   assert.equal(override.startsWith('permissions.local_mcp_gateway={filesystem={'), true);
@@ -232,6 +234,8 @@ test('Codex app-server builds a restricted temporary permission profile for the 
   assert.equal(override.includes("'C:\\readonly'='read'"), true);
   assert.equal(override.includes("'C:\\Program Files\\nodejs'='read'"), true);
   assert.equal(override.includes("'C:\\tools\\safe-files'='read'"), true);
+  assert.equal(override.includes("'C:\\workspace\\blocked'='deny'"), true);
+  assert.equal(override.includes("'C:\\repo\\private.txt'='deny'"), true);
   assert.equal(override.endsWith('},network={enabled=false}}'), true);
 });
 

@@ -24,7 +24,18 @@ test('sandboxed bundled MCP keeps its internal deny policy while using the outer
   }, policy(root)));
 });
 
-test('sandboxed external MCP still rejects deny holes the OS sandbox cannot enforce internally', () => {
+test('sandboxed external MCP allows exact deny holes that Codex can enforce', () => {
+  const root = join(process.cwd(), 'workspace');
+  assert.doesNotThrow(() => assertSandboxPathPolicyCompatible({
+    name: 'external',
+    sandbox: 'elevated',
+    sandboxDelegated: false,
+    isBundled: false,
+    disallowedPathGlobs: []
+  }, policy(root)));
+});
+
+test('sandboxed external MCP rejects only Gateway glob semantics that are not translated safely', () => {
   const root = join(process.cwd(), 'workspace');
   assert.throws(() => assertSandboxPathPolicyCompatible({
     name: 'external',
@@ -32,13 +43,5 @@ test('sandboxed external MCP still rejects deny holes the OS sandbox cannot enfo
     sandboxDelegated: false,
     isBundled: false,
     disallowedPathGlobs: ['**.ssh**']
-  }, policy(root)), /sandboxed external MCPs cannot enforce disallowed_path_globs/);
-
-  assert.throws(() => assertSandboxPathPolicyCompatible({
-    name: 'external',
-    sandbox: 'elevated',
-    sandboxDelegated: false,
-    isBundled: false,
-    disallowedPathGlobs: []
-  }, policy(root)), /sandboxed external MCPs cannot express disallowed\/protected holes/);
+  }, policy(root)), /cannot safely translate Gateway disallowed_path_globs/);
 });
