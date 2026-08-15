@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -345,7 +345,7 @@ test('codespace SSH joins only validated tokens into the one unavoidable remote 
 });
 
 test('codespace copy takes many local paths to one remote directory and always uses -e', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'codespace-copy-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-copy-')));
   await writeFile(join(root, 'alpha.txt'), 'alpha', 'utf8');
   await writeFile(join(root, 'beta.txt'), 'beta', 'utf8');
   const { createServer } = await importCodespace({ roots: [root], suffix: 'copy-paths' });
@@ -379,7 +379,7 @@ test('codespace copy takes many local paths to one remote directory and always u
 });
 
 test('codespace copy supports directory-scoped glob selection and wakes an unconfirmed codespace with SSH', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'codespace-glob-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-glob-')));
   await writeFile(join(root, 'alpha.js'), 'a', 'utf8');
   await writeFile(join(root, 'ignore.txt'), 'b', 'utf8');
   const { createServer } = await importCodespace({ roots: [root], suffix: 'copy-glob' });
