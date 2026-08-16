@@ -9,7 +9,8 @@ import { ToolPathPolicy } from '../../app/path-policy.mjs';
 const SERVER_VERSION = '0.1.0';
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_COMMAND_TIMEOUT_MS = 60 * 60 * 1000;
-const MAX_ASYNC_RUNTIME_MS = 10 * 60 * 1000;
+const MAX_SYNC_SSH_RUNTIME_MS = 10 * 60 * 1000;
+const MAX_ASYNC_RUNTIME_MS = 60 * 60 * 1000;
 const MAX_ASYNC_WAIT_MS = 10 * 60 * 1000;
 const MAX_ACTIVE_ASYNC_JOBS = 16;
 const MAX_RETAINED_ASYNC_JOBS = 64;
@@ -81,7 +82,7 @@ const sshKeygenExecutableConfigured = optionalAbsoluteFileArgument(
   'LOCAL_MCP_CODESPACE_SSH_KEYGEN_EXECUTABLE'
 );
 
-export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>]\n\nControls existing GitHub Codespaces only. SSH authentication keys are generated internally for the MCP process; no user SSH key is accepted. It can list/view/stop existing codespaces, run strictly tokenized SSH commands, copy selected local files/directories to one remote destination directory, and publish/privatize GitHub-hosted forwarded ports while returning their browseUrl. It never creates, rebuilds, deletes, or changes the machine type of a codespace, and it never creates a localhost port tunnel.\n`;
+export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>]\n\nControls existing GitHub Codespaces only. SSH authentication keys are generated internally for the MCP process; no user SSH key is accepted. It can list/view/stop existing codespaces, run strictly tokenized SSH commands, copy selected local files/directories to one remote destination directory, and open/close temporary public deployments backed by GitHub Codespaces. Temporary public deployment tools never scan localhost, inspect local listening sockets, auto-detect a port, or create a localhost tunnel; they operate only on an exact caller-specified Codespace port already known to GitHub. It never creates, rebuilds, deletes, or changes the machine type of a codespace.\n`;
 
 function pathArray(name, fallback = []) {
   if (help) return [];
@@ -112,7 +113,7 @@ const localState = { readOnlyHint: false, destructiveHint: false, idempotentHint
 const closeState = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
 const commonCodespaceId = { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,127}$', description: 'Exact Codespace name returned by list_codespaces.' };
 const commonTimeout = { type: 'integer', minimum: 1, maximum: MAX_COMMAND_TIMEOUT_MS, default: DEFAULT_COMMAND_TIMEOUT_MS };
-const commonSshTimeout = { type: 'integer', minimum: 1, maximum: MAX_ASYNC_RUNTIME_MS, default: MAX_ASYNC_RUNTIME_MS, description: 'Hard execution limit. SSH is never allowed to run for more than 10 minutes.' };
+const commonSshTimeout = { type: 'integer', minimum: 1, maximum: MAX_ASYNC_RUNTIME_MS, default: DEFAULT_COMMAND_TIMEOUT_MS, description: 'Hard execution limit. Synchronous SSH is capped at 10 minutes; when async=true, timeoutMs may be set up to 1 hour. Omitting timeoutMs defaults to 10 minutes in either mode.' };
 const commonAsyncId = { type: 'string', minLength: 36, maxLength: 36, pattern: '^[0-9a-fA-F-]{36}$' };
 
 const schemas = [
@@ -123,7 +124,7 @@ const schemas = [
   { name: 'ripgrep_version', description: 'Return rg --version from one existing Codespace without modifying it.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'install_ripgrep', description: 'Ensure ripgrep exists in one existing Codespace. If rg --version already works nothing is installed; otherwise a fixed package-manager installer is used and rg --version is verified afterwards.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, timeoutMs: commonTimeout }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: installMutation },
   { name: 'search_text', description: 'Search text with ripgrep inside one explicit remote root below /workspaces/<workspace>. searchBase is required on every call; / and /workspaces are rejected so the tool cannot scan the whole Codespace. Query/glob data is sent over SSH stdin and is never interpolated into the remote shell command.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, searchBase: { type: 'string', minLength: 1, maxLength: 1024 }, query: { type: 'string', minLength: 1, maxLength: 4096 }, fixedStrings: { type: 'boolean', default: false }, caseSensitive: { type: 'boolean', default: true }, globs: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 512 } }, maxResults: { type: 'integer', minimum: 1, maximum: MAX_REMOTE_SEARCH_RESULTS, default: 100 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'searchBase', 'query'], additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'ssh', description: 'Run one remote command in an existing Codespace. The command is a strictly validated token array. Set async=true for commands that may block: the tool returns an asyncId immediately, and the job still has a hard runtime limit of at most 10 minutes. Synchronous SSH is also capped at 10 minutes.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, command: { type: 'array', minItems: 1, maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 512 } }, async: { type: 'boolean', default: false }, timeoutMs: commonSshTimeout }, required: ['codespaceId', 'command'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
+  { name: 'ssh', description: 'Run one remote command in an existing Codespace. The command is a strictly validated token array. Synchronous SSH is capped at 10 minutes. Set async=true for commands that may block: the tool returns an asyncId immediately and timeoutMs may then be set up to 1 hour; omitting timeoutMs still defaults to 10 minutes.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, command: { type: 'array', minItems: 1, maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 512 } }, async: { type: 'boolean', default: false }, timeoutMs: commonSshTimeout }, required: ['codespaceId', 'command'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
   { name: 'get_async_status', description: 'Return state and exit metadata for one async SSH job created by this MCP process.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'get_async_logs', description: 'Return the currently captured stdout and stderr for one async SSH job. Output is bounded by CODESPACE_MCP_MAX_OUTPUT_BYTES; exceeding the bound terminates the job instead of growing without limit.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'write_async_stdin', description: 'Write bounded UTF-8 data to stdin of one running async SSH job. Each write is limited to 64 KiB and total stdin per job is limited to 1 MiB. Set end=true to close stdin after this write. This does not extend the job runtime deadline.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, data: { type: 'string', maxLength: MAX_ASYNC_STDIN_WRITE_BYTES }, end: { type: 'boolean', default: false } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
@@ -131,9 +132,9 @@ const schemas = [
   { name: 'cancel_async', description: 'Cancel one running async SSH job by terminating its local gh process. Completed jobs are left unchanged.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: closeState },
   { name: 'copy_to_codespace', description: 'Copy multiple selected local files/directories from one local source directory to one remote destination directory. Select exactly one of paths or globs. The first copy for an isolated session verifies SSH readiness with a fixed echo started probe; later copies reuse that readiness unless cp fails, then refresh once. Copy always uses gh codespace cp -e.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, sourceDirectory: { type: 'string', minLength: 1, maxLength: 1024 }, paths: { type: 'array', minItems: 1, maxItems: MAX_CP_SOURCES, items: { type: 'string', minLength: 1, maxLength: 1024 } }, globs: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 512 } }, remoteDestination: { type: 'string', minLength: 1, maxLength: 1024 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'sourceDirectory', 'remoteDestination'], additionalProperties: false }, outputSchema, annotations: copyMutation },
   { name: 'stop_codespace', description: 'Stop one existing Codespace owned by this isolated session using gh codespace stop. Running async SSH jobs for that Codespace are cancelled first and cached SSH readiness is cleared. This does not delete the Codespace or discard saved changes.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, timeoutMs: commonTimeout }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: closeState },
-  { name: 'list_ports', description: 'List GitHub-hosted forwarded ports for one Codespace, including complete browseUrl values and visibility.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'open_port', description: 'Make one already-forwarded Codespace port public on GitHub infrastructure and return its complete https://...app.github.dev browse URL. This does not create a local tunnel.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: localState },
-  { name: 'close_port', description: 'Close public internet access to one forwarded Codespace port by changing its GitHub visibility back to private.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: closeState }
+  { name: 'list_temporary_public_deployments', description: 'List temporary public deployment candidates already known to GitHub for one Codespace, including browseUrl, source port, and current visibility. This only queries GitHub Codespaces metadata; it never scans localhost, local listening sockets, browser tabs, or the local machine to auto-detect ports.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: readOnly },
+  { name: 'open_temporary_public_deployment', description: 'Open a temporary public deployment for exactly one caller-specified Codespace port already known to GitHub and return its complete https://...app.github.dev URL. The tool does not scan localhost, inspect local listening sockets, auto-detect ports, or create a localhost tunnel.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: localState },
+  { name: 'close_temporary_public_deployment', description: 'Close temporary public internet access for exactly one caller-specified Codespace port by returning its GitHub visibility to private. This never scans localhost or auto-detects which port to close.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: closeState }
 ];
 
 function safeCodespaceId(value) {
@@ -152,9 +153,12 @@ function timeout(value, fallback = DEFAULT_COMMAND_TIMEOUT_MS) {
   return resolved;
 }
 
-function sshTimeout(value) {
-  const resolved = value ?? MAX_ASYNC_RUNTIME_MS;
-  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > MAX_ASYNC_RUNTIME_MS) throw new Error(`timeoutMs must be an integer from 1 through ${MAX_ASYNC_RUNTIME_MS} for SSH`);
+function sshTimeout(value, asyncMode = false) {
+  const resolved = value ?? DEFAULT_COMMAND_TIMEOUT_MS;
+  const maximum = asyncMode ? MAX_ASYNC_RUNTIME_MS : MAX_SYNC_SSH_RUNTIME_MS;
+  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) {
+    throw new Error(`timeoutMs must be an integer from 1 through ${maximum} for ${asyncMode ? 'async' : 'synchronous'} SSH`);
+  }
   return resolved;
 }
 
@@ -1004,7 +1008,7 @@ export function createServer(options = {}) {
         const command = safeRemoteCommandTokens(args.command);
         const remoteCommand = command.join(' ');
         if (args.async !== undefined && typeof args.async !== 'boolean') throw new Error('async must be boolean');
-        const timeoutMs = sshTimeout(args.timeoutMs);
+        const timeoutMs = sshTimeout(args.timeoutMs, args.async === true);
         const ghArgs = await sshGhArgs(codespace, remoteCommand, sshKeyProvider);
         if (args.async === true) {
           const job = await asyncJobs.start({ codespaceId: codespace, args: ghArgs, timeoutMs });
@@ -1072,17 +1076,24 @@ export function createServer(options = {}) {
         }
         return { codespaceId: codespace, stopRequested: true, stopped: String(state ?? '').toLowerCase() === 'shutdown', state, stateCheckError, cancelledAsyncJobs, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
       }
-      case 'list_ports': {
+      case 'list_temporary_public_deployments': {
         const codespace = safeCodespaceId(args.codespaceId);
-        return { codespaceId: codespace, ports: await portsForCodespace(codespace, execute) };
+        const deployments = (await portsForCodespace(codespace, execute)).map((entry) => ({
+          port: safePort(Number(entry.sourcePort), 'GitHub deployment port'),
+          url: entry.browseUrl ?? null,
+          browseUrl: entry.browseUrl ?? null,
+          visibility: entry.visibility ?? null,
+          label: entry.label ?? ''
+        }));
+        return { codespaceId: codespace, deployments };
       }
-      case 'open_port': {
+      case 'open_temporary_public_deployment': {
         const codespace = safeCodespaceId(args.codespaceId);
         const port = safePort(args.port, 'port');
         const timeoutMs = timeout(args.timeoutMs);
         const availability = await ensureCodespaceAvailable(codespace, execute, timeoutMs, sshKeyProvider);
         const before = selectedForwardedPort(await portsForCodespace(codespace, execute, timeoutMs), port);
-        if (!before) throw new Error(`Codespace port ${port} is not currently forwarded on GitHub infrastructure; start the remote service or configure Codespaces forwardPorts first`);
+        if (!before) throw new Error(`Codespace port ${port} is not available as a GitHub temporary public deployment candidate. This tool does not scan localhost or auto-detect ports; start/configure the remote service and Codespaces forwardPorts first, then retry with the exact port.`);
         await execute(['codespace', 'ports', 'visibility', `${port}:public`, '-c', codespace], { timeoutMs });
         const after = selectedForwardedPort(await portsForCodespace(codespace, execute, timeoutMs), port);
         if (!after) throw new Error(`Codespace port ${port} disappeared after setting visibility`);
@@ -1090,7 +1101,7 @@ export function createServer(options = {}) {
         if (typeof after.browseUrl !== 'string' || !/^https:\/\/[A-Za-z0-9.-]+\.app\.github\.dev\/?$/i.test(after.browseUrl)) throw new Error(`Codespace port ${port} did not return a valid GitHub browseUrl`);
         return { codespaceId: codespace, port, wokeCodespace: availability.woke, url: after.browseUrl, browseUrl: after.browseUrl, visibility: after.visibility, label: after.label ?? '' };
       }
-      case 'close_port': {
+      case 'close_temporary_public_deployment': {
         const codespace = safeCodespaceId(args.codespaceId);
         const port = safePort(args.port, 'port');
         const timeoutMs = timeout(args.timeoutMs);
@@ -1109,7 +1120,7 @@ export function createServer(options = {}) {
     if (request.method === 'notifications/initialized') return null;
     if (request.method === 'initialize') {
       initialized = true;
-      return response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'codespace', version: SERVER_VERSION }, instructions: 'Controls existing GitHub Codespaces only. There is intentionally no create/start/delete/rebuild/edit tool. Existing Codespaces can be started implicitly by SSH/copy and explicitly stopped with stop_codespace. Use list_codespaces first and pass its name as codespaceId. SSH accepts only strictly validated token arrays and is hard-capped at 10 minutes; use async=true for potentially blocking commands, then get_async_logs/get_async_status/wait_async/cancel_async with the returned asyncId. search_text always requires a /workspaces/<workspace> searchBase. Copy uses local path selection plus one safe remote destination. Port tools operate on GitHub-hosted forwarded ports and return browseUrl; they never create localhost tunnels.' });
+      return response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'codespace', version: SERVER_VERSION }, instructions: 'Controls existing GitHub Codespaces only. There is intentionally no create/start/delete/rebuild/edit tool. Existing Codespaces can be started implicitly by SSH/copy and explicitly stopped with stop_codespace. Use list_codespaces first and pass its name as codespaceId. SSH accepts only strictly validated token arrays. Synchronous SSH is capped at 10 minutes; when async=true from the initial call, timeoutMs may be set up to 1 hour and defaults to 10 minutes when omitted. Use get_async_logs/get_async_status/wait_async/cancel_async with the returned asyncId. search_text always requires a /workspaces/<workspace> searchBase. Copy uses local path selection plus one safe remote destination. Temporary public deployment tools only operate on exact caller-specified Codespace ports already known to GitHub and return browseUrl. They never scan localhost, inspect local listening sockets or browser tabs, auto-detect ports, or create localhost tunnels.' });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
     if (request.method === 'ping') return response(request.id, {});

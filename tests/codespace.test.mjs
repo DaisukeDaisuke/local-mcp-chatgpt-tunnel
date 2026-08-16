@@ -86,9 +86,9 @@ test('codespace exposes existing-codespace operations including stop but no crea
     'cancel_async',
     'copy_to_codespace',
     'stop_codespace',
-    'list_ports',
-    'open_port',
-    'close_port'
+    'list_temporary_public_deployments',
+    'open_temporary_public_deployment',
+    'close_temporary_public_deployment'
   ]);
   const result = await server(request(3, 'tools/call', { name: 'list_codespaces', arguments: { limit: 17 } }));
   assert.equal(result.result.isError, false);
@@ -204,7 +204,7 @@ test('codespace async SSH returns immediately, exposes stdio/status, supports bo
   assert.equal(completed.result.structuredContent.result.exitCode, 0);
 });
 
-test('codespace async SSH can be cancelled and SSH never accepts a runtime limit above ten minutes', async () => {
+test('codespace async SSH can be cancelled, allows up to one hour, and rejects longer runtimes', async () => {
   const { createServer } = await importCodespace({ suffix: 'async-cancel' });
   const fake = fakeAsyncExecution();
   let starts = 0;
@@ -215,17 +215,26 @@ test('codespace async SSH can be cancelled and SSH never accepts a runtime limit
     }
   });
   await server(request(1, 'initialize'));
+  const tooLongSync = await server(request(20, 'tools/call', {
+    name: 'ssh',
+    arguments: { codespaceId: 'existing-space-123', command: ['sleep', '1'], timeoutMs: 600001 }
+  }));
+  assert.equal(tooLongSync.result.isError, true);
+  assert.equal(starts, 0);
+
   const tooLong = await server(request(2, 'tools/call', {
     name: 'ssh',
-    arguments: { codespaceId: 'existing-space-123', command: ['sleep', '1'], async: true, timeoutMs: 600001 }
+    arguments: { codespaceId: 'existing-space-123', command: ['sleep', '1'], async: true, timeoutMs: 3600001 }
   }));
   assert.equal(tooLong.result.isError, true);
   assert.equal(starts, 0);
 
   const started = await server(request(3, 'tools/call', {
     name: 'ssh',
-    arguments: { codespaceId: 'existing-space-123', command: ['sleep', '1'], async: true }
+    arguments: { codespaceId: 'existing-space-123', command: ['sleep', '1'], async: true, timeoutMs: 3600000 }
   }));
+  assert.equal(started.result.isError, false);
+  assert.equal(starts, 1);
   const asyncId = started.result.structuredContent.result.asyncId;
   const cancelled = await server(request(4, 'tools/call', { name: 'cancel_async', arguments: { asyncId } }));
   assert.equal(cancelled.result.structuredContent.result.cancelled, true);
@@ -661,7 +670,7 @@ test('codespace copy rejects remote shell expansion characters even though gh cp
   assert.equal(executions, 0);
 });
 
-test('codespace GitHub-hosted port tools list, publish, return complete browseUrl, and close public access by restoring private visibility', async () => {
+test('codespace temporary public deployment tools list, publish, return complete browseUrl, and close public access by restoring private visibility', async () => {
   const { createServer } = await importCodespace({ suffix: 'github-forwarded-port' });
   const commands = [];
   let visibility = 'private';
@@ -685,14 +694,15 @@ test('codespace GitHub-hosted port tools list, publish, return complete browseUr
   });
   await server(request(1, 'initialize'));
   const listed = await server(request(2, 'tools/call', {
-    name: 'list_ports',
+    name: 'list_temporary_public_deployments',
     arguments: { codespaceId: 'existing-space-123' }
   }));
   assert.equal(listed.result.isError, false);
-  assert.equal(listed.result.structuredContent.result.ports[0].visibility, 'private');
+  assert.equal(listed.result.structuredContent.result.deployments[0].port, 3000);
+  assert.equal(listed.result.structuredContent.result.deployments[0].visibility, 'private');
 
   const opened = await server(request(3, 'tools/call', {
-    name: 'open_port',
+    name: 'open_temporary_public_deployment',
     arguments: { codespaceId: 'existing-space-123', port: 3000 }
   }));
   assert.equal(opened.result.isError, false);
@@ -701,7 +711,7 @@ test('codespace GitHub-hosted port tools list, publish, return complete browseUr
   assert.equal(commands.some((args) => args.join(' ') === 'codespace ports visibility 3000:public -c existing-space-123'), true);
 
   const closed = await server(request(4, 'tools/call', {
-    name: 'close_port',
+    name: 'close_temporary_public_deployment',
     arguments: { codespaceId: 'existing-space-123', port: 3000 }
   }));
   assert.equal(closed.result.isError, false);
@@ -710,7 +720,7 @@ test('codespace GitHub-hosted port tools list, publish, return complete browseUr
   assert.equal(commands.some((args) => args.join(' ') === 'codespace ports visibility 3000:private -c existing-space-123'), true);
 });
 
-test('codespace open_port refuses to invent a GitHub forwarding entry for a port that is not already forwarded', async () => {
+test('codespace temporary public deployment refuses to auto-detect or invent a GitHub port entry when the requested port is unavailable', async () => {
   const { createServer } = await importCodespace({ suffix: 'missing-forwarded-port' });
   const commands = [];
   const server = createServer({ execute: async (args) => {
@@ -720,8 +730,8 @@ test('codespace open_port refuses to invent a GitHub forwarding entry for a port
     return { stdout: '', stderr: '', exitCode: 0 };
   } });
   await server(request(1, 'initialize'));
-  const reply = await server(request(2, 'tools/call', { name: 'open_port', arguments: { codespaceId: 'existing-space-123', port: 3000 } }));
+  const reply = await server(request(2, 'tools/call', { name: 'open_temporary_public_deployment', arguments: { codespaceId: 'existing-space-123', port: 3000 } }));
   assert.equal(reply.result.isError, true);
-  assert.match(reply.result.structuredContent.error, /not currently forwarded on GitHub infrastructure/);
+  assert.match(reply.result.structuredContent.error, /does not scan localhost or auto-detect ports/);
   assert.equal(commands.some((args) => args.includes('3000:public')), false);
 });

@@ -43,5 +43,5 @@ test('codespace copy keeps local source selectors but excludes remote destinatio
 
 test('codespace non-remote tools keep normal gateway path-policy inspection', () => {
   const input = { codespaceId: 'existing-space-123', port: 3000 };
-  assert.equal(gatewayPathPolicyArguments({ gatewayArgumentPolicy: 'codespace' }, 'open_port', input), input);
+  assert.equal(gatewayPathPolicyArguments({ gatewayArgumentPolicy: 'codespace' }, 'open_temporary_public_deployment', input), input);
 });
