@@ -266,6 +266,9 @@ test('codespace async SSH returns immediately, exposes stdio/status, supports bo
 
   fake.appendStdout('line one\n');
   fake.appendStderr('warning\n');
+  const statusWithOutput = await server(request(33, 'tools/call', { name: 'get_async_status', arguments: { asyncId } }));
+  assert.equal(statusWithOutput.result.structuredContent.result.stdout, 'line one\n');
+  assert.equal(statusWithOutput.result.structuredContent.result.stderr, 'warning\n');
   const logs = await server(request(3, 'tools/call', { name: 'get_async_logs', arguments: { asyncId } }));
   assert.equal(logs.result.structuredContent.result.stdout, 'line one\n');
   assert.equal(logs.result.structuredContent.result.stderr, 'warning\n');
