@@ -81,6 +81,7 @@ const ghExecutableConfigured = absoluteExecutableArgument(stringOption('gh-execu
 const tokenFileConfigured = optionalAbsoluteFileArgument(stringOption('token-file'), '--token-file');
 const sshKeyFileConfigured = optionalAbsoluteFileArgument(stringOption('ssh-key-file'), '--ssh-key-file');
 const allowSshKeyInWritableRoot = booleanPolicyEnvironment('LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT');
+const sshKeyVerifiedByGateway = booleanPolicyEnvironment('LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED');
 
 export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>] [--ssh-key-file=<absolute-private-key>]\n\nControls existing GitHub Codespaces only. It can list/view existing codespaces, run strictly tokenized SSH commands, copy selected local files/directories to one remote destination directory, and publish/privatize GitHub-hosted forwarded ports while returning their browseUrl. It never creates, rebuilds, stops, deletes, or changes the machine type of a codespace, and it never creates a localhost port tunnel.\n`;
 
@@ -435,6 +436,7 @@ async function githubToken() {
 let sshKeyPromise;
 async function sshKeyFile() {
   if (!sshKeyFileConfigured) return undefined;
+  if (sshKeyVerifiedByGateway) return sshKeyFileConfigured;
   sshKeyPromise ??= (async () => {
     const info = await lstat(sshKeyFileConfigured);
     if (info.isSymbolicLink() || !info.isFile()) throw new Error('--ssh-key-file must be a non-symbolic-link regular file');

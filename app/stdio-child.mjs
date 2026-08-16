@@ -72,6 +72,7 @@ export class StdioMcpChild {
       LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? []),
       LOCAL_MCP_CODEX_SANDBOX_MODE: this.config.sandbox ?? 'never',
       LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT: this.config.dangerousAllowCodespaceSshKeyInWritableRoot ? '1' : '0',
+      LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED: this.config.codespaceSshKeyVerified ? '1' : '0',
       ...(this.config.isBundled && this.config.gatewayIsolationKey
         ? { LOCAL_MCP_GATEWAY_ISOLATION_KEY: this.config.gatewayIsolationKey }
         : {}),

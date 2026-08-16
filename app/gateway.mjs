@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { realpath, stat } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import {
   ACCESS_SCOPE_TOOL_NAME,
@@ -65,6 +65,17 @@ async function canonicalExecutable(path, label) {
   const actual = await realpath(path);
   if (!(await stat(actual)).isFile()) throw new Error(`${label} must point to a regular file`);
   return actual;
+}
+
+async function canonicalCodespaceSshKey(path) {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error('--ssh-key-file must be a non-symbolic-link regular file');
+  if (info.size < 1 || info.size > 1024 * 1024) throw new Error('--ssh-key-file must contain from 1 byte through 1 MiB');
+  return realpath(path);
+}
+
+function replaceExactPath(values, configuredPath, canonicalPath) {
+  return (values ?? []).map((value) => value === configuredPath ? canonicalPath : value);
 }
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const warn = (message) => process.stderr.write(`[gateway] ${message}\n`);
@@ -385,6 +396,21 @@ async function startChild(childConfig) {
         }
         if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.codexExecutable))) {
           throw new Error(`${childConfig.name}: codex_executable resolves inside a writable sandbox root`);
+        }
+        if (childConfig.codespaceSshKeyFile) {
+          const configuredSshKeyFile = childConfig.codespaceSshKeyFile;
+          const canonicalSshKeyFile = await canonicalCodespaceSshKey(configuredSshKeyFile);
+          if (!childConfig.dangerousAllowCodespaceSshKeyInWritableRoot
+            && childConfig.allowedDirectories.some((root) => pathInside(root, canonicalSshKeyFile))) {
+            throw new Error(`${childConfig.name}: --ssh-key-file resolves inside a writable sandbox root`);
+          }
+          childConfig.args = childConfig.args.map((argument) => argument === `--ssh-key-file=${configuredSshKeyFile}`
+            ? `--ssh-key-file=${canonicalSshKeyFile}`
+            : argument);
+          childConfig.sandboxReadOnlyFiles = replaceExactPath(childConfig.sandboxReadOnlyFiles, configuredSshKeyFile, canonicalSshKeyFile);
+          childConfig.sandboxReadOnlyFileOverrides = replaceExactPath(childConfig.sandboxReadOnlyFileOverrides, configuredSshKeyFile, canonicalSshKeyFile);
+          childConfig.codespaceSshKeyFile = canonicalSshKeyFile;
+          childConfig.codespaceSshKeyVerified = true;
         }
       }
       await child.start();

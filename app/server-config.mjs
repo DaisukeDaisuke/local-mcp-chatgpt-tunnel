@@ -37,7 +37,8 @@ const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_GATEWAY_ISOLATION_KEY',
   'LOCAL_MCP_CODEX_SANDBOX_MODE',
   'LOCAL_MCP_CODEX_EXECUTABLE',
-  'LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT'
+  'LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT',
+  'LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED'
 ]);
 
 function platformPath(platform = process.platform) {
@@ -320,6 +321,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
     gatewayArgumentPolicy: codespaceServer ? 'codespace' : 'default',
+    codespaceSshKeyFile,
     allowedDirectories,
     allowedFiles,
     sandboxReadOnlyFiles,
