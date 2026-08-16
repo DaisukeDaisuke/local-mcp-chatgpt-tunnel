@@ -44,7 +44,7 @@ Usage:
 Legacy --disable-push/--disable-pull/--disable-clone options are accepted as no-ops so older
 gateway.toml files still start. index staging, commit, push, pull, and clone_repository are no longer
 exposed by this MCP; register mcp/git-capability/server.mjs separately for each required capability.
-Local Git tools such as status, diff, show, branch listing and creation, checkout, worktree creation
+Local Git tools such as status, diff, show, branch/tag listing and branch creation, checkout, worktree creation
 and removal remain available.
 Branch deletion is intentionally absent.
 The gateway supplies allowed and denied paths through reserved LOCAL_MCP_* environment variables.
@@ -136,6 +136,7 @@ const schemas = [
   { name: 'check_attributes', description: 'Ask Git for all effective attributes on each repository path, including text, binary, diff, merge, filter, and line-ending attributes.', inputSchema: repositoryPathsSchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'get_effective_config', description: 'Return behavior-relevant effective Git configuration with scope and origin, excluding credentials and author name/email.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'branches', description: 'List local and remote branches with object IDs, upstreams, and the current branch.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
+  { name: 'tags', description: 'List local Git tags with object IDs, target object IDs/types, annotated-tag status, and subjects.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'list_worktrees', description: 'List Git worktrees whose paths are inside the configured allowlist. Worktrees outside policy are omitted without exposing their paths.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   { name: 'remotes', description: 'List configured remote names and URLs.', inputSchema: repositorySchema(), annotations: READ_ONLY_ANNOTATIONS },
   {
@@ -617,6 +618,29 @@ function parseBranches(stdout) {
   });
 }
 
+function parseTags(stdout) {
+  return stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+    const [fullName, tag, objectId, objectType, peeledObjectId, peeledObjectType, subject] = line.split('\0');
+    if (!fullName?.startsWith('refs/tags/') || !tag || !/^[0-9A-Fa-f]{40,64}$/.test(objectId ?? '')) {
+      throw new Error('Unexpected git tag ref output');
+    }
+    const annotated = objectType === 'tag';
+    const targetObjectId = peeledObjectId || objectId;
+    const targetObjectType = peeledObjectType || objectType;
+    if (!targetObjectType || !/^[0-9A-Fa-f]{40,64}$/.test(targetObjectId)) throw new Error('Unexpected git tag target output');
+    return {
+      tag,
+      fullName,
+      objectId,
+      objectType,
+      targetObjectId,
+      targetObjectType,
+      annotated,
+      subject: subject || ''
+    };
+  });
+}
+
 function parseWorktrees(stdout) {
   const worktrees = [];
   let current = null;
@@ -781,6 +805,15 @@ async function callTool(name, args = {}) {
         'refs/remotes'
       ])).stdout;
       return { repositoryPath: cwd, branches: parseBranches(branches) };
+    }
+    case 'tags': {
+      const cwd = await repository(args.repositoryPath);
+      const tags = (await runGit(cwd, [
+        'for-each-ref',
+        '--format=%(refname)%00%(refname:short)%00%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)%00%(subject)',
+        'refs/tags'
+      ])).stdout;
+      return { repositoryPath: cwd, tags: parseTags(tags) };
     }
     case 'list_worktrees': {
       const cwd = await repository(args.repositoryPath);

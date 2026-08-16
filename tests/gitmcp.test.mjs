@@ -77,6 +77,7 @@ test('gitmcp exposes only local Git capabilities', async () => {
   assert.ok(names.includes('get_effective_config'));
   assert.ok(names.includes('show'));
   assert.ok(names.includes('branches'));
+  assert.ok(names.includes('tags'));
   assert.ok(names.includes('create_branch'));
   assert.ok(names.includes('checkout'));
   assert.ok(names.includes('list_worktrees'));
@@ -273,6 +274,20 @@ test('gitmcp manages branches and allowed worktrees without branch deletion or f
   const feature = branches.result.structuredContent.result.branches.find((entry) => entry.branch === 'feature');
   assert.equal(feature.type, 'local');
   assert.match(feature.objectId, /^[0-9a-f]{40,64}$/i);
+
+  await exec('git', ['tag', 'lightweight'], { cwd: repository });
+  await exec('git', ['tag', '-a', 'annotated', '-m', 'annotated fixture'], { cwd: repository });
+  const tags = await server(request(31, 'tools/call', {
+    name: 'tags', arguments: { repositoryPath: repository }
+  }));
+  assert.equal(tags.result.isError, false);
+  const lightweightTag = tags.result.structuredContent.result.tags.find((entry) => entry.tag === 'lightweight');
+  const annotatedTag = tags.result.structuredContent.result.tags.find((entry) => entry.tag === 'annotated');
+  assert.equal(lightweightTag.annotated, false);
+  assert.equal(lightweightTag.objectId, lightweightTag.targetObjectId);
+  assert.equal(annotatedTag.annotated, true);
+  assert.notEqual(annotatedTag.objectId, annotatedTag.targetObjectId);
+  assert.equal(annotatedTag.subject, 'annotated fixture');
 
   const added = await server(request(4, 'tools/call', {
     name: 'create_worktree',

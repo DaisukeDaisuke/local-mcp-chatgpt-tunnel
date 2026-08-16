@@ -45,7 +45,6 @@ async function importCapability(root, mode, suffix, options = {}) {
     args.push('--remote=origin');
     for (const repository of options.repositories ?? ['example/repository']) args.push(`--repository=${repository}`);
   }
-  if (mode === 'clone') args.push('--url=https://example.invalid/repository.git');
   process.argv = [previousArgv[0], join(process.cwd(), 'tests', 'git-capability.test.mjs'), ...args];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify([root]);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
@@ -132,11 +131,39 @@ test('git-capability exposes only the operations assigned to each mode', async (
     if (mode === 'push' || mode === 'pull') assert.deepEqual(Object.keys(listed.result.tools.at(-1).inputSchema.properties), []);
     if (mode === 'clone') {
       const schema = listed.result.tools.at(-1).inputSchema;
-      assert.deepEqual(Object.keys(schema.properties), ['destinationDirectory', 'depth']);
-      assert.ok(!Object.hasOwn(schema.properties, 'url'));
+      assert.deepEqual(Object.keys(schema.properties), ['url', 'destinationDirectory', 'depth']);
+      assert.deepEqual(schema.required, ['url', 'destinationDirectory']);
       assert.ok(!Object.hasOwn(schema.properties, 'parentDirectory'));
       assert.ok(!Object.hasOwn(schema.properties, 'recurseSubmodules'));
     }
+  }
+});
+
+test('git-capability clone accepts arbitrary HTTP(S)/SSH URLs at tool-call time and rejects embedded passwords', async () => {
+  const root = await testRoot('git-capability-clone-url-');
+  const { createServer, safeCloneUrl } = await importCapability(root, 'clone', 'clone-url');
+  const server = createServer();
+  await server(request(1, 'initialize'));
+
+  for (const url of [
+    'https://github.com/OWNER/REPO.git',
+    'http://example.invalid/OWNER/REPO.git',
+    'ssh://git@github.com/OWNER/REPO.git',
+    'git@github.com:OWNER/REPO.git',
+    'deploy@example.invalid:projects/repository.git'
+  ]) assert.equal(safeCloneUrl(url), url);
+
+  for (const [id, url, expectedError] of [
+    [2, 'file:///tmp/repository.git', /must use http, https, ssh, or user@host:path syntax/],
+    [3, 'https://user:secret@example.invalid/repository.git', /may not contain an embedded password/],
+    [4, 'ssh://git:secret@example.invalid/repository.git', /may not contain an embedded password/]
+  ]) {
+    const refused = await server(request(id, 'tools/call', {
+      name: 'clone_repository',
+      arguments: signedArguments(root, { url, destinationDirectory: `clone-${id}` })
+    }));
+    assert.equal(refused.result.isError, true);
+    assert.match(refused.result.structuredContent.error, expectedError);
   }
 });
 

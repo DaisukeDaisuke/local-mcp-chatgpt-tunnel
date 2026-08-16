@@ -146,7 +146,7 @@ disallowed_path_globs = ['**.ssh**']
 
 [mcp_servers.git_clone]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=clone', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--url=https://github.com/OWNER/REPO.git']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=clone', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 sandbox = "never"

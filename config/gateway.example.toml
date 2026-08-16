@@ -111,10 +111,10 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# clone pins one exact URL at startup, creates one new child directory, validates the incoming tree, then checks it out.
+# clone accepts one HTTP/HTTPS/SSH URL per tool call, creates one new child directory, validates the incoming tree, then checks it out.
 [mcp_servers.git_clone]
 command = "node"
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=clone', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--url=https://github.com/OWNER/REPO.git']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=clone', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "git_clone"
