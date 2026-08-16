@@ -91,6 +91,11 @@ test('codespace exposes existing-codespace operations including stop but no crea
     'open_temporary_public_deployment',
     'close_temporary_public_deployment'
   ]);
+  const listSchema = listed.result.tools.find((tool) => tool.name === 'list_codespaces').inputSchema.properties;
+  assert.equal(listSchema.async.default, false);
+  assert.equal(listSchema.syncWaitMs.minimum, 0);
+  assert.equal(listSchema.syncWaitMs.maximum, 10000);
+  assert.equal(listSchema.syncWaitMs.default, 10000);
   const result = await server(request(3, 'tools/call', { name: 'list_codespaces', arguments: { limit: 17 } }));
   assert.equal(result.result.isError, false);
   assert.deepEqual(commands, [[
@@ -98,22 +103,24 @@ test('codespace exposes existing-codespace operations including stop but no crea
   ]]);
 });
 
-test('codespace automatically promotes slow tool calls and get_async_status lists the shared async registry', async () => {
+test('codespace syncWaitMs=0 uses immediate async mode and get_async_status lists the shared async registry', async () => {
   const { createServer } = await importCodespace({ suffix: 'auto-async-registry' });
   let resolveExecution;
   const pendingExecution = new Promise((resolvePromise) => { resolveExecution = resolvePromise; });
   const serverInstanceId = '11111111-1111-4111-8111-111111111111';
   const server = createServer({
     serverInstanceId,
-    autoAsyncPromotionMs: 5,
     execute: async () => pendingExecution
   });
   await server(request(1, 'initialize'));
-  const promoted = await server(request(2, 'tools/call', { name: 'list_codespaces', arguments: {} }));
+  const promoted = await server(request(2, 'tools/call', { name: 'list_codespaces', arguments: { syncWaitMs: 0 } }));
   assert.equal(promoted.result.isError, false);
   const promotedResult = promoted.result.structuredContent.result;
   assert.equal(promotedResult.async, true);
   assert.equal(promotedResult.autoPromoted, true);
+  assert.equal(promotedResult.asyncRequested, false);
+  assert.equal(promotedResult.syncWaitMs, 0);
+  assert.equal(promotedResult.promotedAfterMs, 0);
   assert.equal(promotedResult.operation, 'list_codespaces');
   assert.equal(promotedResult.status, 'running');
   assert.equal(promotedResult.serverInstanceId, serverInstanceId);
@@ -137,6 +144,31 @@ test('codespace automatically promotes slow tool calls and get_async_status list
   assert.equal(completedResult.status, 'completed');
   assert.equal(completedResult.hasResult, true);
   assert.deepEqual(completedResult.result, { codespaces: [] });
+});
+
+test('codespace async=true returns immediately and ignores syncWaitMs for response waiting', async () => {
+  const { createServer } = await importCodespace({ suffix: 'explicit-async-response-mode' });
+  let resolveExecution;
+  const pendingExecution = new Promise((resolvePromise) => { resolveExecution = resolvePromise; });
+  const server = createServer({ execute: async () => pendingExecution });
+  await server(request(1, 'initialize'));
+  const started = await server(request(2, 'tools/call', {
+    name: 'list_codespaces',
+    arguments: { async: true, syncWaitMs: 10000 }
+  }));
+  const result = started.result.structuredContent.result;
+  assert.equal(result.async, true);
+  assert.equal(result.asyncRequested, true);
+  assert.equal(result.syncWaitMs, null);
+  assert.equal(result.autoPromoted, false);
+  assert.equal(result.promotedAfterMs, 0);
+  resolveExecution({ stdout: '[]', stderr: '', exitCode: 0 });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  const completed = await server(request(3, 'tools/call', {
+    name: 'get_async_status',
+    arguments: { asyncId: result.asyncId }
+  }));
+  assert.equal(completed.result.structuredContent.result.status, 'completed');
 });
 
 function fakeAsyncExecution() {
