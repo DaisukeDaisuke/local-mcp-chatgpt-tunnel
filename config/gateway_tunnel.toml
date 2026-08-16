@@ -240,6 +240,7 @@ cwd = 'C:\Users\owner\Downloads\a'
 enabled = false
 prefix = "chrome-devtools"
 annotation_config = false
+blocked_tool_substrings = ["wait"]
 startup_timeout_sec = 10000
 tool_timeout_sec = 100000
 tool_output_token_limit = 1000000

@@ -9,9 +9,9 @@ import { ToolPathPolicy } from '../../app/path-policy.mjs';
 const SERVER_VERSION = '0.1.0';
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_COMMAND_TIMEOUT_MS = 60 * 60 * 1000;
-const MAX_SYNC_SSH_RUNTIME_MS = 10 * 60 * 1000;
 const MAX_ASYNC_RUNTIME_MS = 60 * 60 * 1000;
 const MAX_ASYNC_WAIT_MS = 10 * 60 * 1000;
+const AUTO_ASYNC_PROMOTION_MS = 9_000;
 const MAX_ACTIVE_ASYNC_JOBS = 16;
 const MAX_RETAINED_ASYNC_JOBS = 64;
 const MAX_OUTPUT_BYTES = boundedIntegerEnvironment('CODESPACE_MCP_MAX_OUTPUT_BYTES', 8 * 1024 * 1024, 1024, 128 * 1024 * 1024);
@@ -23,6 +23,105 @@ const MAX_REMOTE_STDIN_BYTES = 1024 * 1024;
 const MAX_ASYNC_STDIN_WRITE_BYTES = 64 * 1024;
 const MAX_ASYNC_STDIN_TOTAL_BYTES = 1024 * 1024;
 const REMOTE_MAX_TEXT_BYTES = 16 * 1024 * 1024;
+const FORWARD_REGISTRATION_POLL_MS = 100;
+const REMOTE_BASH_SUPERVISOR_SOURCE = String.raw`
+const { spawn } = require("node:child_process");
+const { mkdtempSync, rmSync, writeFileSync } = require("node:fs");
+const { constants, tmpdir } = require("node:os");
+const { join } = require("node:path");
+
+const chunks = [];
+let child = null;
+let runtimeDirectory = null;
+let requestedSignal = null;
+let settled = false;
+
+function signalNumber(signal) {
+  return constants.signals[signal] || 1;
+}
+
+function cleanup() {
+  if (!runtimeDirectory) return;
+  try { rmSync(runtimeDirectory, { recursive: true, force: true }); } catch {}
+  runtimeDirectory = null;
+}
+
+function killGroup(signal) {
+  if (!child || !child.pid) return false;
+  try {
+    process.kill(-child.pid, signal);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+function terminateGroup() {
+  try { killGroup("SIGTERM"); } catch {}
+  const timer = setTimeout(() => {
+    try { killGroup("SIGKILL"); } catch {}
+  }, 250);
+  if (timer.unref) timer.unref();
+}
+
+function requestShutdown(signal) {
+  if (!requestedSignal) requestedSignal = signal;
+  terminateGroup();
+  if (!child && !settled) {
+    settled = true;
+    cleanup();
+    process.exit(128 + signalNumber(signal));
+  }
+}
+
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.on(signal, () => requestShutdown(signal));
+}
+
+process.stdin.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+process.stdin.on("error", (error) => {
+  if (settled) return;
+  settled = true;
+  console.error("codespace run_bash_script stdin failed: " + error.message);
+  cleanup();
+  process.exit(74);
+});
+process.stdin.on("end", () => {
+  if (settled) return;
+  if (requestedSignal) {
+    settled = true;
+    cleanup();
+    process.exit(128 + signalNumber(requestedSignal));
+  }
+  runtimeDirectory = mkdtempSync(join(tmpdir(), "codespace-mcp-bash-"));
+  const scriptPath = join(runtimeDirectory, "script.sh");
+  writeFileSync(scriptPath, Buffer.concat(chunks), { mode: 0o700 });
+  child = spawn("/bin/bash", [scriptPath], {
+    detached: true,
+    stdio: ["ignore", "inherit", "inherit"]
+  });
+  child.once("error", (error) => {
+    if (settled) return;
+    settled = true;
+    console.error("codespace run_bash_script could not start /bin/bash: " + error.message);
+    cleanup();
+    process.exit(127);
+  });
+  child.once("close", (code, signal) => {
+    if (settled) return;
+    settled = true;
+    try { killGroup("SIGKILL"); } catch {}
+    cleanup();
+    if (requestedSignal) process.exit(128 + signalNumber(requestedSignal));
+    if (signal) process.exit(128 + signalNumber(signal));
+    process.exit(Number.isInteger(code) ? code : 1);
+  });
+});
+process.stdin.resume();
+`;
+new Function(REMOTE_BASH_SUPERVISOR_SOURCE);
+const REMOTE_BASH_SUPERVISOR_COMMAND = `node -e "eval(Buffer.from('${Buffer.from(REMOTE_BASH_SUPERVISOR_SOURCE, 'utf8').toString('base64')}','base64').toString('utf8'))"`;
 const CREDENTIAL_PATTERNS = [
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
@@ -82,7 +181,7 @@ const sshKeygenExecutableConfigured = optionalAbsoluteFileArgument(
   'LOCAL_MCP_CODESPACE_SSH_KEYGEN_EXECUTABLE'
 );
 
-export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>]\n\nControls existing GitHub Codespaces only. SSH authentication keys are generated internally for the MCP process; no user SSH key is accepted. It can list/view/stop existing codespaces, run strictly tokenized SSH commands, copy selected local files/directories to one remote destination directory, and open/close temporary public deployments backed by GitHub Codespaces. Temporary public deployment tools never scan localhost, inspect local listening sockets, auto-detect a port, or create a localhost tunnel; they operate only on an exact caller-specified Codespace port already known to GitHub. It never creates, rebuilds, deletes, or changes the machine type of a codespace.\n`;
+export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>]\n\nControls existing GitHub Codespaces only. SSH authentication keys are generated internally for the MCP process; no user SSH key is accepted. It can list/view/stop existing codespaces, run strictly tokenized SSH commands, run arbitrary Bash source supplied only over SSH stdin, copy selected local files/directories to one remote destination directory, and open/close temporary public deployments backed by GitHub Codespaces. Prefer codespace__run_bash_script for arbitrary code, multi-command shell logic, pipelines, redirection, quoting-heavy commands, or other shell-oriented work instead of assembling those operations through the older SSH/stdin tools. codespace__run_bash_script is always asynchronous. More generally, every non-control Codespace tool has a 9-second MCP response ceiling: if the underlying operation is still running it is automatically promoted to the shared async registry and returns an asyncId instead of holding the request open. Call codespace__get_async_status with no asyncId to see all retained async operations in the current isolation, or with one asyncId to inspect that operation; use get_async_logs only when process output is actually needed. The registry is process-local, so serverInstanceId changes after an MCP crash/restart and older asyncIds are not recoverable. Temporary public deployment tools never scan localhost, inspect local listening sockets, browser tabs, or local development servers, and never auto-detect or guess a port. When an exact caller-specified port is not yet present in GitHub Codespaces metadata, open_temporary_public_deployment may bootstrap that exact port with gh codespace ports forward <port>:<port>, wait for GitHub to register it, then make it public. The bootstrap forwarding process is kept alive while this MCP owns the temporary deployment and is cancelled when the deployment is closed, the Codespace is stopped, or ownership moves to another isolated session. It never creates, rebuilds, deletes, or changes the machine type of a codespace.\n`;
 
 function pathArray(name, fallback = []) {
   if (help) return [];
@@ -113,7 +212,7 @@ const localState = { readOnlyHint: false, destructiveHint: false, idempotentHint
 const closeState = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
 const commonCodespaceId = { type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,127}$', description: 'Exact Codespace name returned by list_codespaces.' };
 const commonTimeout = { type: 'integer', minimum: 1, maximum: MAX_COMMAND_TIMEOUT_MS, default: DEFAULT_COMMAND_TIMEOUT_MS };
-const commonSshTimeout = { type: 'integer', minimum: 1, maximum: MAX_ASYNC_RUNTIME_MS, default: DEFAULT_COMMAND_TIMEOUT_MS, description: 'Hard execution limit. Synchronous SSH is capped at 10 minutes; when async=true, timeoutMs may be set up to 1 hour. Omitting timeoutMs defaults to 10 minutes in either mode.' };
+const commonSshTimeout = { type: 'integer', minimum: 1, maximum: MAX_ASYNC_RUNTIME_MS, default: DEFAULT_COMMAND_TIMEOUT_MS, description: 'Hard execution limit, not an MCP response wait. Normal tool calls may run up to this deadline in the background, but any non-control Codespace tool still running after 9 seconds is automatically promoted to the shared async registry and returns an asyncId. async=true requests immediate promotion for SSH. Maximum runtime is 1 hour.' };
 const commonAsyncId = { type: 'string', minLength: 36, maxLength: 36, pattern: '^[0-9a-fA-F-]{36}$' };
 
 const schemas = [
@@ -124,16 +223,17 @@ const schemas = [
   { name: 'ripgrep_version', description: 'Return rg --version from one existing Codespace without modifying it.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'install_ripgrep', description: 'Ensure ripgrep exists in one existing Codespace. If rg --version already works nothing is installed; otherwise a fixed package-manager installer is used and rg --version is verified afterwards.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, timeoutMs: commonTimeout }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: installMutation },
   { name: 'search_text', description: 'Search text with ripgrep inside one explicit remote root below /workspaces/<workspace>. searchBase is required on every call; / and /workspaces are rejected so the tool cannot scan the whole Codespace. Query/glob data is sent over SSH stdin and is never interpolated into the remote shell command.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, searchBase: { type: 'string', minLength: 1, maxLength: 1024 }, query: { type: 'string', minLength: 1, maxLength: 4096 }, fixedStrings: { type: 'boolean', default: false }, caseSensitive: { type: 'boolean', default: true }, globs: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 512 } }, maxResults: { type: 'integer', minimum: 1, maximum: MAX_REMOTE_SEARCH_RESULTS, default: 100 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'searchBase', 'query'], additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'ssh', description: 'Run one remote command in an existing Codespace. The command is a strictly validated token array. Synchronous SSH is capped at 10 minutes. Set async=true for commands that may block: the tool returns an asyncId immediately and timeoutMs may then be set up to 1 hour; omitting timeoutMs still defaults to 10 minutes.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, command: { type: 'array', minItems: 1, maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 512 } }, async: { type: 'boolean', default: false }, timeoutMs: commonSshTimeout }, required: ['codespaceId', 'command'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
-  { name: 'get_async_status', description: 'Return state and exit metadata for one async SSH job created by this MCP process.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'get_async_logs', description: 'Return the currently captured stdout and stderr for one async SSH job. Output is bounded by CODESPACE_MCP_MAX_OUTPUT_BYTES; exceeding the bound terminates the job instead of growing without limit.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'write_async_stdin', description: 'Write bounded UTF-8 data to stdin of one running async SSH job. Each write is limited to 64 KiB and total stdin per job is limited to 1 MiB. Set end=true to close stdin after this write. This does not extend the job runtime deadline.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, data: { type: 'string', maxLength: MAX_ASYNC_STDIN_WRITE_BYTES }, end: { type: 'boolean', default: false } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
-  { name: 'wait_async', description: 'Wait again for one async SSH job. waitTimeoutMs controls only this wait and is capped at 10 minutes; it does not extend the job runtime deadline. If the wait expires while the job is still running, the current running status is returned.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, waitTimeoutMs: { type: 'integer', minimum: 1, maximum: MAX_ASYNC_WAIT_MS, default: MAX_ASYNC_WAIT_MS } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'cancel_async', description: 'Cancel one running async SSH job by terminating its local gh process. Completed jobs are left unchanged.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: closeState },
+  { name: 'ssh', description: 'Run one simple remote command in an existing Codespace. The command is a strictly validated token array. Prefer codespace__run_bash_script for arbitrary code, multiple commands, shell operators, pipelines, redirection, variable expansion, or quoting-heavy shell work; do not emulate those cases through this older tokenized SSH interface. Set async=true to return an asyncId immediately. Otherwise the call may return synchronously only when it completes before the global 9-second response ceiling; after that it is automatically promoted to the shared async registry instead of holding the MCP response open.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, command: { type: 'array', minItems: 1, maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 512 } }, async: { type: 'boolean', default: false }, timeoutMs: commonSshTimeout }, required: ['codespaceId', 'command'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
+  { name: 'run_bash_script', description: 'Run arbitrary UTF-8 Bash source in one existing Codespace under a fixed remote Node.js supervisor. Node first reads the complete source from SSH stdin into a private temporary script, then spawns /bin/bash with runtime stdin closed. Shell syntax and command execution remain Bash responsibilities; Node only supervises exit/signal state and owns the detached Bash process group so cancellation or supervisor termination can tear descendants down. Commands inside the script cannot consume source stdin and stdin-reading programs receive EOF. This is intentionally arbitrary remote code execution. It always returns an asyncId immediately; use codespace__get_async_status for lifecycle state and get_async_logs only when output is needed.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, script: { type: 'string', minLength: 1, maxLength: MAX_REMOTE_STDIN_BYTES }, timeoutMs: commonSshTimeout }, required: ['codespaceId', 'script'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
+  { name: 'get_async_status', description: 'Return the shared non-blocking async registry for this isolated session. Omit asyncId to list every retained async operation from all Codespace tools without repeating full logs/results; pass asyncId to inspect one operation and, for automatically promoted tool calls, retrieve its final structured result. The registry is process-local: serverInstanceId changes after an MCP crash/restart, and asyncIds from an older instance cannot be recovered.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, additionalProperties: false }, outputSchema, annotations: readOnly },
+  { name: 'get_async_logs', description: 'Return the complete currently captured stdout and stderr for one process-backed async operation, including SSH/run_bash_script jobs and managed temporary port-forward processes. This API intentionally returns full retained logs; use codespace__get_async_status for lightweight lifecycle checks. Output is bounded by CODESPACE_MCP_MAX_OUTPUT_BYTES; exceeding the bound terminates the process instead of growing without limit.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
+  { name: 'write_async_stdin', description: 'Write bounded UTF-8 data to stdin of one already-running async SSH job. This is primarily a compatibility/interactive-input mechanism. Prefer codespace__run_bash_script when the intended stdin is actually Bash source or when arbitrary shell work is needed, rather than starting async SSH and feeding a script through this older two-step path. Each write is limited to 64 KiB and total stdin per job is limited to 1 MiB. Set end=true to close stdin after this write. This does not extend the job runtime deadline.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, data: { type: 'string', maxLength: MAX_ASYNC_STDIN_WRITE_BYTES }, end: { type: 'boolean', default: false } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
+  { name: 'wait_async', description: 'Compatibility wait for one async SSH job. Prefer non-blocking get_async_status/get_async_logs polling; Gateway configurations may block wait-style tools. For arbitrary shell execution, prefer codespace__run_bash_script rather than constructing an async SSH plus stdin plus wait workflow. waitTimeoutMs controls only this wait and is capped at 10 minutes; it does not extend the job runtime deadline. If the wait expires while the job is still running, the current running status is returned.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, waitTimeoutMs: { type: 'integer', minimum: 1, maximum: MAX_ASYNC_WAIT_MS, default: MAX_ASYNC_WAIT_MS } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
+  { name: 'cancel_async', description: 'Cancel one process-backed async operation by terminating its managed local process. SSH/run_bash_script jobs and managed temporary port-forward processes are cancellable. Automatically promoted compound tool operations currently report cancelSupported=false because they can span multiple sequential GitHub CLI operations. Completed jobs are left unchanged.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: closeState },
   { name: 'copy_to_codespace', description: 'Copy multiple selected local files/directories from one local source directory to one remote destination directory. Select exactly one of paths or globs. The first copy for an isolated session verifies SSH readiness with a fixed echo started probe; later copies reuse that readiness unless cp fails, then refresh once. Copy always uses gh codespace cp -e.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, sourceDirectory: { type: 'string', minLength: 1, maxLength: 1024 }, paths: { type: 'array', minItems: 1, maxItems: MAX_CP_SOURCES, items: { type: 'string', minLength: 1, maxLength: 1024 } }, globs: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 512 } }, remoteDestination: { type: 'string', minLength: 1, maxLength: 1024 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'sourceDirectory', 'remoteDestination'], additionalProperties: false }, outputSchema, annotations: copyMutation },
   { name: 'stop_codespace', description: 'Stop one existing Codespace owned by this isolated session using gh codespace stop. Running async SSH jobs for that Codespace are cancelled first and cached SSH readiness is cleared. This does not delete the Codespace or discard saved changes.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, timeoutMs: commonTimeout }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: closeState },
   { name: 'list_temporary_public_deployments', description: 'List temporary public deployment candidates already known to GitHub for one Codespace, including browseUrl, port, and current visibility. This only queries GitHub Codespaces metadata; it never scans localhost, local listening sockets, browser tabs, or the local machine to auto-detect ports. If GitHub reports no candidates, the tool returns a corrective error instead of an empty list so callers do not mistake this for failed local-port discovery.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'open_temporary_public_deployment', description: 'Attempt to open a temporary public deployment for exactly one caller-specified Codespace port and return its complete https://...app.github.dev URL. Call this directly when the exact remote port is known; list_temporary_public_deployments is not a prerequisite. The tool sends the visibility request to GitHub first and lets GitHub accept or reject the exact port; it does not pre-reject merely because the port was absent from a prior list. It never scans localhost, inspects local listening sockets, auto-detects ports, or creates a localhost tunnel.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: localState },
+  { name: 'open_temporary_public_deployment', description: 'Open a temporary public deployment for exactly one caller-specified Codespace port and return its complete https://...app.github.dev URL. Call this directly when the exact remote port is known; list_temporary_public_deployments is not a prerequisite. If the exact port is absent from GitHub Codespaces metadata, the tool starts gh codespace ports forward <port>:<port> as a managed bootstrap process, polls until GitHub registers the port, changes that exact port to public, and keeps the bootstrap process alive until the deployment is closed, the Codespace is stopped, ownership moves to another isolated session, or the bounded process lifetime ends. It never scans localhost, inspects local listening sockets, browser tabs, or local development servers, and never guesses a port.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: localState },
   { name: 'close_temporary_public_deployment', description: 'Close temporary public internet access for exactly one caller-specified Codespace port by returning its GitHub visibility to private. This never scans localhost or auto-detects which port to close.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: closeState }
 ];
 
@@ -153,12 +253,10 @@ function timeout(value, fallback = DEFAULT_COMMAND_TIMEOUT_MS) {
   return resolved;
 }
 
-function sshTimeout(value, asyncMode = false) {
+function sshTimeout(value) {
   const resolved = value ?? DEFAULT_COMMAND_TIMEOUT_MS;
-  const maximum = asyncMode ? MAX_ASYNC_RUNTIME_MS : MAX_SYNC_SSH_RUNTIME_MS;
-  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) {
-    throw new Error(`timeoutMs must be an integer from 1 through ${maximum} for ${asyncMode ? 'async' : 'synchronous'} SSH`);
-  }
+  const maximum = MAX_ASYNC_RUNTIME_MS;
+  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) throw new Error(`timeoutMs must be an integer from 1 through ${maximum}`);
   return resolved;
 }
 
@@ -219,6 +317,14 @@ function safeRemoteCommandTokens(value) {
   });
   if (output[0].startsWith('-')) throw new Error('command executable may not start with -');
   return output;
+}
+
+function safeBashScript(value) {
+  if (typeof value !== 'string' || value.length === 0) throw new Error('script must be a non-empty UTF-8 string');
+  if (value.includes('\0')) throw new Error('script may not contain NUL');
+  const bytes = Buffer.byteLength(value, 'utf8');
+  if (bytes > MAX_REMOTE_STDIN_BYTES) throw new Error(`script exceeds ${MAX_REMOTE_STDIN_BYTES} UTF-8 bytes`);
+  return value;
 }
 
 function safeRemoteDestination(value) {
@@ -741,13 +847,163 @@ function selectedForwardedPort(ports, port) {
   return ports.find((entry) => Number(entry?.sourcePort) === port) ?? null;
 }
 
+function createForwardBootstrapManager(startExecution, assertOwnership = () => {}, serverInstanceId = 'unknown') {
+  const forwards = new Map();
+  const history = new Map();
+  const key = (scopeKey, codespaceId, port) => `${scopeKey}\0${codespaceId}\0${port}`;
+
+  const prune = () => {
+    if (history.size < MAX_RETAINED_ASYNC_JOBS) return;
+    for (const [asyncId, record] of history) {
+      const state = record.execution.snapshot();
+      if (state.state !== 'running') history.delete(asyncId);
+      if (history.size < MAX_RETAINED_ASYNC_JOBS) break;
+    }
+  };
+
+  const refresh = (record) => {
+    const state = record.execution.snapshot();
+    if (state.state !== 'running') {
+      record.finishedAt ??= new Date().toISOString();
+      if (forwards.get(record.key) === record) forwards.delete(record.key);
+    }
+    return state;
+  };
+
+  const summary = (record) => {
+    const state = refresh(record);
+    return {
+      asyncId: record.asyncId,
+      serverInstanceId,
+      kind: 'process',
+      operation: 'temporary_public_port_forward',
+      codespaceId: record.codespaceId,
+      port: record.port,
+      status: state.state,
+      createdAt: record.createdAt,
+      finishedAt: record.finishedAt,
+      timeoutMs: MAX_ASYNC_RUNTIME_MS,
+      exitCode: state.exitCode,
+      signal: state.signal,
+      error: state.error,
+      managed: true,
+      cancelSupported: true,
+      hasLogs: true
+    };
+  };
+
+  const requireRecord = (asyncId) => {
+    const record = history.get(asyncId);
+    if (!record || record.scopeKey !== isolationScopeKey()) return null;
+    assertOwnership(record.scopeKey, record.codespaceId);
+    return record;
+  };
+
+  const cancelRecord = (record) => {
+    const before = refresh(record);
+    if (before.state !== 'running') return false;
+    const signalSent = record.execution.cancel();
+    refresh(record);
+    return signalSent;
+  };
+
+  return {
+    async ensure(scopeKey, codespaceId, port) {
+      const recordKey = key(scopeKey, codespaceId, port);
+      const existing = forwards.get(recordKey);
+      if (existing && refresh(existing).state === 'running') return { record: existing, started: false };
+      prune();
+      const args = ['codespace', 'ports', 'forward', `${port}:${port}`, '-c', codespaceId];
+      const execution = await startExecution(args, { timeoutMs: MAX_ASYNC_RUNTIME_MS });
+      const record = {
+        asyncId: randomUUID().toLowerCase(),
+        key: recordKey,
+        scopeKey,
+        codespaceId,
+        port,
+        args,
+        execution,
+        createdAt: new Date().toISOString(),
+        finishedAt: null
+      };
+      forwards.set(recordKey, record);
+      history.set(record.asyncId, record);
+      void execution.completion.then(() => { refresh(record); });
+      return { record, started: true };
+    },
+    state(record) {
+      return refresh(record);
+    },
+    cancel(scopeKey, codespaceId, port) {
+      const record = forwards.get(key(scopeKey, codespaceId, port));
+      if (!record) return false;
+      return cancelRecord(record);
+    },
+    cancelScopeCodespace(scopeKey, codespaceId) {
+      let cancelled = 0;
+      for (const record of [...forwards.values()]) {
+        if (record.scopeKey !== scopeKey || record.codespaceId !== codespaceId) continue;
+        if (cancelRecord(record)) cancelled += 1;
+      }
+      return cancelled;
+    },
+    tryStatus(asyncId) {
+      const record = requireRecord(asyncId);
+      return record ? summary(record) : null;
+    },
+    listStatus() {
+      const scopeKey = isolationScopeKey();
+      return [...history.values()]
+        .filter((record) => record.scopeKey === scopeKey)
+        .map(summary);
+    },
+    tryLogs(asyncId) {
+      const record = requireRecord(asyncId);
+      if (!record) return null;
+      const state = refresh(record);
+      return {
+        ...summary(record),
+        stdout: state.stdout,
+        stderr: state.stderr,
+        outputBytes: state.outputBytes
+      };
+    },
+    tryCancel(asyncId) {
+      const record = requireRecord(asyncId);
+      if (!record) return null;
+      const before = refresh(record);
+      if (before.state !== 'running') return { ...summary(record), cancelled: false };
+      const signalSent = record.execution.cancel();
+      refresh(record);
+      return { ...summary(record), cancelled: true, signalSent };
+    }
+  };
+}
+
+async function waitForForwardedPort(codespace, port, execute, forwardRecord, timeoutMs, sleep) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`Timed out waiting for GitHub Codespaces to register forwarded port ${port}`);
+    const ports = await portsForCodespace(codespace, execute, Math.min(remaining, 30_000));
+    const selected = selectedForwardedPort(ports, port);
+    if (selected) return selected;
+    const state = forwardRecord.execution.snapshot();
+    if (state.state !== 'running') {
+      const detail = state.error ?? state.stderr?.trim() ?? state.stdout?.trim() ?? state.state;
+      throw new Error(`gh codespace ports forward ${port}:${port} ended before GitHub registered port ${port}: ${detail}`);
+    }
+    await sleep(Math.min(FORWARD_REGISTRATION_POLL_MS, remaining));
+  }
+}
+
 function isolationScopeKey() {
   const context = isolation.current();
   if (!context) return 'direct';
   return context.isolatedId ?? JSON.stringify({ base: context.base, roots: context.roots });
 }
 
-function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
+function createAsyncJobManager(startExecution, assertOwnership = () => {}, serverInstanceId = 'unknown') {
   const jobs = new Map();
 
   const prune = () => {
@@ -761,7 +1017,7 @@ function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
   const requireJob = (value) => {
     const asyncId = safeAsyncId(value);
     const job = jobs.get(asyncId);
-    if (!job) throw new Error('Unknown or expired asyncId');
+    if (!job) throw new Error('Unknown or expired asyncId. Async state is process-local; an MCP crash or restart makes asyncIds from the previous server instance unrecoverable.');
     if (job.scopeKey !== isolationScopeKey()) throw new Error('asyncId belongs to a different isolated workspace context');
     assertOwnership(job.scopeKey, job.codespaceId);
     return job;
@@ -780,6 +1036,9 @@ function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
     const processState = refresh(job);
     return {
       asyncId: job.asyncId,
+      serverInstanceId,
+      kind: 'process',
+      operation: job.operation,
       codespaceId: job.codespaceId,
       status: job.status,
       createdAt: job.createdAt,
@@ -787,7 +1046,9 @@ function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
       timeoutMs: job.timeoutMs,
       exitCode: processState.exitCode,
       signal: processState.signal,
-      error: processState.error
+      error: processState.error,
+      cancelSupported: true,
+      hasLogs: true
     };
   };
 
@@ -802,21 +1063,22 @@ function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
   };
 
   return {
-    async start({ codespaceId, args, timeoutMs }) {
+    async start({ codespaceId, operation = 'ssh', args, timeoutMs, stdinText, keepStdinOpen = true }) {
       prune();
       const active = [...jobs.values()].filter((job) => refresh(job).state === 'running').length;
       if (active >= MAX_ACTIVE_ASYNC_JOBS) throw new Error(`Too many active async SSH jobs; maximum is ${MAX_ACTIVE_ASYNC_JOBS}`);
-      const execution = await startExecution(args, { timeoutMs, keepStdinOpen: true });
+      const execution = await startExecution(args, { timeoutMs, stdinText, keepStdinOpen });
       const asyncId = randomUUID().toLowerCase();
       const job = {
         asyncId,
+        operation,
         codespaceId,
         timeoutMs,
         createdAt: new Date().toISOString(),
         finishedAt: null,
         status: 'running',
-        stdinBytes: 0,
-        stdinEnded: false,
+        stdinBytes: stdinText === undefined ? 0 : Buffer.byteLength(stdinText, 'utf8'),
+        stdinEnded: !keepStdinOpen,
         scopeKey: isolationScopeKey(),
         execution
       };
@@ -826,6 +1088,18 @@ function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
     },
     status(asyncId) {
       return summary(requireJob(asyncId));
+    },
+    tryStatus(asyncId) {
+      const job = jobs.get(asyncId);
+      if (!job || job.scopeKey !== isolationScopeKey()) return null;
+      assertOwnership(job.scopeKey, job.codespaceId);
+      return summary(job);
+    },
+    listStatus() {
+      const scopeKey = isolationScopeKey();
+      return [...jobs.values()]
+        .filter((job) => job.scopeKey === scopeKey)
+        .map(summary);
     },
     logs(asyncId) {
       return logs(requireJob(asyncId));
@@ -880,8 +1154,118 @@ function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
   };
 }
 
+function createAsyncTaskManager(serverInstanceId = 'unknown', assertOwnership = () => {}, promotionMs = AUTO_ASYNC_PROMOTION_MS) {
+  const tasks = new Map();
+
+  const prune = () => {
+    if (tasks.size < MAX_RETAINED_ASYNC_JOBS) return;
+    for (const [asyncId, task] of tasks) {
+      if (task.status !== 'running') tasks.delete(asyncId);
+      if (tasks.size < MAX_RETAINED_ASYNC_JOBS) break;
+    }
+  };
+
+  const summary = (task, includeResult = false) => ({
+    asyncId: task.asyncId,
+    serverInstanceId,
+    kind: 'tool',
+    operation: task.operation,
+    codespaceId: task.codespaceId ?? null,
+    status: task.status,
+    createdAt: task.createdAt,
+    finishedAt: task.finishedAt,
+    autoPromoted: true,
+    cancelSupported: false,
+    hasLogs: false,
+    hasResult: task.status === 'completed',
+    ...(includeResult && task.status === 'completed' ? { result: task.result } : {}),
+    error: task.error
+  });
+
+  const requireTask = (value) => {
+    const asyncId = safeAsyncId(value);
+    const task = tasks.get(asyncId);
+    if (!task) return null;
+    if (task.scopeKey !== isolationScopeKey()) throw new Error('asyncId belongs to a different isolated workspace context');
+    if (task.codespaceId) assertOwnership(task.scopeKey, task.codespaceId);
+    return task;
+  };
+
+  return {
+    async resolveOrPromote({ operation, codespaceId, promise }) {
+      const scopeKey = isolationScopeKey();
+      const createdAt = new Date().toISOString();
+      let settled = false;
+      let result;
+      let failure;
+      const tracked = Promise.resolve(promise).then(
+        (value) => {
+          settled = true;
+          result = value;
+          return value;
+        },
+        (error) => {
+          settled = true;
+          failure = error;
+          return undefined;
+        }
+      );
+      let timer;
+      await Promise.race([
+        tracked,
+        new Promise((resolvePromise) => {
+          timer = setTimeout(resolvePromise, promotionMs);
+        })
+      ]);
+      if (timer) clearTimeout(timer);
+      if (settled) {
+        if (failure) throw failure;
+        return result;
+      }
+
+      prune();
+      const asyncId = randomUUID().toLowerCase();
+      const task = {
+        asyncId,
+        operation,
+        codespaceId: typeof codespaceId === 'string' ? codespaceId : null,
+        scopeKey,
+        createdAt,
+        finishedAt: null,
+        status: 'running',
+        result: undefined,
+        error: null
+      };
+      tasks.set(asyncId, task);
+      void tracked.then(() => {
+        task.finishedAt = new Date().toISOString();
+        if (failure) {
+          task.status = 'failed';
+          task.error = failure instanceof Error ? failure.message : String(failure);
+        } else {
+          task.status = 'completed';
+          task.result = result;
+        }
+      });
+      return { ...summary(task), async: true, promotedAfterMs: promotionMs };
+    },
+    tryStatus(asyncId, includeResult = true) {
+      const task = requireTask(asyncId);
+      return task ? summary(task, includeResult) : null;
+    },
+    listStatus() {
+      const scopeKey = isolationScopeKey();
+      return [...tasks.values()]
+        .filter((task) => task.scopeKey === scopeKey)
+        .map((task) => summary(task, false));
+    }
+  };
+}
+
 export function createServer(options = {}) {
+  const serverInstanceId = options.serverInstanceId ?? randomUUID().toLowerCase();
   const rawExecute = options.execute ?? runGh;
+  const sleep = options.sleep ?? ((milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)));
   const sshKeyProvider = options.sshKeyProvider ?? internalSshKeyFile;
   const sshReadyScopes = new Set();
   const readinessKey = (codespace) => `${isolationScopeKey()}\0${codespace}`;
@@ -906,7 +1290,30 @@ export function createServer(options = {}) {
     if (owner !== undefined && owner !== scopeKey) throw ownershipConflictError(codespace, owner);
   };
 
-  const asyncJobs = createAsyncJobManager(options.startAsyncExecution ?? startGhExecution, assertCodespaceOwnership);
+  const asyncJobs = createAsyncJobManager(options.startAsyncExecution ?? startGhExecution, assertCodespaceOwnership, serverInstanceId);
+  const asyncTasks = createAsyncTaskManager(serverInstanceId, assertCodespaceOwnership, options.autoAsyncPromotionMs ?? AUTO_ASYNC_PROMOTION_MS);
+  const forwardBootstraps = createForwardBootstrapManager(options.startForwardExecution ?? startGhExecution, assertCodespaceOwnership, serverInstanceId);
+
+  const asyncStatus = (asyncId) => {
+    if (asyncId !== undefined) {
+      const validated = safeAsyncId(asyncId);
+      const processJob = asyncJobs.tryStatus(validated);
+      if (processJob) return processJob;
+      const forwardJob = forwardBootstraps.tryStatus(validated);
+      if (forwardJob) return forwardJob;
+      const toolTask = asyncTasks.tryStatus(validated, true);
+      if (toolTask) return toolTask;
+      throw new Error('Unknown or expired asyncId. Async state is process-local; an MCP crash or restart makes asyncIds from the previous server instance unrecoverable.');
+    }
+    const operations = [...asyncJobs.listStatus(), ...forwardBootstraps.listStatus(), ...asyncTasks.listStatus()]
+      .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+    return {
+      serverInstanceId,
+      registryPersistence: 'process-memory',
+      crashRecovery: 'unrecoverable',
+      operations
+    };
+  };
 
   const claimCodespace = (codespace) => {
     const scopeKey = isolationScopeKey();
@@ -920,6 +1327,7 @@ export function createServer(options = {}) {
       revokedCodespaceScopes.add(ownershipKey(owner, codespace));
       sshReadyScopes.delete(`${owner}\0${codespace}`);
       asyncJobs.cancelScopeCodespace(owner, codespace);
+      forwardBootstraps.cancelScopeCodespace(owner, codespace);
     }
     codespaceOwners.set(codespace, scopeKey);
     return { scopeKey, ownerChanged: owner !== undefined };
@@ -1008,20 +1416,40 @@ export function createServer(options = {}) {
         const command = safeRemoteCommandTokens(args.command);
         const remoteCommand = command.join(' ');
         if (args.async !== undefined && typeof args.async !== 'boolean') throw new Error('async must be boolean');
-        const timeoutMs = sshTimeout(args.timeoutMs, args.async === true);
+        const timeoutMs = sshTimeout(args.timeoutMs);
         const ghArgs = await sshGhArgs(codespace, remoteCommand, sshKeyProvider);
         if (args.async === true) {
-          const job = await asyncJobs.start({ codespaceId: codespace, args: ghArgs, timeoutMs });
+          const job = await asyncJobs.start({ codespaceId: codespace, operation: 'ssh', args: ghArgs, timeoutMs });
           return { ...job, async: true };
         }
         const execution = await execute(ghArgs, { timeoutMs });
         return { codespaceId: codespace, remoteCommand, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
       }
-      case 'get_async_status': return asyncJobs.status(args.asyncId);
-      case 'get_async_logs': return asyncJobs.logs(args.asyncId);
+      case 'run_bash_script': {
+        const codespace = safeCodespaceId(args.codespaceId);
+        const script = safeBashScript(args.script);
+        const timeoutMs = sshTimeout(args.timeoutMs);
+        const ghArgs = await sshGhArgs(codespace, REMOTE_BASH_SUPERVISOR_COMMAND, sshKeyProvider);
+        const job = await asyncJobs.start({ codespaceId: codespace, operation: 'run_bash_script', args: ghArgs, timeoutMs, stdinText: script, keepStdinOpen: false });
+        return { ...job, async: true, remoteCommand: 'node supervisor -> /bin/bash', stdinBytes: Buffer.byteLength(script, 'utf8'), stdinEnded: true, stdinInherited: false, runtimeStdin: 'closed' };
+      }
+      case 'get_async_status': return asyncStatus(args.asyncId);
+      case 'get_async_logs': {
+        const validated = safeAsyncId(args.asyncId);
+        const forwardLogs = forwardBootstraps.tryLogs(validated);
+        if (forwardLogs) return forwardLogs;
+        return asyncJobs.logs(validated);
+      }
       case 'write_async_stdin': return asyncJobs.writeStdin(args.asyncId, args.data ?? '', args.end ?? false);
       case 'wait_async': return asyncJobs.wait(args.asyncId, asyncWaitTimeout(args.waitTimeoutMs));
-      case 'cancel_async': return asyncJobs.cancel(args.asyncId);
+      case 'cancel_async': {
+        const validated = safeAsyncId(args.asyncId);
+        const task = asyncTasks.tryStatus(validated, false);
+        if (task) return { ...task, cancelled: false, reason: 'This automatically promoted compound tool operation cannot currently be cancelled safely.' };
+        const forward = forwardBootstraps.tryCancel(validated);
+        if (forward) return forward;
+        return asyncJobs.cancel(validated);
+      }
       case 'copy_to_codespace': {
         const codespace = safeCodespaceId(args.codespaceId);
         const remoteDestination = safeRemoteDestination(args.remoteDestination);
@@ -1064,6 +1492,7 @@ export function createServer(options = {}) {
         const timeoutMs = timeout(args.timeoutMs);
         const scopeKey = isolationScopeKey();
         const cancelledAsyncJobs = asyncJobs.cancelScopeCodespace(scopeKey, codespace);
+        const cancelledForwardBootstraps = forwardBootstraps.cancelScopeCodespace(scopeKey, codespace);
         sshReadyScopes.delete(readinessKey(codespace));
         const execution = await execute(['codespace', 'stop', '-c', codespace], { timeoutMs });
         let state = null;
@@ -1074,7 +1503,7 @@ export function createServer(options = {}) {
         } catch (error) {
           stateCheckError = error instanceof Error ? error.message : String(error);
         }
-        return { codespaceId: codespace, stopRequested: true, stopped: String(state ?? '').toLowerCase() === 'shutdown', state, stateCheckError, cancelledAsyncJobs, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
+        return { codespaceId: codespace, stopRequested: true, stopped: String(state ?? '').toLowerCase() === 'shutdown', state, stateCheckError, cancelledAsyncJobs, cancelledForwardBootstraps, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
       }
       case 'list_temporary_public_deployments': {
         const codespace = safeCodespaceId(args.codespaceId);
@@ -1095,22 +1524,44 @@ export function createServer(options = {}) {
         const port = safePort(args.port, 'port');
         const timeoutMs = timeout(args.timeoutMs);
         const availability = await ensureCodespaceAvailable(codespace, execute, timeoutMs, sshKeyProvider);
-        await execute(['codespace', 'ports', 'visibility', `${port}:public`, '-c', codespace], { timeoutMs });
-        const after = selectedForwardedPort(await portsForCodespace(codespace, execute, timeoutMs), port);
-        if (!after) throw new Error(`GitHub accepted the visibility request for Codespace port ${port}, but the port was still absent from GitHub Codespaces deployment metadata afterwards. This MCP did not perform a localhost scan or infer that devcontainer forwardPorts is required. Report this GitHub-side result instead of guessing a replacement workflow.`);
-        if (String(after.visibility).toLowerCase() !== 'public') throw new Error(`Codespace port ${port} did not become public; current visibility is ${after.visibility ?? 'unknown'}`);
-        if (typeof after.browseUrl !== 'string' || !/^https:\/\/[A-Za-z0-9.-]+\.app\.github\.dev\/?$/i.test(after.browseUrl)) throw new Error(`Codespace port ${port} did not return a valid GitHub browseUrl`);
-        return { codespaceId: codespace, port, wokeCodespace: availability.woke, url: after.browseUrl, browseUrl: after.browseUrl, visibility: after.visibility, label: after.label ?? '' };
+        const scopeKey = isolationScopeKey();
+        let forwardRecord = null;
+        let bootstrapStarted = false;
+        try {
+          let selected = selectedForwardedPort(await portsForCodespace(codespace, execute, Math.min(timeoutMs, 30_000)), port);
+          if (!selected) {
+            const bootstrap = await forwardBootstraps.ensure(scopeKey, codespace, port);
+            forwardRecord = bootstrap.record;
+            bootstrapStarted = bootstrap.started;
+            selected = await waitForForwardedPort(codespace, port, execute, forwardRecord, timeoutMs, sleep);
+          }
+          await execute(['codespace', 'ports', 'visibility', `${port}:public`, '-c', codespace], { timeoutMs });
+          const after = selectedForwardedPort(await portsForCodespace(codespace, execute, Math.min(timeoutMs, 30_000)), port);
+          if (!after) throw new Error(`Codespace port ${port} disappeared from GitHub Codespaces deployment metadata while it was being made public`);
+          if (String(after.visibility).toLowerCase() !== 'public') throw new Error(`Codespace port ${port} did not become public; current visibility is ${after.visibility ?? 'unknown'}`);
+          if (typeof after.browseUrl !== 'string' || !/^https:\/\/[A-Za-z0-9.-]+\.app\.github\.dev\/?$/i.test(after.browseUrl)) throw new Error(`Codespace port ${port} did not return a valid GitHub browseUrl`);
+          return { codespaceId: codespace, port, wokeCodespace: availability.woke, bootstrapForwarding: forwardRecord !== null, bootstrapStarted, url: after.browseUrl, browseUrl: after.browseUrl, visibility: after.visibility, label: after.label ?? '' };
+        } catch (error) {
+          if (forwardRecord) forwardBootstraps.cancel(scopeKey, codespace, port);
+          throw error;
+        }
       }
       case 'close_temporary_public_deployment': {
         const codespace = safeCodespaceId(args.codespaceId);
         const port = safePort(args.port, 'port');
         const timeoutMs = timeout(args.timeoutMs);
-        await execute(['codespace', 'ports', 'visibility', `${port}:private`, '-c', codespace], { timeoutMs });
-        const after = selectedForwardedPort(await portsForCodespace(codespace, execute, timeoutMs), port);
-        if (!after) return { codespaceId: codespace, port, visibility: 'private', closedPublicAccess: true, browseUrl: null };
+        const scopeKey = isolationScopeKey();
+        let after = null;
+        let cancelledForwardBootstrap = false;
+        try {
+          await execute(['codespace', 'ports', 'visibility', `${port}:private`, '-c', codespace], { timeoutMs });
+          after = selectedForwardedPort(await portsForCodespace(codespace, execute, Math.min(timeoutMs, 30_000)), port);
+        } finally {
+          cancelledForwardBootstrap = forwardBootstraps.cancel(scopeKey, codespace, port);
+        }
+        if (!after) return { codespaceId: codespace, port, visibility: 'private', closedPublicAccess: true, browseUrl: null, cancelledForwardBootstrap };
         if (String(after.visibility).toLowerCase() !== 'private') throw new Error(`Codespace port ${port} did not become private; current visibility is ${after.visibility ?? 'unknown'}`);
-        return { codespaceId: codespace, port, visibility: after.visibility, closedPublicAccess: true, browseUrl: after.browseUrl ?? null };
+        return { codespaceId: codespace, port, visibility: after.visibility, closedPublicAccess: true, browseUrl: after.browseUrl ?? null, cancelledForwardBootstrap };
       }
       default: throw new Error(`Unknown tool: ${name}`);
     }
@@ -1121,14 +1572,24 @@ export function createServer(options = {}) {
     if (request.method === 'notifications/initialized') return null;
     if (request.method === 'initialize') {
       initialized = true;
-      return response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'codespace', version: SERVER_VERSION }, instructions: 'Controls existing GitHub Codespaces only. There is intentionally no create/start/delete/rebuild/edit tool. Existing Codespaces can be started implicitly by SSH/copy and explicitly stopped with stop_codespace. Use list_codespaces first and pass its name as codespaceId. SSH accepts only strictly validated token arrays. Synchronous SSH is capped at 10 minutes; when async=true from the initial call, timeoutMs may be set up to 1 hour and defaults to 10 minutes when omitted. Use get_async_logs/get_async_status/wait_async/cancel_async with the returned asyncId. search_text always requires a /workspaces/<workspace> searchBase. Copy uses local path selection plus one safe remote destination. Temporary public deployment tools operate only on exact caller-specified Codespace ports and return browseUrl. If the exact port is known, call open_temporary_public_deployment directly; list_temporary_public_deployments is not a prerequisite. open_temporary_public_deployment sends the visibility request to GitHub before deciding whether the port is publishable, so do not infer devcontainer forwardPorts requirements from an empty list alone. These tools never scan localhost, inspect local listening sockets or browser tabs, auto-detect ports, or create localhost tunnels.' });
+      return response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'codespace', version: SERVER_VERSION }, instructions: 'Controls existing GitHub Codespaces only. There is intentionally no create/start/delete/rebuild/edit tool. Existing Codespaces can be started implicitly by SSH/copy and explicitly stopped with stop_codespace. Use list_codespaces first and pass its name as codespaceId. SSH accepts only strictly validated token arrays. Prefer codespace__run_bash_script for arbitrary code, multiple commands, shell operators, pipelines, redirection, variable expansion, quoting-heavy commands, or other shell-oriented work instead of assembling the older ssh + write_async_stdin workflow. codespace__run_bash_script transports UTF-8 Bash source only over SSH stdin to a fixed remote Node.js supervisor. The supervisor reads the complete source into a private temporary script, then spawns /bin/bash with runtime stdin closed and supervises the detached Bash process group, so commands cannot consume source bytes, stdin readers receive EOF, and cancellation/termination can tear descendants down. It always returns an asyncId immediately. Every other non-control Codespace tool may return synchronously only when it finishes within 9 seconds; after that the operation is automatically promoted to the shared async registry and returns an asyncId while continuing up to its own hard timeout. Call codespace__get_async_status with no asyncId to see all retained async operations in the current isolation, or pass one asyncId for detailed status and the final structured result of an automatically promoted compound tool call. get_async_logs remains the explicit full-log API for process jobs. The async registry is process-local and reports serverInstanceId; after an MCP crash/restart older asyncIds are unrecoverable rather than being guessed as completed. wait_async remains implemented for compatibility but may be blocked by Gateway configuration. search_text always requires a /workspaces/<workspace> searchBase. Copy uses local path selection plus one safe remote destination. Temporary public deployment tools operate only on exact caller-specified Codespace ports and return browseUrl. If the exact port is known, call open_temporary_public_deployment directly; list_temporary_public_deployments is not a prerequisite. If GitHub does not yet list that exact port, open_temporary_public_deployment starts gh codespace ports forward PORT:PORT as a managed bootstrap, waits for GitHub to register it, then makes it public. The managed forward stays alive until close, stop, ownership transfer, or its bounded lifetime. These tools never scan localhost, inspect local listening sockets or browser tabs, auto-detect ports, or guess a replacement port.' });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
     if (request.method === 'ping') return response(request.id, {});
     if (request.method === 'tools/list') return response(request.id, { tools: schemas });
     if (request.method === 'tools/call') {
       try {
-        const result = await isolation.run(request.params?.arguments ?? {}, (toolArguments) => callTool(request.params?.name, toolArguments));
+        const toolName = request.params?.name;
+        const asyncControlTools = new Set(['get_async_status', 'get_async_logs', 'write_async_stdin', 'wait_async', 'cancel_async']);
+        const result = await isolation.run(request.params?.arguments ?? {}, (toolArguments) => {
+          const promise = callTool(toolName, toolArguments);
+          if (asyncControlTools.has(toolName)) return promise;
+          return asyncTasks.resolveOrPromote({
+            operation: toolName,
+            codespaceId: typeof toolArguments.codespaceId === 'string' ? toolArguments.codespaceId : null,
+            promise
+          });
+        });
         return response(request.id, toolResult({ ok: true, result }));
       } catch (error) { return response(request.id, toolResult({ ok: false, error: error instanceof Error ? error.message : String(error) }, true)); }
     }

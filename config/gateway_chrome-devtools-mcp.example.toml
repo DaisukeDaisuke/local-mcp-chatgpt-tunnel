@@ -5,6 +5,7 @@ cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = true
 prefix = "chrome-devtools"
 annotation_config = true
+blocked_tool_substrings = ["wait"]
 startup_timeout_sec = 10000
 tool_timeout_sec = 100000
 tool_output_token_limit = 1000000

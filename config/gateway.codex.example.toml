@@ -289,6 +289,7 @@ sandbox = "onlineworkspace"
 codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "codespace"
 annotation_config = false
+blocked_tool_substrings = ["wait"]
 dangerous_allow_gateway_config_access = false
 startup_timeout_sec = 30
 tool_timeout_sec = 660
