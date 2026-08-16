@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstat, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, relative, sep } from 'node:path';
+import { mkdtemp, realpath, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import {
   ACCESS_SCOPE_TOOL_NAME,
   accessScopeMcpResult,
@@ -68,22 +69,19 @@ async function canonicalExecutable(path, label) {
   return actual;
 }
 
-async function canonicalCodespaceSshKey(path) {
-  const info = await lstat(path);
-  if (info.isSymbolicLink() || !info.isFile()) throw new Error('--ssh-key-file must be a non-symbolic-link regular file');
-  if (info.size < 1 || info.size > 1024 * 1024) throw new Error('--ssh-key-file must contain from 1 byte through 1 MiB');
-  return realpath(path);
-}
-
-async function canonicalCodespaceSshPublicKey(path) {
-  const info = await lstat(path);
-  if (info.isSymbolicLink() || !info.isFile()) throw new Error('--ssh-key-file requires an adjacent non-symbolic-link regular .pub file');
-  if (info.size < 1 || info.size > 1024 * 1024) throw new Error('--ssh-key-file .pub must contain from 1 byte through 1 MiB');
-  return realpath(path);
-}
-
-function replaceExactPath(values, configuredPath, canonicalPath) {
-  return (values ?? []).map((value) => value === configuredPath ? canonicalPath : value);
+async function canonicalCodespaceSshKeygenExecutable() {
+  const candidates = process.platform === 'win32'
+    ? [join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'OpenSSH', 'ssh-keygen.exe')]
+    : ['/usr/bin/ssh-keygen', '/bin/ssh-keygen'];
+  const failures = [];
+  for (const candidate of candidates) {
+    try {
+      return await canonicalExecutable(candidate, 'codespace ssh-keygen');
+    } catch (error) {
+      failures.push(`${candidate}: ${error.message}`);
+    }
+  }
+  throw new Error(`codespace requires the system ssh-keygen executable (${failures.join('; ')})`);
 }
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const warn = (message) => process.stderr.write(`[gateway] ${message}\n`);
@@ -406,25 +404,23 @@ async function startChild(childConfig) {
         if (childConfig.allowedDirectories.some((root) => pathInside(root, childConfig.codexExecutable))) {
           throw new Error(`${childConfig.name}: codex_executable resolves inside a writable sandbox root`);
         }
-        if (childConfig.codespaceSshKeyFile) {
-          const configuredSshKeyFile = childConfig.codespaceSshKeyFile;
-          const configuredSshPublicKeyFile = childConfig.codespaceSshPublicKeyFile;
-          const canonicalSshKeyFile = await canonicalCodespaceSshKey(configuredSshKeyFile);
-          const canonicalSshPublicKeyFile = await canonicalCodespaceSshPublicKey(configuredSshPublicKeyFile);
-          if (!childConfig.dangerousAllowCodespaceSshKeyInWritableRoot
-            && [canonicalSshKeyFile, canonicalSshPublicKeyFile].some((trustFile) => childConfig.allowedDirectories.some((root) => pathInside(root, trustFile)))) {
-            throw new Error(`${childConfig.name}: --ssh-key-file resolves inside a writable sandbox root`);
-          }
-          childConfig.args = childConfig.args.map((argument) => argument === `--ssh-key-file=${configuredSshKeyFile}`
-            ? `--ssh-key-file=${canonicalSshKeyFile}`
-            : argument);
-          childConfig.sandboxReadOnlyFiles = replaceExactPath(childConfig.sandboxReadOnlyFiles, configuredSshKeyFile, canonicalSshKeyFile);
-          childConfig.sandboxReadOnlyFiles = replaceExactPath(childConfig.sandboxReadOnlyFiles, configuredSshPublicKeyFile, canonicalSshPublicKeyFile);
-          childConfig.sandboxReadOnlyFileOverrides = replaceExactPath(childConfig.sandboxReadOnlyFileOverrides, configuredSshKeyFile, canonicalSshKeyFile);
-          childConfig.sandboxReadOnlyFileOverrides = replaceExactPath(childConfig.sandboxReadOnlyFileOverrides, configuredSshPublicKeyFile, canonicalSshPublicKeyFile);
-          childConfig.codespaceSshKeyFile = canonicalSshKeyFile;
-          childConfig.codespaceSshPublicKeyFile = canonicalSshPublicKeyFile;
-          childConfig.codespaceSshKeyVerified = true;
+        if (childConfig.gatewayArgumentPolicy === 'codespace') {
+          const sshKeygenExecutable = await canonicalCodespaceSshKeygenExecutable();
+          const sshRuntimeDirectory = await mkdtemp(join(tmpdir(), 'local-mcp-codespace-ssh-'));
+          childConfig.codespaceSshRuntimeDirectory = sshRuntimeDirectory;
+          childConfig.codespaceSshKeygenExecutable = sshKeygenExecutable;
+          childConfig.sandboxInternalWritableDirectories = [...new Set([
+            ...(childConfig.sandboxInternalWritableDirectories ?? []),
+            sshRuntimeDirectory
+          ])];
+          childConfig.sandboxReadOnlyFiles = [...new Set([
+            ...(childConfig.sandboxReadOnlyFiles ?? []),
+            sshKeygenExecutable
+          ])];
+          childConfig.internalCleanupDirectories = [...new Set([
+            ...(childConfig.internalCleanupDirectories ?? []),
+            sshRuntimeDirectory
+          ])];
         }
       }
       await child.start();

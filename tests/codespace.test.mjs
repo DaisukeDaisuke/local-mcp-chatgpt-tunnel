@@ -8,32 +8,33 @@ import { signBundledIsolationContext } from '../app/bundled-isolation.mjs';
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
 const TEST_ISOLATION_KEY = '0123456789abcdef'.repeat(4);
 
-async function importCodespace({ roots = [process.cwd()], maxTransferBytes, isolationKey, sshKeyFile, allowSshKeyInWritableRoot = false, sshKeyVerifiedByGateway = false, disallowedPathGlobs = [], suffix = 'default' } = {}) {
+async function importCodespace({ roots = [process.cwd()], maxTransferBytes, isolationKey, disallowedPathGlobs = [], suffix = 'default' } = {}) {
   const previousArgv = process.argv;
   const previousAllowed = process.env.LOCAL_MCP_ALLOWED_DIRECTORIES;
   const previousFiles = process.env.LOCAL_MCP_ALLOWED_FILES;
   const previousDisallowedPathGlobs = process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS;
   const previousMax = process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES;
   const previousIsolationKey = process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY;
-  const previousAllowSshKeyInWritableRoot = process.env.LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT;
-  const previousSshKeyVerifiedByGateway = process.env.LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED;
   process.argv = [
     previousArgv[0],
     'tests/codespace.test.mjs',
-    `--gh-executable=${process.execPath}`,
-    ...(sshKeyFile ? [`--ssh-key-file=${sshKeyFile}`] : [])
+    `--gh-executable=${process.execPath}`
   ];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify(roots);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(disallowedPathGlobs);
-  process.env.LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT = allowSshKeyInWritableRoot ? '1' : '0';
-  process.env.LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED = sshKeyVerifiedByGateway ? '1' : '0';
   if (isolationKey === undefined) delete process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY;
   else process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY = isolationKey;
   if (maxTransferBytes === undefined) delete process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES;
   else process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES = String(maxTransferBytes);
   try {
-    return await import(`../mcp/codespace/server.mjs?test=${suffix}-${Date.now()}-${Math.random()}`);
+    const imported = await import(`../mcp/codespace/server.mjs?test=${suffix}-${Date.now()}-${Math.random()}`);
+    return {
+      ...imported,
+      createServer(options = {}) {
+        return imported.createServer({ sshKeyProvider: async () => undefined, ...options });
+      }
+    };
   } finally {
     process.argv = previousArgv;
     if (previousAllowed === undefined) delete process.env.LOCAL_MCP_ALLOWED_DIRECTORIES; else process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = previousAllowed;
@@ -41,8 +42,6 @@ async function importCodespace({ roots = [process.cwd()], maxTransferBytes, isol
     if (previousDisallowedPathGlobs === undefined) delete process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS; else process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = previousDisallowedPathGlobs;
     if (previousMax === undefined) delete process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES; else process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES = previousMax;
     if (previousIsolationKey === undefined) delete process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY; else process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY = previousIsolationKey;
-    if (previousAllowSshKeyInWritableRoot === undefined) delete process.env.LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT; else process.env.LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT = previousAllowSshKeyInWritableRoot;
-    if (previousSshKeyVerifiedByGateway === undefined) delete process.env.LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED; else process.env.LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED = previousSshKeyVerifiedByGateway;
   }
 }
 
@@ -504,68 +503,22 @@ test('codespace SSH joins only validated tokens into the one unavoidable remote 
   assert.deepEqual(commands, [['codespace', 'ssh', '-c', 'existing-space-123', 'node --version']]);
 });
 
-test('codespace can read only the fixed SSH key below a writable root while normal .ssh copy paths remain denied', async () => {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-ssh-key-root-')));
+test('codespace uses an internally supplied transient SSH key while normal .ssh copy paths remain denied', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-internal-ssh-key-root-')));
   const sshDirectory = join(root, '.ssh');
   await mkdir(sshDirectory);
-  const sshKeyFile = join(sshDirectory, 'codespaces_ed25519');
-  await writeFile(sshKeyFile, 'test-private-key', 'utf8');
-
-  const deniedImport = await importCodespace({ roots: [root], sshKeyFile, suffix: 'ssh-key-root-denied' });
-  let deniedExecutions = 0;
-  const deniedServer = deniedImport.createServer({ execute: async () => { deniedExecutions += 1; return { stdout: '', stderr: '', exitCode: 0 }; } });
-  await deniedServer(request(1, 'initialize'));
-  const denied = await deniedServer(request(2, 'tools/call', {
-    name: 'ssh',
-    arguments: { codespaceId: 'existing-space-123', command: ['node', '--version'] }
-  }));
-  assert.equal(denied.result.isError, true);
-  assert.equal(deniedExecutions, 0);
-
-  const allowedImport = await importCodespace({
-    roots: [root],
-    sshKeyFile,
-    allowSshKeyInWritableRoot: true,
-    disallowedPathGlobs: ['**.ssh**'],
-    suffix: 'ssh-key-root-allowed'
-  });
-  const commands = [];
-  const allowedServer = allowedImport.createServer({ execute: async (args) => { commands.push(args); return { stdout: 'ok', stderr: '', exitCode: 0 }; } });
-  await allowedServer(request(10, 'initialize'));
-  const allowed = await allowedServer(request(11, 'tools/call', {
-    name: 'ssh',
-    arguments: { codespaceId: 'existing-space-123', command: ['node', '--version'] }
-  }));
-  assert.equal(allowed.result.isError, false);
-  assert.deepEqual(commands, [[
-    'codespace', 'ssh', '-c', 'existing-space-123', '--', '-i', sshKeyFile, 'node --version'
-  ]]);
-
-  const copyDenied = await allowedServer(request(12, 'tools/call', {
-    name: 'copy_to_codespace',
-    arguments: {
-      codespaceId: 'existing-space-123',
-      sourceDirectory: root,
-      paths: ['.ssh/codespaces_ed25519'],
-      remoteDestination: '/workspaces/project'
-    }
-  }));
-  assert.equal(copyDenied.result.isError, true);
-  assert.equal(commands.length, 1);
-});
-
-test('codespace does not lstat or realpath a Gateway-verified fixed SSH key inside the sandbox', async () => {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-gateway-verified-key-root-')));
-  const sshKeyFile = join(root, '.ssh', 'gateway-verified-but-not-created');
+  await writeFile(join(sshDirectory, 'do-not-copy'), 'blocked', 'utf8');
+  const internalSshKey = join(tmpdir(), 'local-mcp-codespace-internal-key');
   const { createServer } = await importCodespace({
     roots: [root],
-    sshKeyFile,
-    allowSshKeyInWritableRoot: true,
-    sshKeyVerifiedByGateway: true,
-    suffix: 'ssh-key-gateway-verified-no-lstat'
+    disallowedPathGlobs: ['**.ssh**'],
+    suffix: 'internal-ssh-key'
   });
   const commands = [];
-  const server = createServer({ execute: async (args) => { commands.push(args); return { stdout: 'ok', stderr: '', exitCode: 0 }; } });
+  const server = createServer({
+    sshKeyProvider: async () => internalSshKey,
+    execute: async (args) => { commands.push(args); return { stdout: 'ok', stderr: '', exitCode: 0 }; }
+  });
   await server(request(1, 'initialize'));
   const reply = await server(request(2, 'tools/call', {
     name: 'ssh',
@@ -573,8 +526,20 @@ test('codespace does not lstat or realpath a Gateway-verified fixed SSH key insi
   }));
   assert.equal(reply.result.isError, false);
   assert.deepEqual(commands, [[
-    'codespace', 'ssh', '-c', 'existing-space-123', '--', '-i', sshKeyFile, 'node --version'
+    'codespace', 'ssh', '-c', 'existing-space-123', '--', '-i', internalSshKey, 'node --version'
   ]]);
+
+  const copyDenied = await server(request(3, 'tools/call', {
+    name: 'copy_to_codespace',
+    arguments: {
+      codespaceId: 'existing-space-123',
+      sourceDirectory: root,
+      paths: ['.ssh/do-not-copy'],
+      remoteDestination: '/workspaces/project'
+    }
+  }));
+  assert.equal(copyDenied.result.isError, true);
+  assert.equal(commands.length, 1);
 });
 
 test('codespace copy takes many local paths to one remote directory and always uses -e', async () => {
@@ -582,8 +547,10 @@ test('codespace copy takes many local paths to one remote directory and always u
   await writeFile(join(root, 'alpha.txt'), 'alpha', 'utf8');
   await writeFile(join(root, 'beta.txt'), 'beta', 'utf8');
   const { createServer } = await importCodespace({ roots: [root], suffix: 'copy-paths' });
+  const internalSshKey = join(tmpdir(), 'local-mcp-codespace-copy-key');
   const commands = [];
   const server = createServer({
+    sshKeyProvider: async () => internalSshKey,
     execute: async (args) => {
       commands.push(args);
       if (args[0] === 'codespace' && args[1] === 'ssh') return { stdout: 'started\n', stderr: '', exitCode: 0 };
@@ -601,13 +568,15 @@ test('codespace copy takes many local paths to one remote directory and always u
     }
   }));
   assert.equal(reply.result.isError, false);
-  assert.deepEqual(commands[0], ['codespace', 'ssh', '-c', 'existing-space-123', 'echo started']);
+  assert.deepEqual(commands[0], ['codespace', 'ssh', '-c', 'existing-space-123', '--', '-i', internalSshKey, 'echo started']);
   assert.equal(reply.result.structuredContent.result.sshReady, true);
   assert.equal(reply.result.structuredContent.result.startupStdout, 'started\n');
   assert.equal(reply.result.structuredContent.result.reusedSshReadiness, false);
   assert.equal(commands[1][0], 'codespace');
   assert.equal(commands[1][1], 'cp');
   assert.equal(commands[1].includes('-e'), true);
+  assert.equal(commands[1].includes('-i'), true);
+  assert.equal(commands[1].includes(internalSshKey), true);
   assert.equal(commands[1].includes('-r'), false);
   assert.equal(commands[1].includes(join(root, 'alpha.txt')), true);
   assert.equal(commands[1].includes(join(root, 'beta.txt')), true);

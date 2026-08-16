@@ -43,13 +43,6 @@ function boundedIntegerEnvironment(name, fallback, minimum, maximum) {
   return value;
 }
 
-function booleanPolicyEnvironment(name) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === '0') return false;
-  if (raw === '1') return true;
-  throw new Error(`${name} must be 0 or 1`);
-}
-
 function stringOption(name) {
   const prefix = `--${name}=`;
   const matches = process.argv.slice(2).filter((value) => value.startsWith(prefix));
@@ -60,7 +53,7 @@ function stringOption(name) {
 const help = process.argv.slice(2).some((value) => value === '--help' || value === '-h');
 for (const argument of process.argv.slice(2)) {
   if (argument === '--help' || argument === '-h') continue;
-  if (argument.startsWith('--gh-executable=') || argument.startsWith('--token-file=') || argument.startsWith('--ssh-key-file=')) continue;
+  if (argument.startsWith('--gh-executable=') || argument.startsWith('--token-file=')) continue;
   throw new Error(`Unknown argument: ${argument}`);
 }
 
@@ -79,11 +72,16 @@ function optionalAbsoluteFileArgument(value, name) {
 
 const ghExecutableConfigured = absoluteExecutableArgument(stringOption('gh-executable'));
 const tokenFileConfigured = optionalAbsoluteFileArgument(stringOption('token-file'), '--token-file');
-const sshKeyFileConfigured = optionalAbsoluteFileArgument(stringOption('ssh-key-file'), '--ssh-key-file');
-const allowSshKeyInWritableRoot = booleanPolicyEnvironment('LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT');
-const sshKeyVerifiedByGateway = booleanPolicyEnvironment('LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED');
+const sshRuntimeDirectoryConfigured = optionalAbsoluteFileArgument(
+  process.env.LOCAL_MCP_CODESPACE_SSH_RUNTIME_DIRECTORY,
+  'LOCAL_MCP_CODESPACE_SSH_RUNTIME_DIRECTORY'
+);
+const sshKeygenExecutableConfigured = optionalAbsoluteFileArgument(
+  process.env.LOCAL_MCP_CODESPACE_SSH_KEYGEN_EXECUTABLE,
+  'LOCAL_MCP_CODESPACE_SSH_KEYGEN_EXECUTABLE'
+);
 
-export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>] [--ssh-key-file=<absolute-private-key>]\n\nControls existing GitHub Codespaces only. It can list/view existing codespaces, run strictly tokenized SSH commands, copy selected local files/directories to one remote destination directory, and publish/privatize GitHub-hosted forwarded ports while returning their browseUrl. It never creates, rebuilds, stops, deletes, or changes the machine type of a codespace, and it never creates a localhost port tunnel.\n`;
+export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>]\n\nControls existing GitHub Codespaces only. SSH authentication keys are generated internally for the MCP process; no user SSH key is accepted. It can list/view/stop existing codespaces, run strictly tokenized SSH commands, copy selected local files/directories to one remote destination directory, and publish/privatize GitHub-hosted forwarded ports while returning their browseUrl. It never creates, rebuilds, deletes, or changes the machine type of a codespace, and it never creates a localhost port tunnel.\n`;
 
 function pathArray(name, fallback = []) {
   if (help) return [];
@@ -433,18 +431,81 @@ async function githubToken() {
   return tokenPromise;
 }
 
+const SSH_KEYGEN_TIMEOUT_MS = 30_000;
+const SSH_KEYGEN_MAX_OUTPUT_BYTES = 64 * 1024;
 let sshKeyPromise;
-async function sshKeyFile() {
-  if (!sshKeyFileConfigured) return undefined;
-  if (sshKeyVerifiedByGateway) return sshKeyFileConfigured;
+
+function generateInternalSshKey(executable, privateKeyPath) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
+    let outputBytes = 0;
+    let stdout = '';
+    let stderr = '';
+    let timer;
+    const child = spawn(executable, ['-q', '-t', 'ed25519', '-N', '', '-f', privateKeyPath], {
+      cwd: sshRuntimeDirectoryConfigured,
+      env: environmentWithoutBundledIsolationKey(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: false
+    });
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) rejectPromise(error);
+      else resolvePromise();
+    };
+    const capture = (stream, chunk) => {
+      const text = String(chunk);
+      outputBytes += Buffer.byteLength(text, 'utf8');
+      if (outputBytes > SSH_KEYGEN_MAX_OUTPUT_BYTES) {
+        child.kill();
+        finish(new Error('ssh-keygen exceeded the bounded output limit'));
+        return;
+      }
+      if (stream === 'stdout') stdout += text;
+      else stderr += text;
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => capture('stdout', chunk));
+    child.stderr.on('data', (chunk) => capture('stderr', chunk));
+    child.once('error', (error) => finish(error));
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      if (code === 0) finish();
+      else finish(new Error(`ssh-keygen failed (${signal ?? code ?? 'unknown'}): ${(stderr || stdout).trim() || 'no diagnostic output'}`));
+    });
+    timer = setTimeout(() => {
+      child.kill();
+      finish(new Error(`ssh-keygen timed out after ${SSH_KEYGEN_TIMEOUT_MS}ms`));
+    }, SSH_KEYGEN_TIMEOUT_MS);
+  });
+}
+
+async function internalSshKeyFile() {
+  if (!sshRuntimeDirectoryConfigured || !sshKeygenExecutableConfigured) {
+    if (process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY) {
+      throw new Error('Codespace internal SSH key runtime was not provisioned by the Gateway');
+    }
+    return undefined;
+  }
   sshKeyPromise ??= (async () => {
-    const info = await lstat(sshKeyFileConfigured);
-    if (info.isSymbolicLink() || !info.isFile()) throw new Error('--ssh-key-file must be a non-symbolic-link regular file');
-    if (info.size < 1 || info.size > 1024 * 1024) throw new Error('--ssh-key-file must contain from 1 byte through 1 MiB');
-    const actual = await realpath(sshKeyFileConfigured);
-    const selectedRoots = await roots();
-    if (!allowSshKeyInWritableRoot && selectedRoots.some((root) => within(root, actual))) throw new Error('--ssh-key-file must be outside writable workspace roots');
-    return actual;
+    const runtimeInfo = await lstat(sshRuntimeDirectoryConfigured);
+    if (runtimeInfo.isSymbolicLink() || !runtimeInfo.isDirectory()) {
+      throw new Error('Codespace internal SSH runtime must be a non-symbolic-link directory');
+    }
+    const runtimeDirectory = await realpath(sshRuntimeDirectoryConfigured);
+    const privateKeyPath = join(runtimeDirectory, 'codespace-key');
+    const publicKeyPath = `${privateKeyPath}.pub`;
+    await generateInternalSshKey(sshKeygenExecutableConfigured, privateKeyPath);
+    for (const [label, path] of [['private', privateKeyPath], ['public', publicKeyPath]]) {
+      const info = await lstat(path);
+      if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Generated Codespace ${label} SSH key is not a regular file`);
+      if (info.size < 1 || info.size > 1024 * 1024) throw new Error(`Generated Codespace ${label} SSH key has an invalid size`);
+    }
+    return privateKeyPath;
   })();
   return sshKeyPromise;
 }
@@ -579,8 +640,8 @@ function parseJsonOutput(execution, label) {
   catch (error) { throw new Error(`${label} returned invalid JSON: ${error.message}`); }
 }
 
-async function sshGhArgs(codespace, remoteCommand) {
-  const key = await sshKeyFile();
+async function sshGhArgs(codespace, remoteCommand, sshKeyProvider = internalSshKeyFile) {
+  const key = await sshKeyProvider();
   return [
     'codespace', 'ssh', '-c', codespace,
     ...(key ? ['--', '-i', key] : []),
@@ -592,22 +653,22 @@ const REMOTE_REALPATH_COMMAND = "bash -c 'IFS= read -r encoded || exit 2; path=$
 const REMOTE_GIT_ROOT_COMMAND = "bash -c 'IFS= read -r encoded || exit 2; path=$(printf %s \"$encoded\" | base64 -d) || exit 2; exec git -C \"$path\" rev-parse --show-toplevel'";
 const REMOTE_RG_SEARCH_COMMAND = "bash -c 'set -u; read_b64(){ IFS= read -r line || return 1; printf %s \"$line\" | base64 -d; }; search_base=$(read_b64) || exit 2; query=$(read_b64) || exit 2; IFS= read -r fixed || exit 2; IFS= read -r sensitive || exit 2; IFS= read -r result_cap || exit 2; IFS= read -r glob_count || exit 2; args=(--json --color=never --hidden --max-filesize " + REMOTE_MAX_TEXT_BYTES + " --glob \"!.git\" --glob \"!.git/**\"); if [ \"$fixed\" = 1 ]; then args+=(-F); fi; if [ \"$sensitive\" = 0 ]; then args+=(-i); fi; for ((i=0; i<glob_count; i++)); do glob=$(read_b64) || exit 2; args+=(--glob \"$glob\"); done; rg \"${args[@]}\" -- \"$query\" \"$search_base\" | awk -v max=\"$result_cap\" \"{ print; if (index(\\$0, \\\"\\\\\\\"type\\\\\\\":\\\\\\\"match\\\\\\\"\\\") > 0) { count++; if (count >= max) exit 0 } }\"; statuses=(\"${PIPESTATUS[@]}\"); rg_rc=\"${statuses[0]}\"; awk_rc=\"${statuses[1]}\"; if [ \"$awk_rc\" != 0 ]; then exit \"$awk_rc\"; fi; if [ \"$rg_rc\" = 0 ] || [ \"$rg_rc\" = 1 ] || [ \"$rg_rc\" = 141 ]; then exit 0; fi; exit \"$rg_rc\"'";
 
-async function runFixedRemote(codespace, execute, remoteCommand, { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS, stdinText } = {}) {
-  return execute(await sshGhArgs(codespace, remoteCommand), { timeoutMs, stdinText });
+async function runFixedRemote(codespace, execute, remoteCommand, { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS, stdinText } = {}, sshKeyProvider = internalSshKeyFile) {
+  return execute(await sshGhArgs(codespace, remoteCommand, sshKeyProvider), { timeoutMs, stdinText });
 }
 
-async function canonicalRemoteWorkspacePath(codespace, value, execute, timeoutMs) {
+async function canonicalRemoteWorkspacePath(codespace, value, execute, timeoutMs, sshKeyProvider = internalSshKeyFile) {
   const requested = safeRemoteWorkspacePath(value, 'path');
   const execution = await runFixedRemote(codespace, execute, REMOTE_REALPATH_COMMAND, {
     timeoutMs,
     stdinText: `${base64Line(requested)}\n`
-  });
+  }, sshKeyProvider);
   const actual = execution.stdout.trim();
   return safeRemoteWorkspacePath(actual, 'resolved remote path');
 }
 
-async function ripgrepVersion(codespace, execute, timeoutMs = 30_000) {
-  const execution = await runFixedRemote(codespace, execute, 'rg --version', { timeoutMs });
+async function ripgrepVersion(codespace, execute, timeoutMs = 30_000, sshKeyProvider = internalSshKeyFile) {
+  const execution = await runFixedRemote(codespace, execute, 'rg --version', { timeoutMs }, sshKeyProvider);
   const firstLine = execution.stdout.split(/\r?\n/, 1)[0]?.trim() ?? '';
   if (!/^ripgrep\s+\d/i.test(firstLine)) throw new Error(`Unexpected rg --version output: ${firstLine || '(empty)'}`);
   return { version: firstLine, stdout: execution.stdout };
@@ -644,19 +705,19 @@ function parseRipgrepJson(stdout, maxResults) {
   return { matches, count: matches.length, totalMatches, truncated: totalMatches > matches.length, redacted };
 }
 
-async function ensureCodespaceAvailable(codespace, execute, timeoutMs) {
+async function ensureCodespaceAvailable(codespace, execute, timeoutMs, sshKeyProvider = internalSshKeyFile) {
   let confirmed = false;
   try {
     const viewed = await execute(['codespace', 'view', '-c', codespace, '--json', 'state', '--jq', '.state'], { timeoutMs });
     confirmed = viewed.stdout.trim().toLowerCase() === 'available';
   } catch { confirmed = false; }
   if (confirmed) return { woke: false };
-  await execute(await sshGhArgs(codespace, 'true'), { timeoutMs });
+  await execute(await sshGhArgs(codespace, 'true', sshKeyProvider), { timeoutMs });
   return { woke: true };
 }
 
-async function probeCodespaceSshReady(codespace, execute, timeoutMs) {
-  const startup = await execute(await sshGhArgs(codespace, 'echo started'), { timeoutMs });
+async function probeCodespaceSshReady(codespace, execute, timeoutMs, sshKeyProvider = internalSshKeyFile) {
+  const startup = await execute(await sshGhArgs(codespace, 'echo started', sshKeyProvider), { timeoutMs });
   const startupConfirmed = startup.stdout.split(/\r?\n/).some((line) => line.trim() === 'started');
   if (!startupConfirmed) throw new Error('Codespace SSH readiness probe completed without the expected "started" marker');
   return {
@@ -817,6 +878,7 @@ function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
 
 export function createServer(options = {}) {
   const rawExecute = options.execute ?? runGh;
+  const sshKeyProvider = options.sshKeyProvider ?? internalSshKeyFile;
   const sshReadyScopes = new Set();
   const readinessKey = (codespace) => `${isolationScopeKey()}\0${codespace}`;
   const execute = async (args, executeOptions = {}) => {
@@ -874,7 +936,7 @@ export function createServer(options = {}) {
       }
       case 'roots': {
         const codespace = safeCodespaceId(args.codespaceId);
-        const execution = await runFixedRemote(codespace, execute, 'find /workspaces -mindepth 1 -maxdepth 1 -type d -print0', { timeoutMs: 30_000 });
+        const execution = await runFixedRemote(codespace, execute, 'find /workspaces -mindepth 1 -maxdepth 1 -type d -print0', { timeoutMs: 30_000 }, sshKeyProvider);
         const roots = execution.stdout.split('\0').filter(Boolean).map((entry) => safeRemoteWorkspacePath(entry, 'workspace root')).sort();
         return { codespaceId: codespace, roots };
       }
@@ -882,28 +944,28 @@ export function createServer(options = {}) {
         const codespace = safeCodespaceId(args.codespaceId);
         const timeoutMs = timeout(args.timeoutMs, 30_000);
         const requested = safeRemoteWorkspacePath(args.path, 'path');
-        const canonical = await canonicalRemoteWorkspacePath(codespace, requested, execute, timeoutMs);
+        const canonical = await canonicalRemoteWorkspacePath(codespace, requested, execute, timeoutMs, sshKeyProvider);
         const execution = await runFixedRemote(codespace, execute, REMOTE_GIT_ROOT_COMMAND, {
           timeoutMs,
           stdinText: `${base64Line(canonical)}\n`
-        });
+        }, sshKeyProvider);
         const gitRoot = safeRemoteWorkspacePath(execution.stdout.trim(), 'git root');
         return { codespaceId: codespace, requestedPath: requested, canonicalPath: canonical, gitRoot };
       }
       case 'ripgrep_version': {
         const codespace = safeCodespaceId(args.codespaceId);
-        const version = await ripgrepVersion(codespace, execute, 30_000);
+        const version = await ripgrepVersion(codespace, execute, 30_000, sshKeyProvider);
         return { codespaceId: codespace, version: version.version };
       }
       case 'install_ripgrep': {
         const codespace = safeCodespaceId(args.codespaceId);
         const timeoutMs = timeout(args.timeoutMs);
         try {
-          const version = await ripgrepVersion(codespace, execute, Math.min(timeoutMs, 30_000));
+          const version = await ripgrepVersion(codespace, execute, Math.min(timeoutMs, 30_000), sshKeyProvider);
           return { codespaceId: codespace, installed: false, version: version.version };
         } catch {
-          await runFixedRemote(codespace, execute, "bash -c 'if command -v apt-get >/dev/null 2>&1; then sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep; elif command -v dnf >/dev/null 2>&1; then sudo -n dnf install -y ripgrep; elif command -v yum >/dev/null 2>&1; then sudo -n yum install -y ripgrep; elif command -v apk >/dev/null 2>&1; then sudo -n apk add ripgrep; else echo no-supported-package-manager >&2; exit 127; fi'", { timeoutMs });
-          const version = await ripgrepVersion(codespace, execute, Math.min(timeoutMs, 30_000));
+          await runFixedRemote(codespace, execute, "bash -c 'if command -v apt-get >/dev/null 2>&1; then sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y ripgrep; elif command -v dnf >/dev/null 2>&1; then sudo -n dnf install -y ripgrep; elif command -v yum >/dev/null 2>&1; then sudo -n yum install -y ripgrep; elif command -v apk >/dev/null 2>&1; then sudo -n apk add ripgrep; else echo no-supported-package-manager >&2; exit 127; fi'", { timeoutMs }, sshKeyProvider);
+          const version = await ripgrepVersion(codespace, execute, Math.min(timeoutMs, 30_000), sshKeyProvider);
           return { codespaceId: codespace, installed: true, version: version.version };
         }
       }
@@ -918,9 +980,9 @@ export function createServer(options = {}) {
         const validatedGlobs = globs.map(safeRemoteGlob);
         const maxResults = boundedSearchLimit(args.maxResults ?? 100);
         const requestedBase = safeRemoteWorkspacePath(args.searchBase, 'searchBase');
-        const searchBase = await canonicalRemoteWorkspacePath(codespace, requestedBase, execute, timeoutMs);
+        const searchBase = await canonicalRemoteWorkspacePath(codespace, requestedBase, execute, timeoutMs, sshKeyProvider);
         try {
-          await ripgrepVersion(codespace, execute, Math.min(timeoutMs, 30_000));
+          await ripgrepVersion(codespace, execute, Math.min(timeoutMs, 30_000), sshKeyProvider);
         } catch {
           throw new Error('ripgrep is not installed in this Codespace; call install_ripgrep first');
         }
@@ -933,7 +995,7 @@ export function createServer(options = {}) {
           String(validatedGlobs.length),
           ...validatedGlobs.map(base64Line)
         ].join('\n') + '\n';
-        const execution = await runFixedRemote(codespace, execute, REMOTE_RG_SEARCH_COMMAND, { timeoutMs, stdinText: payload });
+        const execution = await runFixedRemote(codespace, execute, REMOTE_RG_SEARCH_COMMAND, { timeoutMs, stdinText: payload }, sshKeyProvider);
         const parsed = parseRipgrepJson(execution.stdout, maxResults);
         return { codespaceId: codespace, searchBase, query: args.query, ...parsed };
       }
@@ -943,7 +1005,7 @@ export function createServer(options = {}) {
         const remoteCommand = command.join(' ');
         if (args.async !== undefined && typeof args.async !== 'boolean') throw new Error('async must be boolean');
         const timeoutMs = sshTimeout(args.timeoutMs);
-        const ghArgs = await sshGhArgs(codespace, remoteCommand);
+        const ghArgs = await sshGhArgs(codespace, remoteCommand, sshKeyProvider);
         if (args.async === true) {
           const job = await asyncJobs.start({ codespaceId: codespace, args: ghArgs, timeoutMs });
           return { ...job, async: true };
@@ -968,7 +1030,7 @@ export function createServer(options = {}) {
         let readiness = { startupStdout: '', startupStderr: '', reused: wasReady };
         if (!wasReady) {
           try {
-            readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs)), reused: false };
+            readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs, sshKeyProvider)), reused: false };
           } catch (error) {
             sshReadyScopes.delete(key);
             throw error;
@@ -977,7 +1039,7 @@ export function createServer(options = {}) {
         const command = ['codespace', 'cp', '-e'];
         if (selections.some((selection) => selection.directory)) command.push('-r');
         command.push('-c', codespace);
-        const sshKey = await sshKeyFile();
+        const sshKey = await sshKeyProvider();
         if (sshKey) command.push('--', '-i', sshKey);
         command.push(...selections.map((selection) => selection.path), remoteDestination);
         let execution;
@@ -987,7 +1049,7 @@ export function createServer(options = {}) {
         } catch (error) {
           if (!wasReady) throw error;
           sshReadyScopes.delete(key);
-          readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs)), reused: false };
+          readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs, sshKeyProvider)), reused: false };
           retriedAfterReadinessRefresh = true;
           execution = await execute(command, { timeoutMs });
         }
@@ -1018,7 +1080,7 @@ export function createServer(options = {}) {
         const codespace = safeCodespaceId(args.codespaceId);
         const port = safePort(args.port, 'port');
         const timeoutMs = timeout(args.timeoutMs);
-        const availability = await ensureCodespaceAvailable(codespace, execute, timeoutMs);
+        const availability = await ensureCodespaceAvailable(codespace, execute, timeoutMs, sshKeyProvider);
         const before = selectedForwardedPort(await portsForCodespace(codespace, execute, timeoutMs), port);
         if (!before) throw new Error(`Codespace port ${port} is not currently forwarded on GitHub infrastructure; start the remote service or configure Codespaces forwardPorts first`);
         await execute(['codespace', 'ports', 'visibility', `${port}:public`, '-c', codespace], { timeoutMs });

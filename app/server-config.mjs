@@ -37,8 +37,8 @@ const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_GATEWAY_ISOLATION_KEY',
   'LOCAL_MCP_CODEX_SANDBOX_MODE',
   'LOCAL_MCP_CODEX_EXECUTABLE',
-  'LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT',
-  'LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED'
+  'LOCAL_MCP_CODESPACE_SSH_RUNTIME_DIRECTORY',
+  'LOCAL_MCP_CODESPACE_SSH_KEYGEN_EXECUTABLE'
 ]);
 
 function platformPath(platform = process.platform) {
@@ -209,8 +209,8 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if (raw.dangerous_allow_gateway_config_access !== undefined && typeof raw.dangerous_allow_gateway_config_access !== 'boolean') {
     throw new Error(`mcp_servers.${name}.dangerous_allow_gateway_config_access must be boolean`);
   }
-  if (raw.dangerous_allow_codespace_ssh_key_in_writable_root !== undefined && typeof raw.dangerous_allow_codespace_ssh_key_in_writable_root !== 'boolean') {
-    throw new Error(`mcp_servers.${name}.dangerous_allow_codespace_ssh_key_in_writable_root must be boolean`);
+  if (raw.dangerous_allow_codespace_ssh_key_in_writable_root !== undefined) {
+    throw new Error(`mcp_servers.${name}.dangerous_allow_codespace_ssh_key_in_writable_root is no longer supported; Codespace SSH keys are generated internally`);
   }
   const timeoutSeconds = raw.tool_timeout_sec ?? raw.request_timeout_sec ?? 1800;
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw new Error(`mcp_servers.${name}.tool_timeout_sec must be positive`);
@@ -266,14 +266,11 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const allowedFiles = absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform);
   const codespaceGhExecutable = codespaceServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
   const codespaceTokenFile = codespaceServer ? startupPathOption(args, 'token-file', platform) : undefined;
-  const codespaceSshKeyFile = codespaceServer ? startupPathOption(args, 'ssh-key-file', platform) : undefined;
-  const codespaceSshPublicKeyFile = codespaceSshKeyFile ? `${codespaceSshKeyFile}.pub` : undefined;
-  const dangerousAllowCodespaceSshKeyInWritableRoot = codespaceServer && raw.dangerous_allow_codespace_ssh_key_in_writable_root === true;
+  if (codespaceServer && args.some((argument) => argument.startsWith('--ssh-key-file='))) {
+    throw new Error(`mcp_servers.${name} --ssh-key-file is no longer supported; Codespace SSH keys are generated internally`);
+  }
   const sandboxReadOnlyFiles = codespaceServer
-    ? [codespaceGhExecutable, codespaceTokenFile, codespaceSshKeyFile, codespaceSshPublicKeyFile].filter(Boolean)
-    : [];
-  const sandboxReadOnlyFileOverrides = dangerousAllowCodespaceSshKeyInWritableRoot && codespaceSshKeyFile
-    ? [codespaceSshKeyFile, codespaceSshPublicKeyFile]
+    ? [codespaceGhExecutable, codespaceTokenFile].filter(Boolean)
     : [];
   const protectedGatewayLogs = protectedLogPolicyEntries(
     allowedDirectories,
@@ -296,11 +293,6 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
       throw new Error(`mcp_servers.${name} fixed trust files must be outside allowed_directories so sandboxed code cannot modify them`);
     }
   }
-  if (codespaceSshKeyFile
-    && !dangerousAllowCodespaceSshKeyInWritableRoot
-    && [codespaceSshKeyFile, codespaceSshPublicKeyFile].some((trustFile) => allowedDirectories.some((directory) => pathWithin(directory, trustFile, platform)))) {
-    throw new Error(`mcp_servers.${name} fixed trust files must be outside allowed_directories so sandboxed code cannot modify them`);
-  }
   return {
     name,
     prefix: typeof raw.prefix === 'string' && raw.prefix ? raw.prefix : name,
@@ -322,18 +314,14 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
     gatewayArgumentPolicy: codespaceServer ? 'codespace' : 'default',
-    codespaceSshKeyFile,
-    codespaceSshPublicKeyFile,
     allowedDirectories,
     allowedFiles,
     sandboxReadOnlyFiles,
-    sandboxReadOnlyFileOverrides,
     sandboxReadOnlyDirectories,
     disallowedDirectories: absolutePathArray(raw.disallowed_directories, `mcp_servers.${name}.disallowed_directories`, platform),
     disallowedFiles: absolutePathArray(raw.disallowed_files, `mcp_servers.${name}.disallowed_files`, platform),
     disallowedPathGlobs: normalizeDisallowedPathGlobs(raw.disallowed_path_globs, `mcp_servers.${name}.disallowed_path_globs`),
     dangerousAllowGatewayConfigAccess: raw.dangerous_allow_gateway_config_access === true,
-    dangerousAllowCodespaceSshKeyInWritableRoot,
     protectedGatewayConfigPaths,
     protectedGatewayLogDirectories: protectedGatewayLogs.directories,
     protectedGatewayLogFiles: protectedGatewayLogs.files

@@ -21,7 +21,7 @@ test('warning reports sandboxed startup args and allowed directories with the lo
       {
         name: 'codespace',
         sandbox: 'onlineworkspace',
-        args: ['server.mjs', '--ssh-key-file=C:\\Users\\owner\\.ssh\\id_ed25519'],
+        args: ['server.mjs', '--token-file=C:\\Users\\owner\\.ssh\\poop.txt'],
         allowedDirectories: ['C:\\Users\\owner\\Documents\\.private-workspace']
       },
       {
@@ -50,7 +50,7 @@ test('warning reports sandboxed startup args and allowed directories with the lo
   assert.match(warning, /Codex sandbox ABSOLUTELY NEVER/);
   assert.match(warning, /Configuration: C:\\config\\gateway\.toml/);
   assert.match(warning, /mcp_servers\.codespace\.args\[1\].*"\.ssh"/);
-  assert.doesNotMatch(warning, /id_ed25519/);
+  assert.doesNotMatch(warning, /poop\.txt/);
   assert.match(warning, /mcp_servers\.codespace\.allowed_directories\[0\].*\.private-workspace/);
   assert.doesNotMatch(warning, /mcp_servers\.legacy/);
 });

@@ -276,12 +276,13 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# Existing GitHub Codespaces only. There is intentionally no create/start/stop/delete/rebuild tool.
+# Existing GitHub Codespaces only. There is intentionally no create/start/delete/rebuild tool; stop is supported.
 # Use a fixed token file when Windows Credential Manager is not visible from the Codex sandbox user.
-# The token file, SSH private key, and gh.exe are added to the permission profile as read-only trust inputs.
+# The token file and gh.exe are read-only trust inputs. SSH keys are generated internally in a non-hidden
+# temporary runtime directory and are never taken from or granted access to the user's .ssh directory.
 [mcp_servers.codespace]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codespace\server.mjs', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt', '--ssh-key-file=C:\ABSOLUTE\PATH\TO\codespaces_ed25519']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\codespace\server.mjs', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt']
 cwd = 'C:\ABSOLUTE\PATH\TO\PROJECT\WORKSPACE'
 enabled = false
 sandbox = "onlineworkspace"
@@ -289,9 +290,6 @@ codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "codespace"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
-# Keep Gateway path filtering enabled, but permit only the fixed --ssh-key-file to
-# become an exact read-only Codex sandbox entry when it lives below allowed_directories.
-dangerous_allow_codespace_ssh_key_in_writable_root = false
 startup_timeout_sec = 30
 tool_timeout_sec = 660
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\PROJECT\WORKSPACE']

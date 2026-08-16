@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { buildChildEnvironment } from './child-environment.mjs';
 import { CodexAppServerSandboxedProcess } from './codex-app-server.mjs';
@@ -71,8 +72,12 @@ export class StdioMcpChild {
       LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(disallowedFiles),
       LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? []),
       LOCAL_MCP_CODEX_SANDBOX_MODE: this.config.sandbox ?? 'never',
-      LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT: this.config.dangerousAllowCodespaceSshKeyInWritableRoot ? '1' : '0',
-      LOCAL_MCP_CODESPACE_SSH_KEY_VERIFIED: this.config.codespaceSshKeyVerified ? '1' : '0',
+      ...(this.config.codespaceSshRuntimeDirectory
+        ? { LOCAL_MCP_CODESPACE_SSH_RUNTIME_DIRECTORY: this.config.codespaceSshRuntimeDirectory }
+        : {}),
+      ...(this.config.codespaceSshKeygenExecutable
+        ? { LOCAL_MCP_CODESPACE_SSH_KEYGEN_EXECUTABLE: this.config.codespaceSshKeygenExecutable }
+        : {}),
       ...(this.config.isBundled && this.config.gatewayIsolationKey
         ? { LOCAL_MCP_GATEWAY_ISOLATION_KEY: this.config.gatewayIsolationKey }
         : {}),
@@ -148,12 +153,22 @@ export class StdioMcpChild {
 
   async close() {
     this.closed = true;
-    if (this.sandboxedChild) await this.sandboxedChild.close();
-    if (this.child) {
-      this.child.stdin.end();
-      if (this.child.exitCode === null && !this.child.killed) this.child.kill();
+    try {
+      if (this.sandboxedChild) await this.sandboxedChild.close();
+      if (this.child) {
+        this.child.stdin.end();
+        if (this.child.exitCode === null && !this.child.killed) this.child.kill();
+      }
+    } finally {
+      this.failAll(new Error(`${this.config.name} closed`));
+      const cleanupResults = await Promise.allSettled((this.config.internalCleanupDirectories ?? []).map((path) =>
+        rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+      ));
+      for (const result of cleanupResults) {
+        if (result.status === 'rejected') this.writeStderr(`failed to remove internal runtime directory: ${result.reason?.message ?? result.reason}\n`);
+      }
+      this.config.internalCleanupDirectories = [];
     }
-    this.failAll(new Error(`${this.config.name} closed`));
   }
 
   isWritable() {

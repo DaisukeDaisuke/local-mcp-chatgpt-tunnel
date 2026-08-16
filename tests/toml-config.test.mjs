@@ -230,26 +230,24 @@ test('codespace bundled MCP requires onlineworkspace', async () => {
   await assert.rejects(loadGatewayConfig(badPath), /sandbox must be onlineworkspace for codespace/);
 });
 
-test('codespace fixed token/key files become read-only sandbox trust inputs', async () => {
+test('codespace fixed token file becomes a read-only sandbox trust input', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-trust-files-'));
   const workspace = join(directory, 'workspace');
   const tokenFile = join(directory, 'gh-token.txt');
-  const sshKeyFile = join(directory, 'codespace-key');
-  const sshPublicKeyFile = `${sshKeyFile}.pub`;
   const serverPath = resolve('mcp/codespace/server.mjs');
   const path = join(directory, 'gateway.toml');
   await writeFile(path, [
     'private_use_only = true',
     '[mcp_servers.codespace]',
     `command = '${process.execPath}'`,
-    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${tokenFile}', '--ssh-key-file=${sshKeyFile}']`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${tokenFile}']`,
     `cwd = '${workspace}'`,
     'sandbox = "onlineworkspace"',
     `codex_executable = '${process.execPath}'`,
     `allowed_directories = ['${workspace}']`
   ].join('\n'), 'utf8');
   const config = await loadGatewayConfig(path);
-  assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [process.execPath, tokenFile, sshKeyFile, sshPublicKeyFile]);
+  assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [process.execPath, tokenFile]);
 });
 
 test('codespace fixed trust files may not live inside writable workspace roots', async () => {
@@ -271,14 +269,14 @@ test('codespace fixed trust files may not live inside writable workspace roots',
   await assert.rejects(loadGatewayConfig(path), /fixed trust files must be outside allowed_directories/);
 });
 
-test('codespace may grant only its fixed SSH key an exact read-only exception below a writable root', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-ssh-key-writable-'));
+test('codespace rejects the removed user SSH key argument', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-removed-ssh-key-'));
   const workspace = join(directory, 'workspace');
-  const sshKeyFile = join(workspace, '.ssh', 'codespaces_ed25519');
   const tokenFile = join(directory, 'gh-token.txt');
+  const sshKeyFile = join(directory, 'legacy-key');
   const serverPath = resolve('mcp/codespace/server.mjs');
-  const allowedPath = join(directory, 'allowed.toml');
-  await writeFile(allowedPath, [
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
     'private_use_only = true',
     '[mcp_servers.codespace]',
     `command = '${process.execPath}'`,
@@ -286,26 +284,29 @@ test('codespace may grant only its fixed SSH key an exact read-only exception be
     `cwd = '${workspace}'`,
     'sandbox = "onlineworkspace"',
     `codex_executable = '${process.execPath}'`,
-    'dangerous_allow_codespace_ssh_key_in_writable_root = true',
     `allowed_directories = ['${workspace}']`
   ].join('\n'), 'utf8');
-  const config = await loadGatewayConfig(allowedPath);
-  assert.deepEqual(config.servers[0].sandboxReadOnlyFileOverrides, [sshKeyFile]);
+  await assert.rejects(loadGatewayConfig(path), /--ssh-key-file is no longer supported/);
+});
 
-  const tokenInsideWorkspace = sshKeyFile;
-  const rejectedPath = join(directory, 'token-still-rejected.toml');
-  await writeFile(rejectedPath, [
+test('codespace rejects the removed writable-root SSH key exception flag', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-removed-ssh-key-flag-'));
+  const workspace = join(directory, 'workspace');
+  const tokenFile = join(directory, 'gh-token.txt');
+  const serverPath = resolve('mcp/codespace/server.mjs');
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
     'private_use_only = true',
     '[mcp_servers.codespace]',
     `command = '${process.execPath}'`,
-    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${tokenInsideWorkspace}', '--ssh-key-file=${sshKeyFile}']`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${tokenFile}']`,
     `cwd = '${workspace}'`,
     'sandbox = "onlineworkspace"',
     `codex_executable = '${process.execPath}'`,
     'dangerous_allow_codespace_ssh_key_in_writable_root = true',
     `allowed_directories = ['${workspace}']`
   ].join('\n'), 'utf8');
-  await assert.rejects(loadGatewayConfig(rejectedPath), /fixed trust files must be outside allowed_directories/);
+  await assert.rejects(loadGatewayConfig(path), /dangerous_allow_codespace_ssh_key_in_writable_root is no longer supported/);
 });
 
 test('gateway requires absolute command paths only for elevated sandbox mode', async () => {
