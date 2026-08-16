@@ -3,10 +3,12 @@ import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { signBundledIsolationContext } from '../app/bundled-isolation.mjs';
 
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
+const TEST_ISOLATION_KEY = '0123456789abcdef'.repeat(4);
 
-async function importCodespace({ roots = [process.cwd()], maxTransferBytes, suffix = 'default' } = {}) {
+async function importCodespace({ roots = [process.cwd()], maxTransferBytes, isolationKey, suffix = 'default' } = {}) {
   const previousArgv = process.argv;
   const previousAllowed = process.env.LOCAL_MCP_ALLOWED_DIRECTORIES;
   const previousFiles = process.env.LOCAL_MCP_ALLOWED_FILES;
@@ -15,7 +17,8 @@ async function importCodespace({ roots = [process.cwd()], maxTransferBytes, suff
   process.argv = [previousArgv[0], 'tests/codespace.test.mjs', `--gh-executable=${process.execPath}`];
   process.env.LOCAL_MCP_ALLOWED_DIRECTORIES = JSON.stringify(roots);
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
-  delete process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY;
+  if (isolationKey === undefined) delete process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY;
+  else process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY = isolationKey;
   if (maxTransferBytes === undefined) delete process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES;
   else process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES = String(maxTransferBytes);
   try {
@@ -27,6 +30,20 @@ async function importCodespace({ roots = [process.cwd()], maxTransferBytes, suff
     if (previousMax === undefined) delete process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES; else process.env.CODESPACE_MCP_MAX_TRANSFER_BYTES = previousMax;
     if (previousIsolationKey === undefined) delete process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY; else process.env.LOCAL_MCP_GATEWAY_ISOLATION_KEY = previousIsolationKey;
   }
+}
+
+function isolatedArguments(root, isolatedId, args = {}) {
+  const context = { isolatedId, base: root, roots: [root] };
+  return {
+    ...args,
+    __localMcpIsolation: {
+      version: 1,
+      isolatedId,
+      base: root,
+      roots: [root],
+      signature: signBundledIsolationContext(TEST_ISOLATION_KEY, context)
+    }
+  };
 }
 
 test('codespace exposes existing-codespace operations but no create/start/stop/delete tool', async () => {
@@ -203,6 +220,73 @@ test('codespace async SSH can be cancelled and SSH never accepts a runtime limit
   assert.equal(status.result.structuredContent.result.status, 'cancelled');
 });
 
+test('codespace ownership is last-isolation-wins and a revoked older isolation must defer to the user', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-owner-')));
+  const { createServer } = await importCodespace({ roots: [root], isolationKey: TEST_ISOLATION_KEY, suffix: 'ownership' });
+  const executions = [];
+  const server = createServer({ execute: async (args) => {
+    executions.push(args);
+    return { stdout: JSON.stringify({ name: 'existing-space-123' }), stderr: '', exitCode: 0 };
+  } });
+  await server(request(1, 'initialize'));
+
+  const first = await server(request(2, 'tools/call', {
+    name: 'view_codespace',
+    arguments: isolatedArguments(root, 'ai-session-a', { codespaceId: 'existing-space-123' })
+  }));
+  assert.equal(first.result.isError, false);
+
+  const second = await server(request(3, 'tools/call', {
+    name: 'view_codespace',
+    arguments: isolatedArguments(root, 'ai-session-b', { codespaceId: 'existing-space-123' })
+  }));
+  assert.equal(second.result.isError, false);
+
+  const stale = await server(request(4, 'tools/call', {
+    name: 'view_codespace',
+    arguments: isolatedArguments(root, 'ai-session-a', { codespaceId: 'existing-space-123' })
+  }));
+  assert.equal(stale.result.isError, true);
+  assert.match(stale.result.structuredContent.error, /owned by isolated session ai-session-b/);
+  assert.match(stale.result.structuredContent.error, /isolated__list/);
+  assert.match(stale.result.structuredContent.error, /ask the user/);
+  assert.equal(executions.length, 2);
+});
+
+test('codespace ownership transfer cancels the previous isolation async SSH and blocks its management calls', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-owner-async-')));
+  const { createServer } = await importCodespace({ roots: [root], isolationKey: TEST_ISOLATION_KEY, suffix: 'ownership-async' });
+  const fake = fakeAsyncExecution();
+  const server = createServer({
+    execute: async () => ({ stdout: JSON.stringify({ name: 'existing-space-123' }), stderr: '', exitCode: 0 }),
+    startAsyncExecution: async () => fake.execution
+  });
+  await server(request(1, 'initialize'));
+
+  const started = await server(request(2, 'tools/call', {
+    name: 'ssh',
+    arguments: isolatedArguments(root, 'ai-session-a', {
+      codespaceId: 'existing-space-123', command: ['sleep', '60'], async: true
+    })
+  }));
+  assert.equal(started.result.isError, false);
+  const asyncId = started.result.structuredContent.result.asyncId;
+
+  const takeover = await server(request(3, 'tools/call', {
+    name: 'view_codespace',
+    arguments: isolatedArguments(root, 'ai-session-b', { codespaceId: 'existing-space-123' })
+  }));
+  assert.equal(takeover.result.isError, false);
+  assert.equal(fake.execution.snapshot().state, 'cancelled');
+
+  const staleStatus = await server(request(4, 'tools/call', {
+    name: 'get_async_status',
+    arguments: isolatedArguments(root, 'ai-session-a', { asyncId })
+  }));
+  assert.equal(staleStatus.result.isError, true);
+  assert.match(staleStatus.result.structuredContent.error, /owned by isolated session ai-session-b/);
+});
+
 test('codespace roots only lists immediate /workspaces directories and git_root stays below /workspaces', async () => {
   const { createServer } = await importCodespace({ suffix: 'roots' });
   const calls = [];
@@ -353,7 +437,7 @@ test('codespace copy takes many local paths to one remote directory and always u
   const server = createServer({
     execute: async (args) => {
       commands.push(args);
-      if (args[0] === 'codespace' && args[1] === 'view') return { stdout: 'Available\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'codespace' && args[1] === 'ssh') return { stdout: 'started\n', stderr: '', exitCode: 0 };
       return { stdout: '', stderr: '', exitCode: 0 };
     }
   });
@@ -368,7 +452,10 @@ test('codespace copy takes many local paths to one remote directory and always u
     }
   }));
   assert.equal(reply.result.isError, false);
-  assert.deepEqual(commands[0], ['codespace', 'view', '-c', 'existing-space-123', '--json', 'state', '--jq', '.state']);
+  assert.deepEqual(commands[0], ['codespace', 'ssh', '-c', 'existing-space-123', 'echo started']);
+  assert.equal(reply.result.structuredContent.result.sshReady, true);
+  assert.equal(reply.result.structuredContent.result.startupStdout, 'started\n');
+  assert.equal(reply.result.structuredContent.result.reusedSshReadiness, false);
   assert.equal(commands[1][0], 'codespace');
   assert.equal(commands[1][1], 'cp');
   assert.equal(commands[1].includes('-e'), true);
@@ -376,9 +463,23 @@ test('codespace copy takes many local paths to one remote directory and always u
   assert.equal(commands[1].includes(join(root, 'alpha.txt')), true);
   assert.equal(commands[1].includes(join(root, 'beta.txt')), true);
   assert.equal(commands[1].at(-1), 'remote:/workspaces/project/');
+
+  const second = await server(request(3, 'tools/call', {
+    name: 'copy_to_codespace',
+    arguments: {
+      codespaceId: 'existing-space-123',
+      sourceDirectory: root,
+      paths: ['alpha.txt'],
+      remoteDestination: '/workspaces/project'
+    }
+  }));
+  assert.equal(second.result.isError, false);
+  assert.equal(second.result.structuredContent.result.reusedSshReadiness, true);
+  assert.equal(commands.filter((args) => args[0] === 'codespace' && args[1] === 'ssh').length, 1);
+  assert.equal(commands[2][1], 'cp');
 });
 
-test('codespace copy supports directory-scoped glob selection and wakes an unconfirmed codespace with SSH', async () => {
+test('codespace copy supports directory-scoped glob selection and performs an SSH readiness probe before the first copy', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-glob-')));
   await writeFile(join(root, 'alpha.js'), 'a', 'utf8');
   await writeFile(join(root, 'ignore.txt'), 'b', 'utf8');
@@ -387,7 +488,7 @@ test('codespace copy supports directory-scoped glob selection and wakes an uncon
   const server = createServer({
     execute: async (args) => {
       commands.push(args);
-      if (args[0] === 'codespace' && args[1] === 'view') throw new Error('state unavailable');
+      if (args[0] === 'codespace' && args[1] === 'ssh') return { stdout: 'started\n', stderr: '', exitCode: 0 };
       return { stdout: '', stderr: '', exitCode: 0 };
     }
   });
@@ -402,10 +503,11 @@ test('codespace copy supports directory-scoped glob selection and wakes an uncon
     }
   }));
   assert.equal(reply.result.isError, false);
-  assert.deepEqual(commands[1], ['codespace', 'ssh', '-c', 'existing-space-123', 'true']);
-  assert.equal(commands[2].includes(join(root, 'alpha.js')), true);
-  assert.equal(commands[2].includes(join(root, 'ignore.txt')), false);
-  assert.equal(commands[2].at(-1), 'remote:~/incoming/');
+  assert.deepEqual(commands[0], ['codespace', 'ssh', '-c', 'existing-space-123', 'echo started']);
+  assert.equal(reply.result.structuredContent.result.startupStdout, 'started\n');
+  assert.equal(commands[1].includes(join(root, 'alpha.js')), true);
+  assert.equal(commands[1].includes(join(root, 'ignore.txt')), false);
+  assert.equal(commands[1].at(-1), 'remote:~/incoming/');
 });
 
 test('codespace copy rejects transfers at or above the configured byte limit before gh cp', async () => {

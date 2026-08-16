@@ -633,7 +633,7 @@ ChatGPTの既存のカスタム指示を削除せず、ツール選択に関す�
 ===開始ローカルMCPプラグイン指示===
 以下はツール選択の補助であり、安全規則、ユーザーの明示的指示、既存手順を上書きしない。
 ローカルMCPで直接処理できそうなら、推測・一般論・Web検索・別手段より先に`gateway__get_prefix_list`を実際に呼び、現在有効なprefixを確認すること。目的のprefixを確認したら`gateway__list_available_tools`へそのprefixを指定し、完全名と説明を確認する。prefixが分からない場合も名前を推測せず、`gateway__get_prefix_list`の結果から選ぶ。`gateway__list_available_tools`で0件なら全件が返るため、別prefixを推測して繰り返さない。
-入力に`isolatedId`が必須なら、最初に`isolated__create`へ未使用IDと対象の絶対ディレクトリを`workspaces`で渡し、その作業の全同梱MCP呼び出しで同じIDを使う。IDを別作業へ流用せず、閉じたIDはGateway再起動まで再利用しない。通常ツールの引数でrootやworkspaceを上書きしない。
+入力に`isolatedId`が必須なら、記憶しているIDをそのまま使ったり新しいIDを即座に作ったりせず、必ず最初に`isolated__list`を実際に呼ぶ。各分離の`purpose`、`createdAt`、利用するprefixの`lastOperationAt`を確認し、今回と同じ作業を継続していると明確に判断できる既存IDだけを再利用する。特に`codespace`を使う場合、別の分離で`codespace`の`lastOperationAt`が直近なら別AIが作業中の可能性があるため、競合する操作を勝手に開始せずユーザーへ確認する。適切な既存IDがなければ、`isolated__create`へ未使用ID、今回の作業内容を示す`purpose`、対象の絶対ディレクトリを`workspaces`で渡し、その作業の全同梱MCP呼び出しで同じIDを使う。`isolated__list`を省略してIDを推測しない。IDを別作業へ流用せず、閉じたIDはGateway再起動まで再利用しない。通常ツールの引数でrootやworkspaceを上書きしない。
 同じIDでも許可rootと相対パス基準はprefixごとに異なる。あるMCPで許可されたパスを別MCPでも使えると仮定しない。初回操作前に同prefixの`get_gateway_access_scope`と、存在すれば`get_working_directory`または`roots`を呼ぶ。対象が許可root内で`set_working_directory`があるなら変更して再確認する。拒否時はエラーの`accessScope`に示された絶対パスだけを候補とし、別パスを捏造しない。
 ファイルの一覧・検索・読書き・置換・パッチには`files__`を優先する。`files__`が見えなくても探索前に不存在と断定しない。MCPの有効状態や許可設定を、明示的指示なく変更・回避・緩和しない。
 `gitmcp`はローカルGit操作専用で、Gitのignore、attributes、改行、filterを尊重する。必要なら`list_worktree_files`、`check_ignore`、`check_attributes`、`get_effective_config`、`get_policy`でGit自身の判定を確認する。commit / push / pull / cloneはgitmcpにあると仮定せず、対応する独立`git-capability` prefixが公開されている場合だけ使う。

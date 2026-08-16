@@ -33,8 +33,8 @@ export function assertNoPublicRootOverride(value, path = 'arguments') {
   }
 }
 
-function canonicalPayload({ base, roots }) {
-  return JSON.stringify({ base, roots });
+function canonicalPayload({ isolatedId, base, roots }) {
+  return JSON.stringify(isolatedId === undefined ? { base, roots } : { isolatedId, base, roots });
 }
 
 export function signBundledIsolationContext(key, context) {
@@ -65,7 +65,10 @@ function validateEnvelope(value, expectedKey) {
     throw new Error('Missing private Gateway isolation context');
   }
   const keys = Object.keys(value).sort();
-  if (keys.join(',') !== 'base,roots,signature,version') throw new Error('Invalid private Gateway isolation context');
+  const keyList = keys.join(',');
+  if (keyList !== 'base,roots,signature,version' && keyList !== 'base,isolatedId,roots,signature,version') {
+    throw new Error('Invalid private Gateway isolation context');
+  }
   if (value.version !== ENVELOPE_VERSION) throw new Error('Unsupported private Gateway isolation context version');
   if (!Array.isArray(value.roots) || value.roots.length < 1
       || value.roots.some((root) => typeof root !== 'string' || root.length === 0 || !isAbsolute(root))) {
@@ -75,7 +78,12 @@ function validateEnvelope(value, expectedKey) {
     throw new Error('Private Gateway isolation base must be an absolute path');
   }
   if (!value.roots.some((root) => within(root, value.base))) throw new Error('Private Gateway isolation base is outside its roots');
-  const context = { roots: [...value.roots], base: value.base };
+  if (value.isolatedId !== undefined && (typeof value.isolatedId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.isolatedId))) {
+    throw new Error('Private Gateway isolation id is invalid');
+  }
+  const context = value.isolatedId === undefined
+    ? { roots: [...value.roots], base: value.base }
+    : { isolatedId: value.isolatedId, roots: [...value.roots], base: value.base };
   const expectedSignature = signBundledIsolationContext(expectedKey, context);
   if (!validSignature(value.signature, expectedSignature)) throw new Error('Invalid private Gateway isolation signature');
   return context;

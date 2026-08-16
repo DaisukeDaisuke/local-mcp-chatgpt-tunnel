@@ -50,14 +50,21 @@ const workspacesSchema = {
   description: 'Absolute workspace directories. The Gateway canonicalizes them and stores a separate roots/base context for each bundled MCP after applying that MCP\'s configured allowlist.'
 };
 
+const purposeSchema = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 500,
+  description: 'Human-readable explanation of what this isolated workspace identity will be used for. The AI should state the concrete task so concurrent sessions can be distinguished.'
+};
+
 export const isolatedToolDefinitions = [
   {
     name: ISOLATED_CREATE_TOOL,
-    description: 'Create a new isolated workspace identity for bundled MCP calls. Supply one or more absolute workspace directories. The isolatedId must be unique for the lifetime of this Gateway process; duplicate or reused IDs are rejected.',
+    description: 'Create a new isolated workspace identity for bundled MCP calls. Supply one or more absolute workspace directories and a concrete human-readable purpose explaining what this AI/session will use it for. The isolatedId must be unique for the lifetime of this Gateway process; duplicate or reused IDs are rejected. Creation time is recorded automatically.',
     inputSchema: {
       type: 'object',
-      properties: { isolatedId: isolatedIdSchema, workspaces: workspacesSchema },
-      required: ['isolatedId', 'workspaces'],
+      properties: { isolatedId: isolatedIdSchema, purpose: purposeSchema, workspaces: workspacesSchema },
+      required: ['isolatedId', 'purpose', 'workspaces'],
       additionalProperties: false
     },
     outputSchema: TOOL_OUTPUT_SCHEMA,
@@ -65,7 +72,7 @@ export const isolatedToolDefinitions = [
   },
   {
     name: ISOLATED_LIST_TOOL,
-    description: 'List open isolated workspace IDs and per-bundled-MCP availability and workspace counts. Filesystem paths are not included.',
+    description: 'List open isolated workspace IDs with their purpose, automatic creation time, and per-bundled-MCP availability, workspace counts, and last operation timestamps. Filesystem paths are not included.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: TOOL_OUTPUT_SCHEMA,
     annotations: READ_ONLY_ANNOTATIONS

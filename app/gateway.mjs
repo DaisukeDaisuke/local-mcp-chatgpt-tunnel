@@ -291,7 +291,7 @@ async function isolationContextForChild(state, child) {
   if (roots.length === 0) {
     throw new Error(`Isolation ${state.isolatedId} has no workspace allowed for bundled MCP ${child.config.prefix}`);
   }
-  const context = { roots, base: roots[0] };
+  const context = { isolatedId: state.isolatedId, roots, base: roots[0] };
   state.mcpContexts.set(child.config.name, context);
   return context;
 }
@@ -302,6 +302,7 @@ function privateIsolationArguments(child, context, childArguments) {
     ...childArguments,
     [BUNDLED_ISOLATION_ARGUMENT]: {
       version: 1,
+      isolatedId: context.isolatedId,
       roots: context.roots,
       base: context.base,
       signature
@@ -309,12 +310,20 @@ function privateIsolationArguments(child, context, childArguments) {
   };
 }
 
-function routeQueueGroup(route, isolatedId) {
+function routeQueueGroup(route, isolatedId, childArguments = {}) {
   if (route.child.config.serialGroup) return route.child.config.serialGroup;
-  if (route.child.config.isBundled && isolatedId !== null) {
-    return `bundled:${route.child.config.name}:${isolatedId}`;
+  if (route.child.config.gatewayArgumentPolicy === 'codespace'
+      && typeof childArguments?.codespaceId === 'string'
+      && /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(childArguments.codespaceId)) {
+    return `codespace:${route.child.config.name}:${childArguments.codespaceId}`;
   }
   return undefined;
+}
+
+function markIsolationOperation(state, prefix) {
+  if (!state) return;
+  state.lastOperationAtByPrefix ??= new Map();
+  state.lastOperationAtByPrefix.set(prefix, new Date().toISOString());
 }
 
 async function startChild(childConfig) {
@@ -493,10 +502,14 @@ async function handle(request) {
       try {
         const toolArguments = request.params?.arguments ?? {};
         if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
-            || Object.keys(toolArguments).some((key) => !['isolatedId', 'workspaces'].includes(key))) {
-          throw new Error(`${ISOLATED_CREATE_TOOL} accepts only isolatedId and workspaces`);
+            || Object.keys(toolArguments).some((key) => !['isolatedId', 'purpose', 'workspaces'].includes(key))) {
+          throw new Error(`${ISOLATED_CREATE_TOOL} accepts only isolatedId, purpose, and workspaces`);
         }
         const isolatedId = validateIsolatedId(toolArguments.isolatedId);
+        if (typeof toolArguments.purpose !== 'string' || toolArguments.purpose.trim().length < 1 || toolArguments.purpose.length > 500) {
+          throw new Error('purpose must be a non-empty human-readable description up to 500 characters');
+        }
+        const purpose = toolArguments.purpose.trim();
         if (usedIsolatedIds.has(isolatedId) || pendingIsolatedIds.has(isolatedId)) {
           throw new Error(`isolatedId has already been used or is being created and cannot be reused until Gateway restart: ${isolatedId}`);
         }
@@ -521,14 +534,24 @@ async function handle(request) {
           const mcpContexts = new Map();
           for (const child of children.filter((candidate) => candidate.config.isBundled)) {
             const roots = await child.pathPolicy.selectAllowedDirectories(workspaces);
-            if (roots.length > 0) mcpContexts.set(child.config.name, { roots, base: roots[0] });
+            if (roots.length > 0) mcpContexts.set(child.config.name, { isolatedId, roots, base: roots[0] });
           }
           usedIsolatedIds.add(isolatedId);
-          isolatedWorkspaces.set(isolatedId, { isolatedId, workspaces, mcpContexts });
+          const createdAt = new Date().toISOString();
+          isolatedWorkspaces.set(isolatedId, {
+            isolatedId,
+            purpose,
+            createdAt,
+            workspaces,
+            mcpContexts,
+            lastOperationAtByPrefix: new Map()
+          });
           return response(request.id, isolatedMcpResult({
             ok: true,
             result: {
               isolatedId,
+              purpose,
+              createdAt,
               created: true,
               workspaceCount: workspaces.length,
               bundledMcpCount: mcpContexts.size
@@ -548,6 +571,8 @@ async function handle(request) {
       }
       const isolated = [...isolatedWorkspaces.values()].map((state) => ({
         isolatedId: state.isolatedId,
+        purpose: state.purpose,
+        createdAt: state.createdAt,
         workspaceCount: state.workspaces.length,
         bundledMcp: children
           .filter((child) => child.config.isBundled)
@@ -556,12 +581,13 @@ async function handle(request) {
             return {
               prefix: child.config.prefix,
               available: context !== undefined,
-              workspaceCount: context?.roots.length ?? 0
+              workspaceCount: context?.roots.length ?? 0,
+              lastOperationAt: state.lastOperationAtByPrefix?.get(child.config.prefix) ?? null
             };
           })
           .sort((left, right) => left.prefix.localeCompare(right.prefix))
       }));
-      return response(request.id, isolatedMcpResult({ ok: true, result: { isolated } }));
+      return response(request.id, isolatedMcpResult({ ok: true, result: { listedAt: new Date().toISOString(), isolated } }));
     }
     if (request.params?.name === ISOLATED_CLOSE_TOOL && hasBundledChildren()) {
       try {
@@ -585,7 +611,8 @@ async function handle(request) {
         if (!childArguments || typeof childArguments !== 'object' || Array.isArray(childArguments) || Object.keys(childArguments).length > 0) {
           throw new Error(`${request.params?.name} accepts only isolatedId for bundled MCPs and no arguments for external MCPs`);
         }
-        const payload = await queues.run(routeQueueGroup(route, isolatedId), async () => {
+        const payload = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
+          markIsolationOperation(state, route.child.config.prefix);
           const context = state ? await isolationContextForChild(state, route.child) : null;
           const scope = context
             ? await route.child.pathPolicy.describeForAllowedDirectories(context.roots, context.base)
@@ -603,14 +630,16 @@ async function handle(request) {
         return response(request.id, accessScopeMcpResult(payload));
       }
       if (state && route.originalName === 'get_working_directory') {
-        const result = await queues.run(routeQueueGroup(route, isolatedId), async () => {
+        const result = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
+          markIsolationOperation(state, route.child.config.prefix);
           const context = await isolationContextForChild(state, route.child);
           return bundledStateResult({ workingDirectory: context.base });
         });
         return response(request.id, result);
       }
       if (state && route.originalName === 'set_working_directory') {
-        const result = await queues.run(routeQueueGroup(route, isolatedId), async () => {
+        const result = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
+          markIsolationOperation(state, route.child.config.prefix);
           if (!childArguments || typeof childArguments !== 'object' || Array.isArray(childArguments)
               || typeof childArguments.path !== 'string' || Object.keys(childArguments).some((key) => key !== 'path')) {
             throw new Error(`${request.params?.name} requires only path`);
@@ -628,7 +657,8 @@ async function handle(request) {
         });
         return response(request.id, result);
       }
-      const result = await queues.run(routeQueueGroup(route, isolatedId), async () => {
+      const result = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
+        markIsolationOperation(state, route.child.config.prefix);
         const context = state ? await isolationContextForChild(state, route.child) : null;
         const base = context?.base ?? route.child.pathPolicy.cwd;
         const pathArguments = gatewayPathPolicyArguments(route.child.config, route.originalName, childArguments);

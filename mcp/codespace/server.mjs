@@ -122,7 +122,7 @@ const schemas = [
   { name: 'write_async_stdin', description: 'Write bounded UTF-8 data to stdin of one running async SSH job. Each write is limited to 64 KiB and total stdin per job is limited to 1 MiB. Set end=true to close stdin after this write. This does not extend the job runtime deadline.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, data: { type: 'string', maxLength: MAX_ASYNC_STDIN_WRITE_BYTES }, end: { type: 'boolean', default: false } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
   { name: 'wait_async', description: 'Wait again for one async SSH job. waitTimeoutMs controls only this wait and is capped at 10 minutes; it does not extend the job runtime deadline. If the wait expires while the job is still running, the current running status is returned.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, waitTimeoutMs: { type: 'integer', minimum: 1, maximum: MAX_ASYNC_WAIT_MS, default: MAX_ASYNC_WAIT_MS } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'cancel_async', description: 'Cancel one running async SSH job by terminating its local gh process. Completed jobs are left unchanged.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: closeState },
-  { name: 'copy_to_codespace', description: 'Copy multiple selected local files/directories from one local source directory to one remote destination directory. Select exactly one of paths or globs. This always uses gh codespace cp -e and wakes the Codespace with a fixed harmless SSH command if running state cannot be confirmed.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, sourceDirectory: { type: 'string', minLength: 1, maxLength: 1024 }, paths: { type: 'array', minItems: 1, maxItems: MAX_CP_SOURCES, items: { type: 'string', minLength: 1, maxLength: 1024 } }, globs: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 512 } }, remoteDestination: { type: 'string', minLength: 1, maxLength: 1024 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'sourceDirectory', 'remoteDestination'], additionalProperties: false }, outputSchema, annotations: copyMutation },
+  { name: 'copy_to_codespace', description: 'Copy multiple selected local files/directories from one local source directory to one remote destination directory. Select exactly one of paths or globs. The first copy for an isolated session verifies SSH readiness with a fixed echo started probe; later copies reuse that readiness unless cp fails, then refresh once. Copy always uses gh codespace cp -e.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, sourceDirectory: { type: 'string', minLength: 1, maxLength: 1024 }, paths: { type: 'array', minItems: 1, maxItems: MAX_CP_SOURCES, items: { type: 'string', minLength: 1, maxLength: 1024 } }, globs: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 512 } }, remoteDestination: { type: 'string', minLength: 1, maxLength: 1024 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'sourceDirectory', 'remoteDestination'], additionalProperties: false }, outputSchema, annotations: copyMutation },
   { name: 'list_ports', description: 'List GitHub-hosted forwarded ports for one Codespace, including complete browseUrl values and visibility.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'open_port', description: 'Make one already-forwarded Codespace port public on GitHub infrastructure and return its complete https://...app.github.dev browse URL. This does not create a local tunnel.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: localState },
   { name: 'close_port', description: 'Close public internet access to one forwarded Codespace port by changing its GitHub visibility back to private.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: closeState }
@@ -644,6 +644,16 @@ async function ensureCodespaceAvailable(codespace, execute, timeoutMs) {
   return { woke: true };
 }
 
+async function probeCodespaceSshReady(codespace, execute, timeoutMs) {
+  const startup = await execute(await sshGhArgs(codespace, 'echo started'), { timeoutMs });
+  const startupConfirmed = startup.stdout.split(/\r?\n/).some((line) => line.trim() === 'started');
+  if (!startupConfirmed) throw new Error('Codespace SSH readiness probe completed without the expected "started" marker');
+  return {
+    startupStdout: startup.stdout,
+    startupStderr: startup.stderr
+  };
+}
+
 async function portsForCodespace(codespace, execute, timeoutMs = 30_000) {
   const execution = await execute(['codespace', 'ports', '-c', codespace, '--json', 'browseUrl,label,sourcePort,visibility'], { timeoutMs });
   const ports = parseJsonOutput(execution, 'gh codespace ports');
@@ -655,13 +665,14 @@ function selectedForwardedPort(ports, port) {
   return ports.find((entry) => Number(entry?.sourcePort) === port) ?? null;
 }
 
-function createAsyncJobManager(startExecution) {
-  const jobs = new Map();
+function isolationScopeKey() {
+  const context = isolation.current();
+  if (!context) return 'direct';
+  return context.isolatedId ?? JSON.stringify({ base: context.base, roots: context.roots });
+}
 
-  const scopeKey = () => {
-    const context = isolation.current();
-    return context ? JSON.stringify({ base: context.base, roots: context.roots }) : 'direct';
-  };
+function createAsyncJobManager(startExecution, assertOwnership = () => {}) {
+  const jobs = new Map();
 
   const prune = () => {
     if (jobs.size < MAX_RETAINED_ASYNC_JOBS) return;
@@ -675,7 +686,8 @@ function createAsyncJobManager(startExecution) {
     const asyncId = safeAsyncId(value);
     const job = jobs.get(asyncId);
     if (!job) throw new Error('Unknown or expired asyncId');
-    if (job.scopeKey !== scopeKey()) throw new Error('asyncId belongs to a different isolated workspace context');
+    if (job.scopeKey !== isolationScopeKey()) throw new Error('asyncId belongs to a different isolated workspace context');
+    assertOwnership(job.scopeKey, job.codespaceId);
     return job;
   };
 
@@ -729,7 +741,7 @@ function createAsyncJobManager(startExecution) {
         status: 'running',
         stdinBytes: 0,
         stdinEnded: false,
-        scopeKey: scopeKey(),
+        scopeKey: isolationScopeKey(),
         execution
       };
       jobs.set(asyncId, job);
@@ -764,6 +776,17 @@ function createAsyncJobManager(startExecution) {
       refresh(job);
       return { ...summary(job), cancelled: true, signalSent };
     },
+    cancelScopeCodespace(scopeKey, codespaceId) {
+      let cancelled = 0;
+      for (const job of jobs.values()) {
+        if (job.scopeKey !== scopeKey || job.codespaceId !== codespaceId) continue;
+        if (refresh(job).state !== 'running') continue;
+        job.execution.cancel();
+        refresh(job);
+        cancelled += 1;
+      }
+      return cancelled;
+    },
     async wait(asyncId, waitTimeoutMs) {
       const job = requireJob(asyncId);
       if (refresh(job).state === 'running') {
@@ -782,11 +805,52 @@ function createAsyncJobManager(startExecution) {
 }
 
 export function createServer(options = {}) {
-  const execute = options.execute ?? runGh;
-  const asyncJobs = createAsyncJobManager(options.startAsyncExecution ?? startGhExecution);
+  const rawExecute = options.execute ?? runGh;
+  const sshReadyScopes = new Set();
+  const readinessKey = (codespace) => `${isolationScopeKey()}\0${codespace}`;
+  const execute = async (args, executeOptions = {}) => {
+    const execution = await rawExecute(args, executeOptions);
+    if (args[0] === 'codespace' && args[1] === 'ssh') {
+      const codespaceIndex = args.indexOf('-c');
+      if (codespaceIndex >= 0 && typeof args[codespaceIndex + 1] === 'string') {
+        sshReadyScopes.add(readinessKey(args[codespaceIndex + 1]));
+      }
+    }
+    return execution;
+  };
+  const codespaceOwners = new Map();
+  const revokedCodespaceScopes = new Set();
+  const ownershipKey = (scopeKey, codespace) => `${scopeKey}\0${codespace}`;
+
+  const ownershipConflictError = (codespace, owner) => new Error(`Codespace ${codespace} is now owned by isolated session ${owner ?? 'unknown'}. This older isolated session was revoked after another AI/session acquired the Codespace and must not take it back automatically. Call isolated__list, compare each session purpose and the codespace prefix lastOperationAt timestamp, then ask the user which AI/session should control this Codespace before doing anything else.`);
+
+  const assertCodespaceOwnership = (scopeKey, codespace) => {
+    const owner = codespaceOwners.get(codespace);
+    if (owner !== undefined && owner !== scopeKey) throw ownershipConflictError(codespace, owner);
+  };
+
+  const asyncJobs = createAsyncJobManager(options.startAsyncExecution ?? startGhExecution, assertCodespaceOwnership);
+
+  const claimCodespace = (codespace) => {
+    const scopeKey = isolationScopeKey();
+    const revokedKey = ownershipKey(scopeKey, codespace);
+    const owner = codespaceOwners.get(codespace);
+    if (owner === scopeKey) return { scopeKey, ownerChanged: false };
+    if (revokedCodespaceScopes.has(revokedKey)) {
+      throw ownershipConflictError(codespace, owner);
+    }
+    if (owner !== undefined) {
+      revokedCodespaceScopes.add(ownershipKey(owner, codespace));
+      sshReadyScopes.delete(`${owner}\0${codespace}`);
+      asyncJobs.cancelScopeCodespace(owner, codespace);
+    }
+    codespaceOwners.set(codespace, scopeKey);
+    return { scopeKey, ownerChanged: owner !== undefined };
+  };
   let initialized = false;
 
   const callTool = async (name, args) => {
+    if (typeof args.codespaceId === 'string') claimCodespace(safeCodespaceId(args.codespaceId));
     switch (name) {
       case 'list_codespaces': {
         const execution = await execute(['codespace', 'list', '--limit', safeLimit(args.limit), '--json', 'name,displayName,state,repository,lastUsedAt'], { timeoutMs: 30_000 });
@@ -888,15 +952,35 @@ export function createServer(options = {}) {
         const selections = await selectCopySources(source, args);
         const size = await transferSizeForSelections(source, selections);
         const timeoutMs = timeout(args.timeoutMs);
-        const availability = await ensureCodespaceAvailable(codespace, execute, timeoutMs);
+        const key = readinessKey(codespace);
+        const wasReady = sshReadyScopes.has(key);
+        let readiness = { startupStdout: '', startupStderr: '', reused: wasReady };
+        if (!wasReady) {
+          try {
+            readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs)), reused: false };
+          } catch (error) {
+            sshReadyScopes.delete(key);
+            throw error;
+          }
+        }
         const command = ['codespace', 'cp', '-e'];
         if (selections.some((selection) => selection.directory)) command.push('-r');
         command.push('-c', codespace);
-        const key = await sshKeyFile();
-        if (key) command.push('--', '-i', key);
+        const sshKey = await sshKeyFile();
+        if (sshKey) command.push('--', '-i', sshKey);
         command.push(...selections.map((selection) => selection.path), remoteDestination);
-        const execution = await execute(command, { timeoutMs });
-        return { codespaceId: codespace, wokeCodespace: availability.woke, sourceDirectory: source.path, selected: selections.map((selection) => selection.relativePath), remoteDestination: remoteDestination.slice('remote:'.length), totalBytes: size.totalBytes, fileCount: size.fileCount, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
+        let execution;
+        let retriedAfterReadinessRefresh = false;
+        try {
+          execution = await execute(command, { timeoutMs });
+        } catch (error) {
+          if (!wasReady) throw error;
+          sshReadyScopes.delete(key);
+          readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs)), reused: false };
+          retriedAfterReadinessRefresh = true;
+          execution = await execute(command, { timeoutMs });
+        }
+        return { codespaceId: codespace, sshReady: true, reusedSshReadiness: readiness.reused, retriedAfterReadinessRefresh, startupStdout: readiness.startupStdout, startupStderr: readiness.startupStderr, sourceDirectory: source.path, selected: selections.map((selection) => selection.relativePath), remoteDestination: remoteDestination.slice('remote:'.length), totalBytes: size.totalBytes, fileCount: size.fileCount, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
       }
       case 'list_ports': {
         const codespace = safeCodespaceId(args.codespaceId);

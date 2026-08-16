@@ -11,6 +11,7 @@ import {
 
 const KEY = '0123456789abcdef'.repeat(4);
 const CONTEXT = {
+  isolatedId: 'test-isolation',
   base: resolve('test-workspaces', 'alpha'),
   roots: [resolve('test-workspaces', 'alpha'), resolve('test-workspaces', 'shared')]
 };
@@ -18,6 +19,7 @@ const CONTEXT = {
 function envelope(context = CONTEXT) {
   return {
     version: 1,
+    isolatedId: context.isolatedId,
     base: context.base,
     roots: context.roots,
     signature: signBundledIsolationContext(KEY, context)
