@@ -46,7 +46,7 @@ function isolatedArguments(root, isolatedId, args = {}) {
   };
 }
 
-test('codespace exposes existing-codespace operations but no create/start/stop/delete tool', async () => {
+test('codespace exposes existing-codespace operations including stop but no create/start/delete/rebuild/edit tool', async () => {
   const { createServer } = await importCodespace({ suffix: 'tools' });
   const commands = [];
   const server = createServer({
@@ -72,6 +72,7 @@ test('codespace exposes existing-codespace operations but no create/start/stop/d
     'wait_async',
     'cancel_async',
     'copy_to_codespace',
+    'stop_codespace',
     'list_ports',
     'open_port',
     'close_port'
@@ -285,6 +286,67 @@ test('codespace ownership transfer cancels the previous isolation async SSH and 
   }));
   assert.equal(staleStatus.result.isError, true);
   assert.match(staleStatus.result.structuredContent.error, /owned by isolated session ai-session-b/);
+});
+
+test('codespace stop cancels owned async SSH, clears readiness, and reports Shutdown without deleting the Codespace', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-stop-')));
+  await writeFile(join(root, 'alpha.txt'), 'alpha', 'utf8');
+  const { createServer } = await importCodespace({ roots: [root], isolationKey: TEST_ISOLATION_KEY, suffix: 'stop' });
+  const fake = fakeAsyncExecution();
+  const commands = [];
+  const server = createServer({
+    execute: async (args) => {
+      commands.push(args);
+      if (args[0] === 'codespace' && args[1] === 'ssh') {
+        if (args.at(-1) === 'echo started') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'codespace' && args[1] === 'stop') return { stdout: 'stopped\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'codespace' && args[1] === 'view') return { stdout: 'Shutdown\n', stderr: '', exitCode: 0 };
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+    startAsyncExecution: async () => fake.execution
+  });
+  await server(request(1, 'initialize'));
+
+  const ready = await server(request(2, 'tools/call', {
+    name: 'ssh',
+    arguments: isolatedArguments(root, 'ai-session-stop', { codespaceId: 'existing-space-123', command: ['true'] })
+  }));
+  assert.equal(ready.result.isError, false);
+
+  const started = await server(request(3, 'tools/call', {
+    name: 'ssh',
+    arguments: isolatedArguments(root, 'ai-session-stop', {
+      codespaceId: 'existing-space-123', command: ['sleep', '60'], async: true
+    })
+  }));
+  assert.equal(started.result.isError, false);
+
+  const stopped = await server(request(4, 'tools/call', {
+    name: 'stop_codespace',
+    arguments: isolatedArguments(root, 'ai-session-stop', { codespaceId: 'existing-space-123' })
+  }));
+  assert.equal(stopped.result.isError, false);
+  assert.equal(stopped.result.structuredContent.result.stopRequested, true);
+  assert.equal(stopped.result.structuredContent.result.stopped, true);
+  assert.equal(stopped.result.structuredContent.result.state, 'Shutdown');
+  assert.equal(stopped.result.structuredContent.result.cancelledAsyncJobs, 1);
+  assert.equal(fake.execution.snapshot().state, 'cancelled');
+  assert.equal(commands.some((args) => args[0] === 'codespace' && args[1] === 'stop' && args[2] === '-c' && args[3] === 'existing-space-123'), true);
+
+  const copied = await server(request(5, 'tools/call', {
+    name: 'copy_to_codespace',
+    arguments: isolatedArguments(root, 'ai-session-stop', {
+      codespaceId: 'existing-space-123',
+      sourceDirectory: root,
+      paths: ['alpha.txt'],
+      remoteDestination: '/workspaces/project'
+    })
+  }));
+  assert.equal(copied.result.isError, false);
+  assert.equal(copied.result.structuredContent.result.reusedSshReadiness, false);
+  assert.equal(commands.filter((args) => args[0] === 'codespace' && args[1] === 'ssh' && args.at(-1) === 'echo started').length, 1);
 });
 
 test('codespace roots only lists immediate /workspaces directories and git_root stays below /workspaces', async () => {
