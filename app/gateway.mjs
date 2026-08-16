@@ -48,6 +48,7 @@ import { assertNotElevatedWindows } from './windows-integrity.mjs';
 import { assertSandboxPathPolicyCompatible } from './sandbox-path-policy.mjs';
 import { createGatewayInfoLogger } from './gateway-info-log.mjs';
 import { gatewayPathPolicyArguments } from './gateway-path-arguments.mjs';
+import { sandboxDotPathWarningLines } from './sandbox-hidden-path-warning.mjs';
 
 scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
@@ -115,6 +116,7 @@ const gatewayInfoLogger = createGatewayInfoLogger({
   directory: config.gatewayLogsDirectory
 });
 const info = (message) => gatewayInfoLogger.info(message);
+for (const line of sandboxDotPathWarningLines(config)) info(line);
 const toolAnnotationConfig = await loadToolAnnotationConfig(
   config.toolAnnotationsPath,
   config.servers.filter((server) => server.manageAnnotations).map((server) => server.prefix)
