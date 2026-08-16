@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
+import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
 import { ToolPathPolicy } from '../../app/path-policy.mjs';
@@ -183,7 +183,7 @@ const sshKeygenExecutableConfigured = optionalAbsoluteFileArgument(
   'LOCAL_MCP_CODESPACE_SSH_KEYGEN_EXECUTABLE'
 );
 
-export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>]\n\nControls existing GitHub Codespaces only. SSH authentication keys are generated internally for the MCP process; no user SSH key is accepted. It can list/view/stop existing codespaces, run strictly tokenized SSH commands, run arbitrary Bash source supplied only over SSH stdin, copy selected local files/directories to one remote destination directory, and open/close temporary public deployments backed by GitHub Codespaces. Prefer codespace__run_bash_script for arbitrary code, multi-command shell logic, pipelines, redirection, quoting-heavy commands, or other shell-oriented work instead of assembling those operations through the older SSH/stdin tools. codespace__run_bash_script is always asynchronous. Other execution tools expose async and syncWaitMs separately: async=true returns an asyncId immediately and ignores syncWaitMs; otherwise syncWaitMs controls only how long the MCP response waits synchronously, defaults to 10000 ms, and never shortens the underlying timeoutMs. If the operation is still running when syncWaitMs expires, it continues in the shared async registry and an asyncId is returned. syncWaitMs values from 0 through 1000 ms are treated as immediate async mode. Call codespace__get_async_status with no asyncId to see all retained async operations in the current isolation, or with one asyncId to inspect that operation; use get_async_logs only when process output is actually needed. The registry is process-local, so serverInstanceId changes after an MCP crash/restart and older asyncIds are not recoverable. Temporary public deployment tools never scan localhost, inspect local listening sockets, browser tabs, or local development servers, and never auto-detect or guess a port. When an exact caller-specified port is not yet present in GitHub Codespaces metadata, open_temporary_public_deployment may bootstrap that exact port with gh codespace ports forward <port>:<port>, wait for GitHub to register it, then make it public. The bootstrap forwarding process is kept alive while this MCP owns the temporary deployment and is cancelled when the deployment is closed, the Codespace is stopped, or ownership moves to another isolated session. It never creates, rebuilds, deletes, or changes the machine type of a codespace.\n`;
+export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>]\n\nControls existing GitHub Codespaces only. SSH authentication keys are generated internally for the MCP process; no user SSH key is accepted. It can list/view/stop existing codespaces, run strictly tokenized SSH commands, run arbitrary Bash source supplied only over SSH stdin, copy selected local files/directories to an explicitly remote: destination while preserving their relative paths, copy one explicitly remote: file/directory back into a local signed workspace directory, and open/close temporary public deployments backed by GitHub Codespaces. Copy never infers or inserts the remote: protocol: exactly one transfer side must be explicitly remote: and the other side must be local. Prefer codespace__run_bash_script for arbitrary code, multi-command shell logic, pipelines, redirection, quoting-heavy commands, or other shell-oriented work instead of assembling those operations through the older SSH/stdin tools. codespace__run_bash_script is always asynchronous. Other execution tools expose async and syncWaitMs separately: async=true returns an asyncId immediately and ignores syncWaitMs; otherwise syncWaitMs controls only how long the MCP response waits synchronously, defaults to 10000 ms, and never shortens the underlying timeoutMs. If the operation is still running when syncWaitMs expires, it continues in the shared async registry and an asyncId is returned. syncWaitMs values from 0 through 1000 ms are treated as immediate async mode. Call codespace__get_async_status with no asyncId to see all retained async operations in the current isolation, or with one asyncId to inspect that operation; use get_async_logs only when process output is actually needed. The registry is process-local, so serverInstanceId changes after an MCP crash/restart and older asyncIds are not recoverable. Temporary public deployment tools never scan localhost, inspect local listening sockets, browser tabs, or local development servers, and never auto-detect or guess a port. When an exact caller-specified port is not yet present in GitHub Codespaces metadata, open_temporary_public_deployment may bootstrap that exact port with gh codespace ports forward <port>:<port>, wait for GitHub to register it, then make it public. The bootstrap forwarding process is kept alive while this MCP owns the temporary deployment and is cancelled when the deployment is closed, the Codespace is stopped, or ownership moves to another isolated session. It never creates, rebuilds, deletes, or changes the machine type of a codespace.\n`;
 
 function pathArray(name, fallback = []) {
   if (help) return [];
@@ -234,7 +234,8 @@ const schemas = [
   { name: 'write_async_stdin', description: 'Write bounded UTF-8 data to stdin of one already-running async SSH job. This is primarily a compatibility/interactive-input mechanism. Prefer codespace__run_bash_script when the intended stdin is actually Bash source or when arbitrary shell work is needed, rather than starting async SSH and feeding a script through this older two-step path. Each write is limited to 64 KiB and total stdin per job is limited to 1 MiB. Set end=true to close stdin after this write. This does not extend the job runtime deadline.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, data: { type: 'string', maxLength: MAX_ASYNC_STDIN_WRITE_BYTES }, end: { type: 'boolean', default: false } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
   { name: 'wait_async', description: 'Compatibility wait for one async SSH job. Prefer non-blocking get_async_status/get_async_logs polling; Gateway configurations may block wait-style tools. For arbitrary shell execution, prefer codespace__run_bash_script rather than constructing an async SSH plus stdin plus wait workflow. waitTimeoutMs controls only this wait and is capped at 10 minutes; it does not extend the job runtime deadline. If the wait expires while the job is still running, the current running status is returned.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, waitTimeoutMs: { type: 'integer', minimum: 1, maximum: MAX_ASYNC_WAIT_MS, default: MAX_ASYNC_WAIT_MS } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'cancel_async', description: 'Cancel one process-backed async operation by terminating its managed local process. SSH/run_bash_script jobs and managed temporary port-forward processes are cancellable. Automatically promoted compound tool operations currently report cancelSupported=false because they can span multiple sequential GitHub CLI operations. Completed jobs are left unchanged.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: closeState },
-  { name: 'copy_to_codespace', description: 'Copy multiple selected local files/directories from one local source directory to one remote destination directory. Select exactly one of paths or globs. The first copy for an isolated session verifies SSH readiness with a fixed echo started probe; later copies reuse that readiness unless cp fails, then refresh once. Copy always uses gh codespace cp -e.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, sourceDirectory: { type: 'string', minLength: 1, maxLength: 1024 }, paths: { type: 'array', minItems: 1, maxItems: MAX_CP_SOURCES, items: { type: 'string', minLength: 1, maxLength: 1024 } }, globs: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 512 } }, remoteDestination: { type: 'string', minLength: 1, maxLength: 1024 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'sourceDirectory', 'remoteDestination'], additionalProperties: false }, outputSchema, annotations: copyMutation },
+  { name: 'copy_to_codespace', description: 'Copy selected local files/directories below sourceDirectory into one explicitly remote destination while preserving each selected relative path. The caller must write remoteDestination with the remote: protocol, for example remote:/workspaces/project or remote:~/incoming. This MCP never inserts remote: automatically. Selecting scripts/a.js places it at <remoteDestination>/scripts/a.js rather than flattening it to <remoteDestination>/a.js. Every gh codespace cp invocation uses -e because GitHub CLI can otherwise report existing remote paths as missing. Select exactly one of paths or globs.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, sourceDirectory: { type: 'string', minLength: 1, maxLength: 1024 }, paths: { type: 'array', minItems: 1, maxItems: MAX_CP_SOURCES, items: { type: 'string', minLength: 1, maxLength: 1024 } }, globs: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 512 } }, remoteDestination: { type: 'string', minLength: 8, maxLength: 1031, pattern: '^remote:' }, timeoutMs: commonTimeout }, required: ['codespaceId', 'sourceDirectory', 'remoteDestination'], additionalProperties: false }, outputSchema, annotations: copyMutation },
+  { name: 'copy_from_codespace', description: 'Copy one exact explicitly remote file or directory into an existing local destination directory inside the signed workspace roots. The caller must write remoteSource with the remote: protocol, for example remote:/workspaces/project/out.wav. This MCP never inserts remote: automatically. The remote source must resolve below /workspaces/<workspace>; it is inspected first so symlinks, unsupported entries, excessive entry counts, and transfers at or above CODESPACE_MCP_MAX_TRANSFER_BYTES are rejected before gh codespace cp runs. Every gh codespace cp invocation uses -e because GitHub CLI can otherwise report existing remote paths as missing. The destination basename must not already exist locally.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, remoteSource: { type: 'string', minLength: 8, maxLength: 1031, pattern: '^remote:' }, localDestinationDirectory: { type: 'string', minLength: 1, maxLength: 1024 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'remoteSource', 'localDestinationDirectory'], additionalProperties: false }, outputSchema, annotations: copyMutation },
   { name: 'stop_codespace', description: 'Stop one existing Codespace owned by this isolated session using gh codespace stop. Running async SSH jobs for that Codespace are cancelled first and cached SSH readiness is cleared. This does not delete the Codespace or discard saved changes.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, timeoutMs: commonTimeout }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: closeState },
   { name: 'list_temporary_public_deployments', description: 'List temporary public deployment candidates already known to GitHub for one Codespace, including browseUrl, port, and current visibility. This only queries GitHub Codespaces metadata; it never scans localhost, local listening sockets, browser tabs, or the local machine to auto-detect ports. If GitHub reports no candidates, the tool returns a corrective error instead of an empty list so callers do not mistake this for failed local-port discovery.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId }, required: ['codespaceId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'open_temporary_public_deployment', description: 'Open a temporary public deployment for exactly one caller-specified Codespace port and return its complete https://...app.github.dev URL. Call this directly when the exact remote port is known; list_temporary_public_deployments is not a prerequisite. If the exact port is absent from GitHub Codespaces metadata, the tool starts gh codespace ports forward <port>:<port> as a managed bootstrap process, polls until GitHub registers the port, changes that exact port to public, and keeps the bootstrap process alive until the deployment is closed, the Codespace is stopped, ownership moves to another isolated session, or the bounded process lifetime ends. It never scans localhost, inspects local listening sockets, browser tabs, or local development servers, and never guesses a port.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, port: { type: 'integer', minimum: 1, maximum: 65535 }, timeoutMs: commonTimeout }, required: ['codespaceId', 'port'], additionalProperties: false }, outputSchema, annotations: localState },
@@ -251,6 +252,7 @@ const RESPONSE_MODE_TOOL_NAMES = new Set([
   'search_text',
   'ssh',
   'copy_to_codespace',
+  'copy_from_codespace',
   'stop_codespace',
   'list_temporary_public_deployments',
   'open_temporary_public_deployment',
@@ -375,13 +377,31 @@ function safeBashScript(value) {
   return value;
 }
 
-function safeRemoteDestination(value) {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 1024 || /[\0\r\n\t ]/.test(value)) throw new Error('remoteDestination must be a non-empty path without whitespace or control characters');
-  if (/["'!@`$;&|<>(){}\[\]\\*?]/.test(value)) throw new Error('remoteDestination contains shell expansion or metacharacters');
-  if (!/^(?:~(?:\/|$)|\/)[A-Za-z0-9._~\/-]*$/.test(value)) throw new Error('remoteDestination must be an absolute remote path or ~/ path using only letters, numbers, dot, underscore, hyphen, slash, and a leading tilde');
-  const parts = value.split('/').filter((part) => part !== '' && part !== '~');
-  if (parts.some((part) => part === '.' || part === '..')) throw new Error('remoteDestination may not contain . or .. path components');
-  return `remote:${value.endsWith('/') ? value : `${value}/`}`;
+function safeRemoteEndpoint(value, label = 'remote path') {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1031 || /[\0\r\n\t ]/.test(value)) throw new Error(`${label} must be a non-empty remote: path without whitespace or control characters`);
+  if (!value.startsWith('remote:')) throw new Error(`${label} must explicitly use the remote: protocol; this MCP never adds remote: automatically`);
+  const remotePath = value.slice('remote:'.length);
+  if (/["'!@`$;&|<>(){}\[\]\\*?]/.test(remotePath)) throw new Error(`${label} contains shell expansion or metacharacters`);
+  if (!/^(?:~(?:\/|$)|\/)[A-Za-z0-9._~\/-]*$/.test(remotePath)) throw new Error(`${label} must be remote:/absolute/path or remote:~/path using only letters, numbers, dot, underscore, hyphen, slash, and a leading tilde`);
+  const parts = remotePath.split('/').filter((part) => part !== '' && part !== '~');
+  if (parts.some((part) => part === '.' || part === '..')) throw new Error(`${label} may not contain . or .. path components`);
+  return { endpoint: value, path: remotePath };
+}
+
+function joinRemoteEndpoint(rootEndpoint, relativePath = '') {
+  const root = safeRemoteEndpoint(rootEndpoint, 'remote endpoint');
+  const joinedPath = relativePath ? posix.join(root.path, relativePath) : root.path.replace(/\/$/, '');
+  const protocol = root.endpoint.slice(0, root.endpoint.length - root.path.length);
+  return safeRemoteEndpoint(`${protocol}${joinedPath}`, 'derived remote endpoint').endpoint;
+}
+
+function safeAbsoluteRemotePath(value, label = 'remote path') {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096 || /[\0\r\n]/.test(value)) throw new Error(`${label} must be a non-empty absolute POSIX path without NUL or line breaks`);
+  if (value.includes('\\')) throw new Error(`${label} must use POSIX / separators`);
+  const collapsed = value.replace(/\/{2,}/g, '/').replace(/\/$/, '') || '/';
+  if (!collapsed.startsWith('/')) throw new Error(`${label} must be absolute`);
+  if (collapsed.split('/').some((component) => component === '.' || component === '..')) throw new Error(`${label} may not contain . or .. path components`);
+  return collapsed;
 }
 
 function safeRelativeSelection(value, label) {
@@ -432,6 +452,7 @@ async function scopedPolicy(selectedRoots, selectedBase) {
 
 async function existingSourceDirectory(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 1024 || /[\0\r\n]/.test(value)) throw new Error('sourceDirectory is invalid');
+  if (value.startsWith('remote:')) throw new Error('sourceDirectory must be local; copy_to_codespace requires exactly one explicit remote: endpoint on remoteDestination');
   const selectedRoots = await roots();
   const selectedBase = await base();
   const lexical = resolve(isAbsolute(value) ? value : join(selectedBase, value));
@@ -444,6 +465,24 @@ async function existingSourceDirectory(value) {
   if (!selectedRoots.some((root) => within(root, actual))) throw new Error('sourceDirectory resolves outside the signed workspace roots');
   await policy.assertToolArguments('copy_to_codespace', { sourceDirectory: actual }, selectedBase);
   await scoped.assertToolArguments('copy_to_codespace', { sourceDirectory: actual }, selectedBase);
+  return { path: actual, roots: selectedRoots, base: selectedBase, scoped };
+}
+
+async function existingLocalDestinationDirectory(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1024 || /[\0\r\n]/.test(value)) throw new Error('localDestinationDirectory is invalid');
+  if (value.startsWith('remote:')) throw new Error('localDestinationDirectory must be local; copy_from_codespace requires exactly one explicit remote: endpoint on remoteSource');
+  const selectedRoots = await roots();
+  const selectedBase = await base();
+  const lexical = resolve(isAbsolute(value) ? value : join(selectedBase, value));
+  await policy.assertToolArguments('copy_from_codespace', { localDestinationDirectory: lexical }, selectedBase);
+  const scoped = await scopedPolicy(selectedRoots, selectedBase);
+  await scoped.assertToolArguments('copy_from_codespace', { localDestinationDirectory: lexical }, selectedBase);
+  const info = await lstat(lexical);
+  if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('localDestinationDirectory must be an existing non-symbolic-link directory');
+  const actual = await realpath(lexical);
+  if (!selectedRoots.some((root) => within(root, actual))) throw new Error('localDestinationDirectory resolves outside the signed workspace roots');
+  await policy.assertToolArguments('copy_from_codespace', { localDestinationDirectory: actual }, selectedBase);
+  await scoped.assertToolArguments('copy_from_codespace', { localDestinationDirectory: actual }, selectedBase);
   return { path: actual, roots: selectedRoots, base: selectedBase, scoped };
 }
 
@@ -517,13 +556,6 @@ async function selectCopySources(source, args) {
   }
   const collapsed = collapseSelections(selections);
   if (collapsed.length > MAX_CP_SOURCES) throw new Error(`copy selection produced ${collapsed.length} sources; narrow it to at most ${MAX_CP_SOURCES}`);
-  const basenames = new Set();
-  for (const selection of collapsed) {
-    const name = process.platform === 'win32' ? win32.basename(selection.path) : basename(selection.path);
-    const key = process.platform === 'win32' ? name.toLowerCase() : name;
-    if (basenames.has(key)) throw new Error(`copy selection has duplicate destination basename: ${name}`);
-    basenames.add(key);
-  }
   return collapsed;
 }
 
@@ -809,6 +841,9 @@ async function sshGhArgs(codespace, remoteCommand, sshKeyProvider = internalSshK
 
 const REMOTE_REALPATH_COMMAND = "bash -c 'IFS= read -r encoded || exit 2; path=$(printf %s \"$encoded\" | base64 -d) || exit 2; test -d \"$path\" || exit 3; realpath -- \"$path\"'";
 const REMOTE_GIT_ROOT_COMMAND = "bash -c 'IFS= read -r encoded || exit 2; path=$(printf %s \"$encoded\" | base64 -d) || exit 2; exec git -C \"$path\" rev-parse --show-toplevel'";
+const REMOTE_PREPARE_COPY_DESTINATION_COMMAND = "bash -c 'IFS= read -r encoded || exit 2; path=$(printf %s \"$encoded\" | base64 -d) || exit 2; case \"$path\" in \"~\") path=\"$HOME\" ;; \"~/\"*) path=\"$HOME/${path#~/}\" ;; esac; mkdir -p -- \"$path\" || exit 3; realpath -- \"$path\"'";
+const REMOTE_MKDIRS_COMMAND = "bash -c 'IFS= read -r count || exit 2; case \"$count\" in \"\"|*[!0-9]*) exit 2 ;; esac; for ((i=0; i<count; i++)); do IFS= read -r encoded || exit 2; path=$(printf %s \"$encoded\" | base64 -d) || exit 2; mkdir -p -- \"$path\" || exit 3; done'";
+const REMOTE_COPY_SOURCE_INFO_COMMAND = "bash -c 'set -eu; IFS= read -r encoded || exit 2; path=$(printf %s \"$encoded\" | base64 -d) || exit 2; if [ -L \"$path\" ]; then echo remote-source-symlink >&2; exit 4; fi; if [ ! -e \"$path\" ]; then echo remote-source-missing >&2; exit 3; fi; actual=$(realpath -- \"$path\") || exit 5; encoded_actual=$(printf %s \"$actual\" | base64 | tr -d \"\\n\"); if [ -f \"$actual\" ]; then size=$(stat -c %s -- \"$actual\") || exit 6; printf \"F\\t%s\\t1\\t0\\t%s\\n\" \"$size\" \"$encoded_actual\"; exit 0; fi; if [ ! -d \"$actual\" ]; then echo remote-source-unsupported >&2; exit 7; fi; unsupported=$(find -P \"$actual\" -mindepth 1 ! -type f ! -type d -print -quit); if [ -n \"$unsupported\" ]; then echo remote-source-contains-unsupported-entry >&2; exit 8; fi; entry_count=$(find -P \"$actual\" -mindepth 1 -printf \".\\n\" | wc -l | tr -d \" \" ); file_count=$(find -P \"$actual\" -type f -printf \".\\n\" | wc -l | tr -d \" \" ); total_bytes=$(du -sb --apparent-size -- \"$actual\" | cut -f1); printf \"D\\t%s\\t%s\\t%s\\t%s\\n\" \"$total_bytes\" \"$file_count\" \"$entry_count\" \"$encoded_actual\"'";
 const REMOTE_RG_SEARCH_COMMAND = "bash -c 'set -u; read_b64(){ IFS= read -r line || return 1; printf %s \"$line\" | base64 -d; }; search_base=$(read_b64) || exit 2; query=$(read_b64) || exit 2; IFS= read -r fixed || exit 2; IFS= read -r sensitive || exit 2; IFS= read -r result_cap || exit 2; IFS= read -r glob_count || exit 2; args=(--json --color=never --hidden --max-filesize " + REMOTE_MAX_TEXT_BYTES + " --glob \"!.git\" --glob \"!.git/**\"); if [ \"$fixed\" = 1 ]; then args+=(-F); fi; if [ \"$sensitive\" = 0 ]; then args+=(-i); fi; for ((i=0; i<glob_count; i++)); do glob=$(read_b64) || exit 2; args+=(--glob \"$glob\"); done; rg \"${args[@]}\" -- \"$query\" \"$search_base\" | awk -v max=\"$result_cap\" \"{ print; if (index(\\$0, \\\"\\\\\\\"type\\\\\\\":\\\\\\\"match\\\\\\\"\\\") > 0) { count++; if (count >= max) exit 0 } }\"; statuses=(\"${PIPESTATUS[@]}\"); rg_rc=\"${statuses[0]}\"; awk_rc=\"${statuses[1]}\"; if [ \"$awk_rc\" != 0 ]; then exit \"$awk_rc\"; fi; if [ \"$rg_rc\" = 0 ] || [ \"$rg_rc\" = 1 ] || [ \"$rg_rc\" = 141 ]; then exit 0; fi; exit \"$rg_rc\"'";
 
 async function runFixedRemote(codespace, execute, remoteCommand, { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS, stdinText } = {}, sshKeyProvider = internalSshKeyFile) {
@@ -823,6 +858,49 @@ async function canonicalRemoteWorkspacePath(codespace, value, execute, timeoutMs
   }, sshKeyProvider);
   const actual = execution.stdout.trim();
   return safeRemoteWorkspacePath(actual, 'resolved remote path');
+}
+
+async function prepareRemoteCopyDestination(codespace, remoteDestination, execute, timeoutMs, sshKeyProvider = internalSshKeyFile) {
+  const requested = safeRemoteEndpoint(remoteDestination, 'remoteDestination').path.replace(/\/$/, '') || '/';
+  const execution = await runFixedRemote(codespace, execute, REMOTE_PREPARE_COPY_DESTINATION_COMMAND, {
+    timeoutMs,
+    stdinText: `${base64Line(requested)}\n`
+  }, sshKeyProvider);
+  return safeAbsoluteRemotePath(execution.stdout.trim(), 'resolved remoteDestination');
+}
+
+async function prepareRemoteCopyParents(codespace, parents, execute, timeoutMs, sshKeyProvider = internalSshKeyFile) {
+  const unique = [...new Set(parents.map((parent) => safeAbsoluteRemotePath(parent, 'remote copy parent')))];
+  if (unique.length === 0) return;
+  const payload = [String(unique.length), ...unique.map(base64Line)].join('\n') + '\n';
+  await runFixedRemote(codespace, execute, REMOTE_MKDIRS_COMMAND, { timeoutMs, stdinText: payload }, sshKeyProvider);
+}
+
+function parseRemoteCopySourceInfo(stdout) {
+  const fields = String(stdout).trim().split('\t');
+  if (fields.length !== 5 || (fields[0] !== 'F' && fields[0] !== 'D')) throw new Error('remote source inspection returned invalid metadata');
+  const totalBytes = Number(fields[1]);
+  const fileCount = Number(fields[2]);
+  const entryCount = Number(fields[3]);
+  if (!Number.isSafeInteger(totalBytes) || totalBytes < 0 || !Number.isSafeInteger(fileCount) || fileCount < 0 || !Number.isSafeInteger(entryCount) || entryCount < 0) {
+    throw new Error('remote source inspection returned invalid numeric metadata');
+  }
+  if (entryCount > MAX_SCAN_ENTRIES) throw new Error(`remote copy source contains ${entryCount} entries, exceeding CODESPACE_MCP_MAX_SCAN_ENTRIES=${MAX_SCAN_ENTRIES}`);
+  if (totalBytes >= MAX_TRANSFER_BYTES) throw new Error(`copy transfer size ${totalBytes} bytes meets or exceeds CODESPACE_MCP_MAX_TRANSFER_BYTES=${MAX_TRANSFER_BYTES}`);
+  let actual;
+  try { actual = Buffer.from(fields[4], 'base64').toString('utf8'); }
+  catch { throw new Error('remote source inspection returned invalid path encoding'); }
+  const remoteSource = safeRemoteWorkspacePath(actual, 'resolved remoteSource');
+  return { remoteSource, directory: fields[0] === 'D', totalBytes, fileCount, entryCount };
+}
+
+async function inspectRemoteCopySource(codespace, remoteSource, execute, timeoutMs, sshKeyProvider = internalSshKeyFile) {
+  const requested = safeRemoteWorkspacePath(safeRemoteEndpoint(remoteSource, 'remoteSource').path, 'remoteSource');
+  const execution = await runFixedRemote(codespace, execute, REMOTE_COPY_SOURCE_INFO_COMMAND, {
+    timeoutMs,
+    stdinText: `${base64Line(requested)}\n`
+  }, sshKeyProvider);
+  return parseRemoteCopySourceInfo(execution.stdout);
 }
 
 async function ripgrepVersion(codespace, execute, timeoutMs = 30_000, sshKeyProvider = internalSshKeyFile) {
@@ -1505,7 +1583,7 @@ export function createServer(options = {}) {
       }
       case 'copy_to_codespace': {
         const codespace = safeCodespaceId(args.codespaceId);
-        const remoteDestination = safeRemoteDestination(args.remoteDestination);
+        const remoteDestination = safeRemoteEndpoint(args.remoteDestination, 'remoteDestination').endpoint;
         const source = await existingSourceDirectory(args.sourceDirectory);
         const selections = await selectCopySources(source, args);
         const size = await transferSizeForSelections(source, selections);
@@ -1521,12 +1599,70 @@ export function createServer(options = {}) {
             throw error;
           }
         }
+        const remoteRoot = await prepareRemoteCopyDestination(codespace, remoteDestination, execute, timeoutMs, sshKeyProvider);
+        const placements = selections.map((selection) => {
+          const remotePath = safeAbsoluteRemotePath(posix.join(remoteRoot, selection.relativePath), `remote target for ${selection.relativePath}`);
+          const parentRelativePath = posix.dirname(selection.relativePath) === '.' ? '' : posix.dirname(selection.relativePath);
+          const remoteEndpoint = joinRemoteEndpoint(remoteDestination, selection.relativePath);
+          const remoteParentEndpoint = joinRemoteEndpoint(remoteDestination, parentRelativePath);
+          return { selection, remotePath, remoteEndpoint, remoteParent: safeAbsoluteRemotePath(posix.dirname(remotePath), `remote parent for ${selection.relativePath}`), remoteParentEndpoint };
+        });
+        await prepareRemoteCopyParents(codespace, placements.map((placement) => placement.remoteParent), execute, timeoutMs, sshKeyProvider);
+        const sshKey = await sshKeyProvider();
+        let retriedAfterReadinessRefresh = false;
+        for (const placement of placements) {
+          const command = ['codespace', 'cp', '-e'];
+          if (placement.selection.directory) command.push('-r');
+          command.push('-c', codespace);
+          if (sshKey) command.push('--', '-i', sshKey);
+          const destination = placement.selection.directory ? `${placement.remoteParentEndpoint.replace(/\/$/, '')}/` : placement.remoteEndpoint;
+          command.push(placement.selection.path, destination);
+          let execution;
+          try {
+            execution = await execute(command, { timeoutMs });
+          } catch (error) {
+            if (!wasReady || retriedAfterReadinessRefresh) throw error;
+            sshReadyScopes.delete(key);
+            readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs, sshKeyProvider)), reused: false };
+            retriedAfterReadinessRefresh = true;
+            execution = await execute(command, { timeoutMs });
+          }
+        }
+        return { codespaceId: codespace, sshReady: true, reusedSshReadiness: readiness.reused, retriedAfterReadinessRefresh, startupStdout: readiness.startupStdout, startupStderr: readiness.startupStderr, sourceDirectory: source.path, selected: selections.map((selection) => selection.relativePath), remoteDestination, resolvedRemoteDestination: remoteRoot, placements: placements.map(({ selection, remotePath, remoteEndpoint }) => ({ relativePath: selection.relativePath, remotePath, remoteEndpoint })), totalBytes: size.totalBytes, fileCount: size.fileCount };
+      }
+      case 'copy_from_codespace': {
+        const codespace = safeCodespaceId(args.codespaceId);
+        const remoteSource = safeRemoteEndpoint(args.remoteSource, 'remoteSource').endpoint;
+        const destination = await existingLocalDestinationDirectory(args.localDestinationDirectory);
+        const timeoutMs = timeout(args.timeoutMs);
+        const key = readinessKey(codespace);
+        const wasReady = sshReadyScopes.has(key);
+        let readiness = { startupStdout: '', startupStderr: '', reused: wasReady };
+        if (!wasReady) {
+          try {
+            readiness = { ...(await probeCodespaceSshReady(codespace, execute, timeoutMs, sshKeyProvider)), reused: false };
+          } catch (error) {
+            sshReadyScopes.delete(key);
+            throw error;
+          }
+        }
+        const sourceInfo = await inspectRemoteCopySource(codespace, remoteSource, execute, timeoutMs, sshKeyProvider);
+        const localName = posix.basename(sourceInfo.remoteSource);
+        const localTarget = resolve(destination.path, localName);
+        if (!within(destination.path, localTarget)) throw new Error('remoteSource basename escapes localDestinationDirectory');
+        await policy.assertToolArguments('copy_from_codespace', { localTarget }, destination.base);
+        await destination.scoped.assertToolArguments('copy_from_codespace', { localTarget }, destination.base);
+        let existing = null;
+        try { existing = await lstat(localTarget); }
+        catch (error) { if (!error || error.code !== 'ENOENT') throw error; }
+        if (existing?.isSymbolicLink()) throw new Error('local copy target may not be a symbolic link');
+        if (existing) throw new Error(`local copy target already exists: ${localName}`);
         const command = ['codespace', 'cp', '-e'];
-        if (selections.some((selection) => selection.directory)) command.push('-r');
+        if (sourceInfo.directory) command.push('-r');
         command.push('-c', codespace);
         const sshKey = await sshKeyProvider();
         if (sshKey) command.push('--', '-i', sshKey);
-        command.push(...selections.map((selection) => selection.path), remoteDestination);
+        command.push(remoteSource, destination.path);
         let execution;
         let retriedAfterReadinessRefresh = false;
         try {
@@ -1538,7 +1674,11 @@ export function createServer(options = {}) {
           retriedAfterReadinessRefresh = true;
           execution = await execute(command, { timeoutMs });
         }
-        return { codespaceId: codespace, sshReady: true, reusedSshReadiness: readiness.reused, retriedAfterReadinessRefresh, startupStdout: readiness.startupStdout, startupStderr: readiness.startupStderr, sourceDirectory: source.path, selected: selections.map((selection) => selection.relativePath), remoteDestination: remoteDestination.slice('remote:'.length), totalBytes: size.totalBytes, fileCount: size.fileCount, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
+        const copiedInfo = await lstat(localTarget);
+        if (copiedInfo.isSymbolicLink()) throw new Error('gh codespace cp produced a symbolic-link local target, which is not permitted');
+        const copiedActual = await realpath(localTarget);
+        if (!within(destination.path, copiedActual)) throw new Error('copied local target resolves outside localDestinationDirectory');
+        return { codespaceId: codespace, sshReady: true, reusedSshReadiness: readiness.reused, retriedAfterReadinessRefresh, startupStdout: readiness.startupStdout, startupStderr: readiness.startupStderr, remoteSource: sourceInfo.remoteSource, localDestinationDirectory: destination.path, localPath: copiedActual, directory: sourceInfo.directory, totalBytes: sourceInfo.totalBytes, fileCount: sourceInfo.fileCount, entryCount: sourceInfo.entryCount, stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode };
       }
       case 'stop_codespace': {
         const codespace = safeCodespaceId(args.codespaceId);
@@ -1625,7 +1765,7 @@ export function createServer(options = {}) {
     if (request.method === 'notifications/initialized') return null;
     if (request.method === 'initialize') {
       initialized = true;
-      return response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'codespace', version: SERVER_VERSION }, instructions: 'Controls existing GitHub Codespaces only. There is intentionally no create/start/delete/rebuild/edit tool. Existing Codespaces can be started implicitly by SSH/copy and explicitly stopped with stop_codespace. Use list_codespaces first and pass its name as codespaceId. SSH accepts only strictly validated token arrays. Prefer codespace__run_bash_script for arbitrary code, multiple commands, shell operators, pipelines, redirection, variable expansion, quoting-heavy commands, or other shell-oriented work instead of assembling the older ssh + write_async_stdin workflow. codespace__run_bash_script transports UTF-8 Bash source only over SSH stdin to a fixed remote Node.js supervisor. The supervisor reads the complete source into a private temporary script, then spawns /bin/bash with runtime stdin closed and supervises the detached Bash process group, so commands cannot consume source bytes, stdin readers receive EOF, and cancellation/termination can tear descendants down. It always returns an asyncId immediately. Other execution tools expose async and syncWaitMs separately. async=true returns an asyncId immediately and syncWaitMs is ignored. Otherwise syncWaitMs controls only the synchronous MCP response wait, defaults to 10000 ms, and never changes the underlying timeoutMs. If the operation is still running when syncWaitMs expires, it continues in the shared async registry and an asyncId is returned. syncWaitMs values from 0 through 1000 ms are treated as immediate async mode. Call codespace__get_async_status with no asyncId to see all retained async operations in the current isolation, or pass one asyncId for detailed status and the final structured result of an automatically promoted compound tool call. get_async_logs remains the explicit full-log API for process jobs. The async registry is process-local and reports serverInstanceId; after an MCP crash/restart older asyncIds are unrecoverable rather than being guessed as completed. wait_async remains implemented for compatibility but may be blocked by Gateway configuration. search_text always requires a /workspaces/<workspace> searchBase. Copy uses local path selection plus one safe remote destination. Temporary public deployment tools operate only on exact caller-specified Codespace ports and return browseUrl. If the exact port is known, call open_temporary_public_deployment directly; list_temporary_public_deployments is not a prerequisite. If GitHub does not yet list that exact port, open_temporary_public_deployment starts gh codespace ports forward PORT:PORT as a managed bootstrap, waits for GitHub to register it, then makes it public. The managed forward stays alive until close, stop, ownership transfer, or its bounded lifetime. These tools never scan localhost, inspect local listening sockets or browser tabs, auto-detect ports, or guess a replacement port.' });
+      return response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'codespace', version: SERVER_VERSION }, instructions: 'Controls existing GitHub Codespaces only. There is intentionally no create/start/delete/rebuild/edit tool. Existing Codespaces can be started implicitly by SSH/copy and explicitly stopped with stop_codespace. Use list_codespaces first and pass its name as codespaceId. SSH accepts only strictly validated token arrays. Prefer codespace__run_bash_script for arbitrary code, multiple commands, shell operators, pipelines, redirection, variable expansion, quoting-heavy commands, or other shell-oriented work instead of assembling the older ssh + write_async_stdin workflow. codespace__run_bash_script transports UTF-8 Bash source only over SSH stdin to a fixed remote Node.js supervisor. The supervisor reads the complete source into a private temporary script, then spawns /bin/bash with runtime stdin closed and supervises the detached Bash process group, so commands cannot consume source bytes, stdin readers receive EOF, and cancellation/termination can tear descendants down. It always returns an asyncId immediately. Other execution tools expose async and syncWaitMs separately. async=true returns an asyncId immediately and syncWaitMs is ignored. Otherwise syncWaitMs controls only the synchronous MCP response wait, defaults to 10000 ms, and never changes the underlying timeoutMs. If the operation is still running when syncWaitMs expires, it continues in the shared async registry and an asyncId is returned. syncWaitMs values from 0 through 1000 ms are treated as immediate async mode. Call codespace__get_async_status with no asyncId to see all retained async operations in the current isolation, or pass one asyncId for detailed status and the final structured result of an automatically promoted compound tool call. get_async_logs remains the explicit full-log API for process jobs. The async registry is process-local and reports serverInstanceId; after an MCP crash/restart older asyncIds are unrecoverable rather than being guessed as completed. wait_async remains implemented for compatibility but may be blocked by Gateway configuration. search_text always requires a /workspaces/<workspace> searchBase. Copy requires the caller to write remote: explicitly and never inserts it automatically. copy_to_codespace preserves each selected path relative to sourceDirectory under the explicitly remote: destination; copy_from_codespace accepts one explicitly remote: source below /workspaces/<workspace> and one local signed-workspace destination directory. Each copy direction requires exactly one remote: endpoint. Temporary public deployment tools operate only on exact caller-specified Codespace ports and return browseUrl. If the exact port is known, call open_temporary_public_deployment directly; list_temporary_public_deployments is not a prerequisite. If GitHub does not yet list that exact port, open_temporary_public_deployment starts gh codespace ports forward PORT:PORT as a managed bootstrap, waits for GitHub to register it, then makes it public. The managed forward stays alive until close, stop, ownership transfer, or its bounded lifetime. These tools never scan localhost, inspect local listening sockets or browser tabs, auto-detect ports, or guess a replacement port.' });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
     if (request.method === 'ping') return response(request.id, {});

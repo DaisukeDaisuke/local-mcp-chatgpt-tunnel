@@ -86,6 +86,7 @@ test('codespace exposes existing-codespace operations including stop but no crea
     'wait_async',
     'cancel_async',
     'copy_to_codespace',
+    'copy_from_codespace',
     'stop_codespace',
     'list_temporary_public_deployments',
     'open_temporary_public_deployment',
@@ -445,7 +446,9 @@ test('codespace stop cancels owned async SSH, clears readiness, and reports Shut
     execute: async (args) => {
       commands.push(args);
       if (args[0] === 'codespace' && args[1] === 'ssh') {
-        if (args.at(-1) === 'echo started') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+        const remoteCommand = args.at(-1);
+        if (remoteCommand === 'echo started') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+        if (remoteCommand.includes('mkdir -p --') && remoteCommand.includes('realpath --')) return { stdout: '/workspaces/project\n', stderr: '', exitCode: 0 };
         return { stdout: '', stderr: '', exitCode: 0 };
       }
       if (args[0] === 'codespace' && args[1] === 'stop') return { stdout: 'stopped\n', stderr: '', exitCode: 0 };
@@ -488,7 +491,7 @@ test('codespace stop cancels owned async SSH, clears readiness, and reports Shut
       codespaceId: 'existing-space-123',
       sourceDirectory: root,
       paths: ['alpha.txt'],
-      remoteDestination: '/workspaces/project'
+      remoteDestination: 'remote:/workspaces/project'
     })
   }));
   assert.equal(copied.result.isError, false);
@@ -669,17 +672,19 @@ test('codespace uses an internally supplied transient SSH key while normal .ssh 
       codespaceId: 'existing-space-123',
       sourceDirectory: root,
       paths: ['.ssh/do-not-copy'],
-      remoteDestination: '/workspaces/project'
+      remoteDestination: 'remote:/workspaces/project'
     }
   }));
   assert.equal(copyDenied.result.isError, true);
   assert.equal(commands.length, 1);
 });
 
-test('codespace copy takes many local paths to one remote directory and always uses -e', async () => {
+test('codespace copy preserves selected relative paths instead of flattening them to remote basenames', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-copy-')));
-  await writeFile(join(root, 'alpha.txt'), 'alpha', 'utf8');
-  await writeFile(join(root, 'beta.txt'), 'beta', 'utf8');
+  await mkdir(join(root, 'first'));
+  await mkdir(join(root, 'second'));
+  await writeFile(join(root, 'first', 'alpha.txt'), 'first', 'utf8');
+  await writeFile(join(root, 'second', 'alpha.txt'), 'second', 'utf8');
   const { createServer } = await importCodespace({ roots: [root], suffix: 'copy-paths' });
   const internalSshKey = join(tmpdir(), 'local-mcp-codespace-copy-key');
   const commands = [];
@@ -687,7 +692,12 @@ test('codespace copy takes many local paths to one remote directory and always u
     sshKeyProvider: async () => internalSshKey,
     execute: async (args) => {
       commands.push(args);
-      if (args[0] === 'codespace' && args[1] === 'ssh') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'codespace' && args[1] === 'ssh') {
+        const remoteCommand = args.at(-1);
+        if (remoteCommand === 'echo started') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+        if (remoteCommand.includes('mkdir -p --') && remoteCommand.includes('realpath --')) return { stdout: '/workspaces/project\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
       return { stdout: '', stderr: '', exitCode: 0 };
     }
   });
@@ -697,8 +707,8 @@ test('codespace copy takes many local paths to one remote directory and always u
     arguments: {
       codespaceId: 'existing-space-123',
       sourceDirectory: root,
-      paths: ['alpha.txt', 'beta.txt'],
-      remoteDestination: '/workspaces/project'
+      paths: ['first/alpha.txt', 'second/alpha.txt'],
+      remoteDestination: 'remote:/workspaces/project'
     }
   }));
   assert.equal(reply.result.isError, false);
@@ -706,29 +716,22 @@ test('codespace copy takes many local paths to one remote directory and always u
   assert.equal(reply.result.structuredContent.result.sshReady, true);
   assert.equal(reply.result.structuredContent.result.startupStdout, 'started\n');
   assert.equal(reply.result.structuredContent.result.reusedSshReadiness, false);
-  assert.equal(commands[1][0], 'codespace');
-  assert.equal(commands[1][1], 'cp');
-  assert.equal(commands[1].includes('-e'), true);
-  assert.equal(commands[1].includes('-i'), true);
-  assert.equal(commands[1].includes(internalSshKey), true);
-  assert.equal(commands[1].includes('-r'), false);
-  assert.equal(commands[1].includes(join(root, 'alpha.txt')), true);
-  assert.equal(commands[1].includes(join(root, 'beta.txt')), true);
-  assert.equal(commands[1].at(-1), 'remote:/workspaces/project/');
-
-  const second = await server(request(3, 'tools/call', {
-    name: 'copy_to_codespace',
-    arguments: {
-      codespaceId: 'existing-space-123',
-      sourceDirectory: root,
-      paths: ['alpha.txt'],
-      remoteDestination: '/workspaces/project'
-    }
-  }));
-  assert.equal(second.result.isError, false);
-  assert.equal(second.result.structuredContent.result.reusedSshReadiness, true);
-  assert.equal(commands.filter((args) => args[0] === 'codespace' && args[1] === 'ssh').length, 1);
-  assert.equal(commands[2][1], 'cp');
+  const cpCommands = commands.filter((args) => args[0] === 'codespace' && args[1] === 'cp');
+  assert.equal(cpCommands.length, 2);
+  const firstCommand = cpCommands.find((args) => args.includes(join(root, 'first', 'alpha.txt')));
+  const secondCommand = cpCommands.find((args) => args.includes(join(root, 'second', 'alpha.txt')));
+  assert.ok(firstCommand);
+  assert.ok(secondCommand);
+  assert.equal(firstCommand.includes('-e'), true);
+  assert.equal(firstCommand.includes('-i'), true);
+  assert.equal(firstCommand.includes(internalSshKey), true);
+  assert.equal(firstCommand.at(-1), 'remote:/workspaces/project/first/alpha.txt');
+  assert.equal(secondCommand.at(-1), 'remote:/workspaces/project/second/alpha.txt');
+  const placements = Object.fromEntries(reply.result.structuredContent.result.placements.map((placement) => [placement.relativePath, placement]));
+  assert.equal(placements['first/alpha.txt'].remotePath, '/workspaces/project/first/alpha.txt');
+  assert.equal(placements['first/alpha.txt'].remoteEndpoint, 'remote:/workspaces/project/first/alpha.txt');
+  assert.equal(placements['second/alpha.txt'].remotePath, '/workspaces/project/second/alpha.txt');
+  assert.equal(placements['second/alpha.txt'].remoteEndpoint, 'remote:/workspaces/project/second/alpha.txt');
 });
 
 test('codespace copy supports directory-scoped glob selection and performs an SSH readiness probe before the first copy', async () => {
@@ -740,7 +743,12 @@ test('codespace copy supports directory-scoped glob selection and performs an SS
   const server = createServer({
     execute: async (args) => {
       commands.push(args);
-      if (args[0] === 'codespace' && args[1] === 'ssh') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'codespace' && args[1] === 'ssh') {
+        const remoteCommand = args.at(-1);
+        if (remoteCommand === 'echo started') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+        if (remoteCommand.includes('mkdir -p --') && remoteCommand.includes('realpath --')) return { stdout: '/home/codespace/incoming\n', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
       return { stdout: '', stderr: '', exitCode: 0 };
     }
   });
@@ -751,15 +759,17 @@ test('codespace copy supports directory-scoped glob selection and performs an SS
       codespaceId: 'existing-space-123',
       sourceDirectory: root,
       globs: ['*.js'],
-      remoteDestination: '~/incoming'
+      remoteDestination: 'remote:~/incoming'
     }
   }));
   assert.equal(reply.result.isError, false);
   assert.deepEqual(commands[0], ['codespace', 'ssh', '-c', 'existing-space-123', 'echo started']);
   assert.equal(reply.result.structuredContent.result.startupStdout, 'started\n');
-  assert.equal(commands[1].includes(join(root, 'alpha.js')), true);
-  assert.equal(commands[1].includes(join(root, 'ignore.txt')), false);
-  assert.equal(commands[1].at(-1), 'remote:~/incoming/');
+  const cpCommand = commands.find((args) => args[0] === 'codespace' && args[1] === 'cp');
+  assert.ok(cpCommand);
+  assert.equal(cpCommand.includes(join(root, 'alpha.js')), true);
+  assert.equal(cpCommand.includes(join(root, 'ignore.txt')), false);
+  assert.equal(cpCommand.at(-1), 'remote:~/incoming/alpha.js');
 });
 
 test('codespace copy rejects transfers at or above the configured byte limit before gh cp', async () => {
@@ -771,28 +781,81 @@ test('codespace copy rejects transfers at or above the configured byte limit bef
   await server(request(1, 'initialize'));
   const reply = await server(request(2, 'tools/call', {
     name: 'copy_to_codespace',
-    arguments: { codespaceId: 'existing-space-123', sourceDirectory: root, paths: ['ten.bin'], remoteDestination: '/tmp/incoming' }
+    arguments: { codespaceId: 'existing-space-123', sourceDirectory: root, paths: ['ten.bin'], remoteDestination: 'remote:/tmp/incoming' }
   }));
   assert.equal(reply.result.isError, true);
   assert.match(reply.result.structuredContent.error, /meets or exceeds CODESPACE_MCP_MAX_TRANSFER_BYTES=10/);
   assert.equal(executions, 0);
 });
 
-test('codespace copy rejects remote shell expansion characters even though gh cp uses -e', async () => {
+test('codespace copy requires an explicit remote: endpoint and rejects remote shell expansion characters', async () => {
   const root = await mkdtemp(join(tmpdir(), 'codespace-remote-path-'));
   await writeFile(join(root, 'a.txt'), 'a', 'utf8');
   const { createServer } = await importCodespace({ roots: [root], suffix: 'remote-injection' });
   let executions = 0;
   const server = createServer({ execute: async () => { executions += 1; return { stdout: '', stderr: '', exitCode: 0 }; } });
   await server(request(1, 'initialize'));
-  for (const remoteDestination of ['/tmp/"x"', "/tmp/'x'", '/tmp/!x', '/tmp/@x', '/tmp/$HOME', '/tmp/`id`', '/tmp/x;y']) {
+  for (const remoteDestination of ['remote:/tmp/"x"', "remote:/tmp/'x'", 'remote:/tmp/!x', 'remote:/tmp/@x', 'remote:/tmp/$HOME', 'remote:/tmp/`id`', 'remote:/tmp/x;y']) {
     const reply = await server(request(2, 'tools/call', {
       name: 'copy_to_codespace',
       arguments: { codespaceId: 'existing-space-123', sourceDirectory: root, paths: ['a.txt'], remoteDestination }
     }));
     assert.equal(reply.result.isError, true);
   }
+  const missingProtocol = await server(request(3, 'tools/call', {
+    name: 'copy_to_codespace',
+    arguments: { codespaceId: 'existing-space-123', sourceDirectory: root, paths: ['a.txt'], remoteDestination: '/tmp/incoming' }
+  }));
+  assert.equal(missingProtocol.result.isError, true);
+  assert.match(missingProtocol.result.structuredContent.error, /must explicitly use the remote: protocol/);
   assert.equal(executions, 0);
+});
+
+test('codespace copy_from_codespace requires explicit remote: and passes that remote source to gh cp unchanged', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'codespace-copy-from-')));
+  const remotePath = '/workspaces/project/out.wav';
+  const encodedRemotePath = Buffer.from(remotePath, 'utf8').toString('base64');
+  const commands = [];
+  const serverModule = await importCodespace({ roots: [root], suffix: 'copy-from' });
+  const server = serverModule.createServer({
+    execute: async (args) => {
+      commands.push(args);
+      if (args[0] === 'codespace' && args[1] === 'ssh') {
+        const remoteCommand = args.at(-1);
+        if (remoteCommand === 'echo started') return { stdout: 'started\n', stderr: '', exitCode: 0 };
+        if (remoteCommand.includes('remote-source-symlink')) {
+          return { stdout: `F\t4\t1\t0\t${encodedRemotePath}\n`, stderr: '', exitCode: 0 };
+        }
+      }
+      if (args[0] === 'codespace' && args[1] === 'cp') {
+        await writeFile(join(root, 'out.wav'), 'wave', 'utf8');
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+  });
+  await server(request(1, 'initialize'));
+
+  const missingProtocol = await server(request(2, 'tools/call', {
+    name: 'copy_from_codespace',
+    arguments: { codespaceId: 'existing-space-123', remoteSource: remotePath, localDestinationDirectory: root }
+  }));
+  assert.equal(missingProtocol.result.isError, true);
+  assert.match(missingProtocol.result.structuredContent.error, /must explicitly use the remote: protocol/);
+  assert.equal(commands.length, 0);
+
+  const copied = await server(request(3, 'tools/call', {
+    name: 'copy_from_codespace',
+    arguments: { codespaceId: 'existing-space-123', remoteSource: `remote:${remotePath}`, localDestinationDirectory: root }
+  }));
+  assert.equal(copied.result.isError, false);
+  const cpCommand = commands.find((args) => args[0] === 'codespace' && args[1] === 'cp');
+  assert.ok(cpCommand);
+  assert.equal(cpCommand.includes('-e'), true);
+  assert.equal(cpCommand.at(-2), `remote:${remotePath}`);
+  assert.equal(cpCommand.at(-1), root);
+  assert.equal(copied.result.structuredContent.result.remoteSource, remotePath);
+  assert.equal(copied.result.structuredContent.result.localPath, await realpath(join(root, 'out.wav')));
 });
 
 test('codespace temporary public deployment tools list, publish, return complete browseUrl, and close public access by restoring private visibility', async () => {
