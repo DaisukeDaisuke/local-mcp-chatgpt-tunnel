@@ -289,6 +289,9 @@ codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "codespace"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
+# Keep Gateway path filtering enabled, but permit only the fixed --ssh-key-file to
+# become an exact read-only Codex sandbox entry when it lives below allowed_directories.
+dangerous_allow_codespace_ssh_key_in_writable_root = false
 startup_timeout_sec = 30
 tool_timeout_sec = 660
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\PROJECT\WORKSPACE']

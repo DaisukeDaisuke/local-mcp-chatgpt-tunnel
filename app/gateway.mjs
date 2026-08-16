@@ -31,10 +31,14 @@ import {
   syncDiscoveredToolAnnotations
 } from './tool-annotations.mjs';
 import {
+  GATEWAY_CONFIG_NAME,
   PREFIX_LIST_NAME,
   TOOL_DIRECTORY_NAME,
+  createGatewayConfigPayload,
   createPrefixListPayload,
   createToolDirectoryPayload,
+  gatewayConfigDefinition,
+  gatewayConfigMcpResult,
   prefixListDefinition,
   prefixListMcpResult,
   toolDirectoryDefinition,
@@ -118,7 +122,7 @@ function blockedToolReason(childConfig, toolName) {
   return substring ? { type: 'substring', value: substring } : null;
 }
 
-const gatewayBuiltinToolNames = new Set([TOOL_DIRECTORY_NAME, PREFIX_LIST_NAME]);
+const gatewayBuiltinToolNames = new Set([TOOL_DIRECTORY_NAME, PREFIX_LIST_NAME, GATEWAY_CONFIG_NAME]);
 const collidesWithGatewayBuiltin = (publicName) => config.publishToolDirectory && gatewayBuiltinToolNames.has(publicName);
 
 function rebuildRoutes() {
@@ -158,7 +162,7 @@ const hasBundledChildren = () => children.some((child) => child.config.isBundled
 function publishedTools() {
   const tools = [...toolRoutes.values()].map((route) => route.tool);
   if (hasBundledChildren()) tools.unshift(...isolatedToolDefinitions);
-  if (config.publishToolDirectory) tools.unshift(toolDirectoryDefinition, prefixListDefinition);
+  if (config.publishToolDirectory) tools.unshift(toolDirectoryDefinition, prefixListDefinition, gatewayConfigDefinition);
   return tools;
 }
 
@@ -224,7 +228,7 @@ function logToolExposureReport() {
     }
   }
   if (config.publishToolDirectory) {
-    info(`tool prefix: server="gateway" prefix="gateway" enabled=true found=2 rejected=0 published=2`);
+    info(`tool prefix: server="gateway" prefix="gateway" enabled=true found=${gatewayBuiltinToolNames.size} rejected=0 published=${gatewayBuiltinToolNames.size}`);
   }
   if (hasBundledChildren()) {
     info(`tool prefix: server="gateway" prefix="isolated" enabled=true found=${isolatedToolDefinitions.length} rejected=0 published=${isolatedToolDefinitions.length}`);
@@ -470,6 +474,16 @@ async function handle(request) {
   if (request.method === 'ping') return response(request.id, {});
   if (request.method === 'tools/list') return response(request.id, { tools: publishedTools() });
   if (request.method === 'tools/call') {
+    if (config.publishToolDirectory && request.params?.name === GATEWAY_CONFIG_NAME) {
+      const toolArguments = request.params?.arguments ?? {};
+      if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments) || Object.keys(toolArguments).length > 0) {
+        return response(request.id, {
+          content: [{ type: 'text', text: 'gateway__get_config does not accept arguments' }],
+          isError: true
+        });
+      }
+      return response(request.id, gatewayConfigMcpResult(createGatewayConfigPayload(config)));
+    }
     if (config.publishToolDirectory && request.params?.name === PREFIX_LIST_NAME) {
       const toolArguments = request.params?.arguments ?? {};
       if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments) || Object.keys(toolArguments).length > 0) {

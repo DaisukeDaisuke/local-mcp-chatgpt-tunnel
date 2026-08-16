@@ -791,6 +791,7 @@ process.stdin.on('data', (chunk) => {
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
     'gateway__list_available_tools',
     'gateway__get_prefix_list',
+    'gateway__get_config',
     'demo__plain',
     'demo__get_gateway_access_scope'
   ]);
@@ -827,13 +828,34 @@ process.stdin.on('data', (chunk) => {
     name: 'gateway__list_available_tools', arguments: { prefix: 'no-such-prefix' }
   } })}\n`);
   const fallback = await nextLine(child.stdout);
-  assert.equal(fallback.result.structuredContent.availableToolCount, 4);
+  assert.equal(fallback.result.structuredContent.availableToolCount, 5);
   assert.deepEqual(fallback.result.structuredContent.tools.map((tool) => tool.name), [
     'demo__get_gateway_access_scope',
     'demo__plain',
+    'gateway__get_config',
     'gateway__get_prefix_list',
     'gateway__list_available_tools'
   ]);
   assert.equal(fallback.result.structuredContent.tools[0].inputSchema, undefined);
   assert.equal(fallback.result.structuredContent.tools[0].outputSchema, undefined);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: {
+    name: 'gateway__get_config', arguments: {}
+  } })}\n`);
+  const gatewayConfig = await nextLine(child.stdout);
+  assert.equal(gatewayConfig.result.isError, false);
+  assert.deepEqual(gatewayConfig.result.structuredContent.disabledServerNames, ['offline']);
+  assert.deepEqual(gatewayConfig.result.structuredContent.servers, [{
+    name: 'demo',
+    prefix: 'demo',
+    allowedDirectories: [workspace],
+    allowedFiles: [],
+    disallowedDirectories: [],
+    disallowedFiles: [],
+    disallowedPathGlobs: [],
+    sandboxReadOnlyDirectories: [],
+    sandboxReadOnlyFiles: []
+  }]);
+  assert.equal(JSON.stringify(gatewayConfig.result.structuredContent).includes('env'), false);
+  assert.equal(JSON.stringify(gatewayConfig.result.structuredContent).includes(serverPath), false);
 });

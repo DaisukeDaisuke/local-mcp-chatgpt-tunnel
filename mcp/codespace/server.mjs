@@ -43,6 +43,13 @@ function boundedIntegerEnvironment(name, fallback, minimum, maximum) {
   return value;
 }
 
+function booleanPolicyEnvironment(name) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '0') return false;
+  if (raw === '1') return true;
+  throw new Error(`${name} must be 0 or 1`);
+}
+
 function stringOption(name) {
   const prefix = `--${name}=`;
   const matches = process.argv.slice(2).filter((value) => value.startsWith(prefix));
@@ -73,6 +80,7 @@ function optionalAbsoluteFileArgument(value, name) {
 const ghExecutableConfigured = absoluteExecutableArgument(stringOption('gh-executable'));
 const tokenFileConfigured = optionalAbsoluteFileArgument(stringOption('token-file'), '--token-file');
 const sshKeyFileConfigured = optionalAbsoluteFileArgument(stringOption('ssh-key-file'), '--ssh-key-file');
+const allowSshKeyInWritableRoot = booleanPolicyEnvironment('LOCAL_MCP_CODESPACE_ALLOW_SSH_KEY_IN_WRITABLE_ROOT');
 
 export const CODESPACE_MCP_HELP = `codespace MCP\n\nUsage:\n  node mcp/codespace/server.mjs --gh-executable=<absolute-gh.exe-path> [--token-file=<absolute-token-file>] [--ssh-key-file=<absolute-private-key>]\n\nControls existing GitHub Codespaces only. It can list/view existing codespaces, run strictly tokenized SSH commands, copy selected local files/directories to one remote destination directory, and publish/privatize GitHub-hosted forwarded ports while returning their browseUrl. It never creates, rebuilds, stops, deletes, or changes the machine type of a codespace, and it never creates a localhost port tunnel.\n`;
 
@@ -433,7 +441,7 @@ async function sshKeyFile() {
     if (info.size < 1 || info.size > 1024 * 1024) throw new Error('--ssh-key-file must contain from 1 byte through 1 MiB');
     const actual = await realpath(sshKeyFileConfigured);
     const selectedRoots = await roots();
-    if (selectedRoots.some((root) => within(root, actual))) throw new Error('--ssh-key-file must be outside writable workspace roots');
+    if (!allowSshKeyInWritableRoot && selectedRoots.some((root) => within(root, actual))) throw new Error('--ssh-key-file must be outside writable workspace roots');
     return actual;
   })();
   return sshKeyPromise;

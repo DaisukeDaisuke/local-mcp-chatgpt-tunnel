@@ -253,6 +253,20 @@ test('Codex permission profile does not narrow a writable parent with redundant 
   assert.equal(override.includes("'C:\\repo\\readonly-helper'='read'"), false);
 });
 
+test('Codex permission profile can narrow one explicit file below a writable root to read-only', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\repo\\mcp\\codespace\\server.mjs'],
+    allowedDirectories: ['C:\\repo'],
+    allowedFiles: [],
+    sandboxReadOnlyFiles: ['C:\\repo\\.ssh\\codespaces_ed25519'],
+    sandboxReadOnlyFileOverrides: ['C:\\repo\\.ssh\\codespaces_ed25519'],
+    isBundled: true
+  });
+  assert.equal(override.includes("'C:\\repo'='write'"), true);
+  assert.equal(override.includes("'C:\\repo\\.ssh\\codespaces_ed25519'='read'"), true);
+});
+
 test('onlineworkspace permission profile enables network without widening filesystem roots', () => {
   const override = codexAppServerInternals.permissionProfileOverrideFor({
     command: 'C:\\Program Files\\nodejs\\node.exe',

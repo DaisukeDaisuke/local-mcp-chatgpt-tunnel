@@ -1,5 +1,6 @@
 export const TOOL_DIRECTORY_NAME = 'gateway__list_available_tools';
 export const PREFIX_LIST_NAME = 'gateway__get_prefix_list';
+export const GATEWAY_CONFIG_NAME = 'gateway__get_config';
 
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
@@ -76,6 +77,59 @@ export const prefixListDefinition = {
   }
 };
 
+const stringArraySchema = {
+  type: 'array',
+  items: { type: 'string' }
+};
+
+export const gatewayConfigDefinition = {
+  name: GATEWAY_CONFIG_NAME,
+  description: 'Return the loaded MCP path-policy configuration. This exposes allow/deny/read-only path settings only; child env, arbitrary args, commands, and secret values are omitted.',
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      servers: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            prefix: { type: 'string' },
+            allowedDirectories: stringArraySchema,
+            allowedFiles: stringArraySchema,
+            disallowedDirectories: stringArraySchema,
+            disallowedFiles: stringArraySchema,
+            disallowedPathGlobs: stringArraySchema,
+            sandboxReadOnlyDirectories: stringArraySchema,
+            sandboxReadOnlyFiles: stringArraySchema
+          },
+          required: [
+            'name', 'prefix',
+            'allowedDirectories', 'allowedFiles',
+            'disallowedDirectories', 'disallowedFiles', 'disallowedPathGlobs',
+            'sandboxReadOnlyDirectories', 'sandboxReadOnlyFiles'
+          ],
+          additionalProperties: false
+        }
+      },
+      disabledServerNames: stringArraySchema
+    },
+    required: ['servers', 'disabledServerNames'],
+    additionalProperties: false
+  }
+};
+
 const summarizeTool = (tool) => ({
   name: tool.name,
   description: typeof tool.description === 'string' ? tool.description : ''
@@ -111,6 +165,31 @@ export function createPrefixListPayload(prefixes) {
 }
 
 export function prefixListMcpResult(payload) {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(payload) }],
+    structuredContent: payload,
+    isError: false
+  };
+}
+
+export function createGatewayConfigPayload(config) {
+  return {
+    servers: config.servers.map((server) => ({
+      name: server.name,
+      prefix: server.prefix,
+      allowedDirectories: [...(server.allowedDirectories ?? [])],
+      allowedFiles: [...(server.allowedFiles ?? [])],
+      disallowedDirectories: [...(server.disallowedDirectories ?? [])],
+      disallowedFiles: [...(server.disallowedFiles ?? [])],
+      disallowedPathGlobs: [...(server.disallowedPathGlobs ?? [])],
+      sandboxReadOnlyDirectories: [...(server.sandboxReadOnlyDirectories ?? [])],
+      sandboxReadOnlyFiles: [...(server.sandboxReadOnlyFiles ?? [])]
+    })),
+    disabledServerNames: [...config.disabledServerNames]
+  };
+}
+
+export function gatewayConfigMcpResult(payload) {
   return {
     content: [{ type: 'text', text: JSON.stringify(payload) }],
     structuredContent: payload,

@@ -270,6 +270,43 @@ test('codespace fixed trust files may not live inside writable workspace roots',
   await assert.rejects(loadGatewayConfig(path), /fixed trust files must be outside allowed_directories/);
 });
 
+test('codespace may grant only its fixed SSH key an exact read-only exception below a writable root', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-codespace-ssh-key-writable-'));
+  const workspace = join(directory, 'workspace');
+  const sshKeyFile = join(workspace, '.ssh', 'codespaces_ed25519');
+  const tokenFile = join(directory, 'gh-token.txt');
+  const serverPath = resolve('mcp/codespace/server.mjs');
+  const allowedPath = join(directory, 'allowed.toml');
+  await writeFile(allowedPath, [
+    'private_use_only = true',
+    '[mcp_servers.codespace]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${tokenFile}', '--ssh-key-file=${sshKeyFile}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "onlineworkspace"',
+    `codex_executable = '${process.execPath}'`,
+    'dangerous_allow_codespace_ssh_key_in_writable_root = true',
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(allowedPath);
+  assert.deepEqual(config.servers[0].sandboxReadOnlyFileOverrides, [sshKeyFile]);
+
+  const tokenInsideWorkspace = sshKeyFile;
+  const rejectedPath = join(directory, 'token-still-rejected.toml');
+  await writeFile(rejectedPath, [
+    'private_use_only = true',
+    '[mcp_servers.codespace]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', '--gh-executable=${process.execPath}', '--token-file=${tokenInsideWorkspace}', '--ssh-key-file=${sshKeyFile}']`,
+    `cwd = '${workspace}'`,
+    'sandbox = "onlineworkspace"',
+    `codex_executable = '${process.execPath}'`,
+    'dangerous_allow_codespace_ssh_key_in_writable_root = true',
+    `allowed_directories = ['${workspace}']`
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(rejectedPath), /fixed trust files must be outside allowed_directories/);
+});
+
 test('gateway requires absolute command paths only for elevated sandbox mode', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-sandbox-executables-'));
   const commandPath = join(directory, 'relative-command.toml');

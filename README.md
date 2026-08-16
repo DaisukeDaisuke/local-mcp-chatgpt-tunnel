@@ -251,7 +251,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | 項目 | 説明 |
 | --- | --- |
 | `private_use_only` | Gateway全体の必須設定です。安全確認のため、必ず`true`にする必要があります。 |
-| `publish_tool_directory` | `true`にすると内蔵ツール`gateway__list_available_tools`を公開します。省略時と`false`では公開しません。 |
+| `publish_tool_directory` | `true`にすると内蔵ツール`gateway__list_available_tools`、`gateway__get_prefix_list`、`gateway__get_config`を公開します。省略時と`false`では公開しません。 |
 | `tool_annotations_path` | 外部MCPのannotations設定TOMLです。相対パスは`gateway.toml`のあるディレクトリを基準にし、省略時は同じディレクトリの`tool-annotations.toml`です。 |
 | `[mcp_servers.<name>]` | 1つのstdio MCP接続を定義する単位です。`<name>`はGateway内で一意にし、この単位ごとに起動方法、Codex sandbox、prefix、パスポリシー、公開ツール、lifecycleを設定します。`enabled = false`なら設定を保持したまま起動対象から外れます。 |
 | `command` | 子MCPを起動する実行ファイルまたはコマンドです。`enabled = false`でない場合は必須です。`sandbox = "elevated"`ではWindows上の絶対パスを持つnative `.exe`が必須です。`unelevated`と`never`ではPATH名も使用できます。 |
@@ -264,6 +264,7 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 | `prefix` | ChatGPTへ公開するツール名の接頭辞です。元の`tool_name`は`<prefix>__<tool_name>`として公開されます。省略時は`[mcp_servers.<name>]`の`<name>`を使います。 |
 | `annotation_config` | 外部annotations設定を適用するかを指定します。省略時は`true`です。同梱MCPのように自身で完全なannotationsを持つ場合は`false`にします。 |
 | `dangerous_allow_gateway_config_access` | 既定は`false`です。`false`では読み込んだ`gateway.toml`の解決前・実在パスを保護対象へ追加し、許可root内にあってもGatewayと子MCPのパスポリシーから拒否します。`true`にするとこの保護だけを解除します。名前どおり危険な互換用設定です。 |
+| `dangerous_allow_codespace_ssh_key_in_writable_root` | Codespace MCP専用で既定は`false`です。`true`の場合だけ、`allowed_directories`配下にある固定`--ssh-key-file`をCodex sandboxへexact-pathの読み取り専用エントリとして追加します。Gatewayの`disallowed_path_globs`等は無効化せず、`--token-file`や`--gh-executable`のwritable-root禁止も解除しません。 |
 | `startup_timeout_sec` | 子MCPの起動と初期化を待つ秒数です。正の数で指定し、省略時は30秒です。 |
 | `tool_timeout_sec` | 子MCPのツール呼び出しを待つ秒数です。正の数で指定し、省略時は1800秒です。 |
 | `request_timeout_sec` | `tool_timeout_sec`の互換用別名です。両方ある場合は`tool_timeout_sec`が優先されるため、新しい設定では`tool_timeout_sec`を使用します。 |
@@ -287,8 +288,9 @@ EXAMPLE_CONFIG = 'C:\path\to\config.json'
 sandbox化した外部MCPでも、絶対pathで指定した`disallowed_directories`、`disallowed_files`、保護中の`gateway.toml`などはCodex permission profileの`deny`として渡されるため、write root内部のexact deny holeを利用できます。一方、Gateway独自の`disallowed_path_globs`はCodex側のglob semanticsへ同値変換できる保証がないため、sandbox化した外部MCPではfail closedで拒否します。同梱MCPは自身でもGatewayのglob deny policyを検証するため、この互換性チェックの例外です。<br>
 `url`によるリモートMCP設定は拒否されます。Codex固有の`tool_output_token_limit`は読み取られても使用されず、このGateway上では効果を持ちません。<br>
 ### 内蔵ツールディレクトリ
-トップレベルで`publish_tool_directory = true`を指定すると、`gateway__list_available_tools`と`gateway__get_prefix_list`を公開します。`gateway__get_prefix_list`は現在起動して公開ツールを持つprefixに加え、Gateway内蔵の`gateway`と、同梱MCPが起動している場合の`isolated`を返します。<br>
-これらのツールはGatewayが既に保持している公開ツールレジストリだけを参照し、設定ファイル、ファイルシステム、子MCPの追加情報を読みません。`enabled = false`のMCPは起動せず、名前だけを`disabledProxyNames`へ返します。<br>
+トップレベルで`publish_tool_directory = true`を指定すると、`gateway__list_available_tools`、`gateway__get_prefix_list`、`gateway__get_config`を公開します。`gateway__get_prefix_list`は現在起動して公開ツールを持つprefixに加え、Gateway内蔵の`gateway`と、同梱MCPが起動している場合の`isolated`を返します。<br>
+`gateway__list_available_tools`と`gateway__get_prefix_list`はGatewayが既に保持している公開ツールレジストリだけを参照します。`gateway__get_config`は起動時に読み込み済みの設定から、各MCPの`name`、`prefix`、`allowed_directories`、`allowed_files`、`disallowed_directories`、`disallowed_files`、`disallowed_path_globs`、sandbox用read-only pathだけをJSONで返します。設定ファイルを再読込せず、設定ファイル自身のパス、`env`、`args`、`command`、その他の秘密値は返しません。<br>
+`enabled = false`のMCPは起動せず、`gateway__list_available_tools`では名前だけを`disabledProxyNames`へ、`gateway__get_config`では名前だけを`disabledServerNames`へ返します。<br>
 入力を省略すると現在利用可能なツールをすべて返し、`prefix`を指定すると大文字小文字を区別せずフル識別子の先頭一致で絞り込みます。該当が0件の場合はエラーにせず、全件を返します。<br>
 返却するツール情報は`chrome-devtools__click`のような省略しない公開名と説明だけです。入力スキーマ、出力スキーマ、起動コマンド、引数、パス、環境変数、拒否されたツール名は返しません。`enabledProxyCount`は設定上有効なMCP数、`rejectedToolCount`は起動済みMCPから公開を拒否したツール数です。<br>
 Gateway初期化時の`[gateway] INFO`には、公開を拒否されたツールだけを1件ずつ記録し、公開された個別ツール名は列挙しません。代わりにprefixごとのfound/rejected/published件数、`enabled = false`のprefix、起動失敗したprefix、全体集計を記録します。<br>
