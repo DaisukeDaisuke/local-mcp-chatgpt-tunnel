@@ -734,8 +734,10 @@ test('codespace temporary public deployment refuses to auto-detect or invent a G
   assert.equal(listed.result.isError, true);
   assert.match(listed.result.structuredContent.error, /not a localhost or local-listening-port auto-detection result/);
   assert.match(listed.result.structuredContent.error, /does not guess a port or synthesize a deployment URL/);
+  assert.match(listed.result.structuredContent.error, /call codespace__open_temporary_public_deployment directly with that exact port/);
   const reply = await server(request(3, 'tools/call', { name: 'open_temporary_public_deployment', arguments: { codespaceId: 'existing-space-123', port: 3000 } }));
   assert.equal(reply.result.isError, true);
-  assert.match(reply.result.structuredContent.error, /does not scan localhost or auto-detect ports/);
-  assert.equal(commands.some((args) => args.includes('3000:public')), false);
+  assert.match(reply.result.structuredContent.error, /GitHub accepted the visibility request/);
+  assert.match(reply.result.structuredContent.error, /did not perform a localhost scan or infer that devcontainer forwardPorts is required/);
+  assert.equal(commands.some((args) => args.includes('3000:public')), true);
 });
