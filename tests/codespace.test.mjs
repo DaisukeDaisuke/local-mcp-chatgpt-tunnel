@@ -730,7 +730,11 @@ test('codespace temporary public deployment refuses to auto-detect or invent a G
     return { stdout: '', stderr: '', exitCode: 0 };
   } });
   await server(request(1, 'initialize'));
-  const reply = await server(request(2, 'tools/call', { name: 'open_temporary_public_deployment', arguments: { codespaceId: 'existing-space-123', port: 3000 } }));
+  const listed = await server(request(2, 'tools/call', { name: 'list_temporary_public_deployments', arguments: { codespaceId: 'existing-space-123' } }));
+  assert.equal(listed.result.isError, true);
+  assert.match(listed.result.structuredContent.error, /not a localhost or local-listening-port auto-detection result/);
+  assert.match(listed.result.structuredContent.error, /does not guess a port or synthesize a deployment URL/);
+  const reply = await server(request(3, 'tools/call', { name: 'open_temporary_public_deployment', arguments: { codespaceId: 'existing-space-123', port: 3000 } }));
   assert.equal(reply.result.isError, true);
   assert.match(reply.result.structuredContent.error, /does not scan localhost or auto-detect ports/);
   assert.equal(commands.some((args) => args.includes('3000:public')), false);
