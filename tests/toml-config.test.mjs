@@ -235,6 +235,7 @@ test('codespace fixed token/key files become read-only sandbox trust inputs', as
   const workspace = join(directory, 'workspace');
   const tokenFile = join(directory, 'gh-token.txt');
   const sshKeyFile = join(directory, 'codespace-key');
+  const sshPublicKeyFile = `${sshKeyFile}.pub`;
   const serverPath = resolve('mcp/codespace/server.mjs');
   const path = join(directory, 'gateway.toml');
   await writeFile(path, [
@@ -248,7 +249,7 @@ test('codespace fixed token/key files become read-only sandbox trust inputs', as
     `allowed_directories = ['${workspace}']`
   ].join('\n'), 'utf8');
   const config = await loadGatewayConfig(path);
-  assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [process.execPath, tokenFile, sshKeyFile]);
+  assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [process.execPath, tokenFile, sshKeyFile, sshPublicKeyFile]);
 });
 
 test('codespace fixed trust files may not live inside writable workspace roots', async () => {

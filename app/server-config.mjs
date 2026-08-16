@@ -267,12 +267,13 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const codespaceGhExecutable = codespaceServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
   const codespaceTokenFile = codespaceServer ? startupPathOption(args, 'token-file', platform) : undefined;
   const codespaceSshKeyFile = codespaceServer ? startupPathOption(args, 'ssh-key-file', platform) : undefined;
+  const codespaceSshPublicKeyFile = codespaceSshKeyFile ? `${codespaceSshKeyFile}.pub` : undefined;
   const dangerousAllowCodespaceSshKeyInWritableRoot = codespaceServer && raw.dangerous_allow_codespace_ssh_key_in_writable_root === true;
   const sandboxReadOnlyFiles = codespaceServer
-    ? [codespaceGhExecutable, codespaceTokenFile, codespaceSshKeyFile].filter(Boolean)
+    ? [codespaceGhExecutable, codespaceTokenFile, codespaceSshKeyFile, codespaceSshPublicKeyFile].filter(Boolean)
     : [];
   const sandboxReadOnlyFileOverrides = dangerousAllowCodespaceSshKeyInWritableRoot && codespaceSshKeyFile
-    ? [codespaceSshKeyFile]
+    ? [codespaceSshKeyFile, codespaceSshPublicKeyFile]
     : [];
   const protectedGatewayLogs = protectedLogPolicyEntries(
     allowedDirectories,
@@ -297,7 +298,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   }
   if (codespaceSshKeyFile
     && !dangerousAllowCodespaceSshKeyInWritableRoot
-    && allowedDirectories.some((directory) => pathWithin(directory, codespaceSshKeyFile, platform))) {
+    && [codespaceSshKeyFile, codespaceSshPublicKeyFile].some((trustFile) => allowedDirectories.some((directory) => pathWithin(directory, trustFile, platform)))) {
     throw new Error(`mcp_servers.${name} fixed trust files must be outside allowed_directories so sandboxed code cannot modify them`);
   }
   return {
@@ -322,6 +323,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
     gatewayArgumentPolicy: codespaceServer ? 'codespace' : 'default',
     codespaceSshKeyFile,
+    codespaceSshPublicKeyFile,
     allowedDirectories,
     allowedFiles,
     sandboxReadOnlyFiles,

@@ -74,6 +74,13 @@ async function canonicalCodespaceSshKey(path) {
   return realpath(path);
 }
 
+async function canonicalCodespaceSshPublicKey(path) {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error('--ssh-key-file requires an adjacent non-symbolic-link regular .pub file');
+  if (info.size < 1 || info.size > 1024 * 1024) throw new Error('--ssh-key-file .pub must contain from 1 byte through 1 MiB');
+  return realpath(path);
+}
+
 function replaceExactPath(values, configuredPath, canonicalPath) {
   return (values ?? []).map((value) => value === configuredPath ? canonicalPath : value);
 }
@@ -399,17 +406,22 @@ async function startChild(childConfig) {
         }
         if (childConfig.codespaceSshKeyFile) {
           const configuredSshKeyFile = childConfig.codespaceSshKeyFile;
+          const configuredSshPublicKeyFile = childConfig.codespaceSshPublicKeyFile;
           const canonicalSshKeyFile = await canonicalCodespaceSshKey(configuredSshKeyFile);
+          const canonicalSshPublicKeyFile = await canonicalCodespaceSshPublicKey(configuredSshPublicKeyFile);
           if (!childConfig.dangerousAllowCodespaceSshKeyInWritableRoot
-            && childConfig.allowedDirectories.some((root) => pathInside(root, canonicalSshKeyFile))) {
+            && [canonicalSshKeyFile, canonicalSshPublicKeyFile].some((trustFile) => childConfig.allowedDirectories.some((root) => pathInside(root, trustFile)))) {
             throw new Error(`${childConfig.name}: --ssh-key-file resolves inside a writable sandbox root`);
           }
           childConfig.args = childConfig.args.map((argument) => argument === `--ssh-key-file=${configuredSshKeyFile}`
             ? `--ssh-key-file=${canonicalSshKeyFile}`
             : argument);
           childConfig.sandboxReadOnlyFiles = replaceExactPath(childConfig.sandboxReadOnlyFiles, configuredSshKeyFile, canonicalSshKeyFile);
+          childConfig.sandboxReadOnlyFiles = replaceExactPath(childConfig.sandboxReadOnlyFiles, configuredSshPublicKeyFile, canonicalSshPublicKeyFile);
           childConfig.sandboxReadOnlyFileOverrides = replaceExactPath(childConfig.sandboxReadOnlyFileOverrides, configuredSshKeyFile, canonicalSshKeyFile);
+          childConfig.sandboxReadOnlyFileOverrides = replaceExactPath(childConfig.sandboxReadOnlyFileOverrides, configuredSshPublicKeyFile, canonicalSshPublicKeyFile);
           childConfig.codespaceSshKeyFile = canonicalSshKeyFile;
+          childConfig.codespaceSshPublicKeyFile = canonicalSshPublicKeyFile;
           childConfig.codespaceSshKeyVerified = true;
         }
       }
