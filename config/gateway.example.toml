@@ -133,7 +133,7 @@ disallowed_path_globs = ['**.ssh**']
 # cwd is mandatory here even though every GitHub repository argument is allowlisted by --repository.
 [mcp_servers.gh_workflow]
 command = "node"
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs', '--repository=DaisukeDaisuke/desmume_webassembly']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs', '--repository=DaisukeDaisuke/desmume_webassembly', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 prefix = "gh_workflow"
