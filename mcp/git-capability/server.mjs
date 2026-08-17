@@ -81,10 +81,24 @@ export function safeCloneUrl(value) {
     throw new Error('url must use http, https, ssh, or user@host:path syntax');
   }
   if (parsed.password) {
-    throw new Error('url may not contain an embedded password; use normal Git authentication');
+    throw new Error('url may not contain an embedded password');
   }
   if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.username) {
-    throw new Error('HTTP(S) url may not contain embedded credentials; use the configured Git credential helper or askpass authentication');
+    throw new Error('HTTP(S) url may not contain embedded credentials; HTTP(S) cloning is anonymous only');
+  }
+  return value;
+}
+
+export function cloneUsesAnonymousHttp(value) {
+  if (/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+$/.test(value)) return false;
+  const parsed = new URL(value);
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+}
+
+export function safeCloneRef(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 255 || /[\0\r\n]/.test(value) || value.startsWith('-')) {
+    throw new Error('ref must be one branch or tag name');
   }
   return value;
 }
@@ -234,13 +248,14 @@ const operationSchemas = mode === 'stage' ? [
   annotations: OPEN_DESTRUCTIVE
 } : {
   name: 'clone_repository',
-  description: 'Clone one caller-supplied HTTP, HTTPS, or SSH Git URL into one new child directory of the signed base. ssh://user@host/path and user@host:path forms are accepted. Normal inherited Git credential helpers, askpass, and SSH authentication are preserved. Checkout is delayed until the incoming tree passes path policy. Submodules, arbitrary parents, and arbitrary Git arguments are not exposed.',
+  description: 'Clone one caller-supplied HTTP, HTTPS, or SSH Git URL into one new child directory of the signed base. HTTP(S) cloning is always anonymous: credential helpers, AskPass, terminal prompts, inherited Git config injection, and system/global Git config are disabled. SSH cloning is allowed only when this MCP is running without the Codex sandbox (sandbox=never), where normal local SSH authentication is inherited. Optional ref accepts either a branch name or tag name and is passed as git clone --branch. Remote access and the requested ref are verified before the destination is created. Checkout is delayed until the incoming tree passes path policy. Submodules, arbitrary parents, and arbitrary Git arguments are not exposed.',
   inputSchema: {
     type: 'object',
     properties: {
-      url: { type: 'string', minLength: 1, maxLength: 4096, description: 'HTTP, HTTPS, or SSH Git repository URL. ssh://user@host/path and user@host:path forms are accepted. Embedded HTTP(S) credentials and SSH passwords are rejected; use normal Git authentication.' },
+      url: { type: 'string', minLength: 1, maxLength: 4096, description: 'HTTP, HTTPS, or SSH Git repository URL. HTTP(S) is always anonymous. SSH uses normal local authentication only when sandbox=never. Embedded HTTP(S) credentials and SSH passwords are rejected.' },
       destinationDirectory: { type: 'string', minLength: 1, maxLength: 255 },
-      depth: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER }
+      depth: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+      ref: { type: 'string', minLength: 1, maxLength: 255, description: 'Optional branch or tag name, equivalent to git clone --branch <ref>.' }
     },
     required: ['url', 'destinationDirectory'],
     additionalProperties: false
@@ -318,7 +333,7 @@ async function canonicalGitExecutable() {
   return gitExecutablePromise;
 }
 
-function gitEnvironment() {
+function gitEnvironment({ anonymousClone = false } = {}) {
   const environment = environmentWithoutBundledIsolationKey();
   const networkAuthentication = mode === 'push' || mode === 'pull' || mode === 'clone';
   for (const name of ['GIT_EXTERNAL_DIFF', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR']) delete environment[name];
@@ -331,12 +346,25 @@ function gitEnvironment() {
       if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/i.test(name)) delete environment[name];
     }
   }
+  if (anonymousClone) {
+    for (const name of [
+      'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_CONFIG_PARAMETERS',
+      'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_GLOBAL'
+    ]) delete environment[name];
+    for (const name of Object.keys(environment)) {
+      if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/i.test(name)) delete environment[name];
+    }
+    environment.GIT_CONFIG_NOSYSTEM = '1';
+    environment.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    environment.GIT_TERMINAL_PROMPT = '0';
+    environment.GCM_INTERACTIVE = 'Never';
+  }
   environment.GIT_OPTIONAL_LOCKS = '0';
   if (!networkAuthentication && environment.GIT_TERMINAL_PROMPT === undefined) environment.GIT_TERMINAL_PROMPT = '0';
   return environment;
 }
 
-function fixedGitConfigArguments(cwd) {
+function fixedGitConfigArguments(cwd, { anonymousClone = false } = {}) {
   const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const configEntries = [
     ['core.hooksPath', nullPath],
@@ -346,15 +374,21 @@ function fixedGitConfigArguments(cwd) {
     ['protocol.https.allow', 'always'],
     ['protocol.ssh.allow', 'always'],
     ['core.fsmonitor', 'false'],
+    ...(anonymousClone ? [
+      ['credential.helper', ''],
+      ['credential.interactive', 'never'],
+      ['core.askPass', ''],
+      ['http.extraHeader', '']
+    ] : []),
     ...(codexSandboxChangesUser ? [['safe.directory', cwd]] : [])
   ];
   return configEntries.flatMap(([key, value]) => ['-c', `${key}=${value}`]);
 }
 
-async function runGit(cwd, args, { acceptedExitCodes = [0] } = {}) {
+async function runGit(cwd, args, { acceptedExitCodes = [0], anonymousClone = false } = {}) {
   const executable = await canonicalGitExecutable();
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(executable, [...fixedGitConfigArguments(cwd), ...args], { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: gitEnvironment() });
+    const child = spawn(executable, [...fixedGitConfigArguments(cwd, { anonymousClone }), ...args], { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: gitEnvironment({ anonymousClone }) });
     const stdout = [];
     const stderr = [];
     let bytes = 0;
@@ -555,6 +589,11 @@ function safeDestinationName(value) {
 async function cloneRepository(args) {
   const base = await resolveExistingDirectory(await contextBase(), 'clone parent');
   const url = safeCloneUrl(args.url);
+  const anonymousHttp = cloneUsesAnonymousHttp(url);
+  if (!anonymousHttp && codexSandboxMode !== 'never') {
+    throw new Error('SSH cloning requires sandbox=never so local SSH authentication is never exposed inside the Codex sandbox');
+  }
+  const ref = safeCloneRef(args.ref);
   const name = safeDestinationName(args.destinationDirectory);
   const destination = resolve(base, name);
   const roots = await contextRoots();
@@ -567,14 +606,19 @@ async function cloneRepository(args) {
   if (depth !== undefined && (!Number.isSafeInteger(depth) || depth < 1)) throw new Error('depth must be a positive safe integer');
   const command = ['clone', '--no-local', '--no-checkout'];
   if (depth !== undefined) command.push(`--depth=${depth}`);
+  if (ref !== undefined) command.push('--branch', ref);
   command.push('--', url, name);
   try {
-    await runGit(base, command);
+    const probe = ref === undefined
+      ? ['ls-remote', '--', url]
+      : ['ls-remote', '--exit-code', '--refs', '--', url, `refs/heads/${ref}`, `refs/tags/${ref}`];
+    await runGit(base, probe, { anonymousClone: anonymousHttp });
+    await runGit(base, command, { anonymousClone: anonymousHttp });
     const cloned = await resolveExistingDirectory(destination, 'clone destination');
     await assertNoRepositoryExecutableGitConfiguration(cloned);
     await assertTreeAllowed(cloned, 'HEAD');
     await runGit(cloned, ['checkout', '--force']);
-    return { parentDirectory: base, destinationDirectory: cloned, remoteUrlAccepted: true, recurseSubmodules: false, ...(depth === undefined ? {} : { depth }) };
+    return { parentDirectory: base, destinationDirectory: cloned, remoteUrlAccepted: true, anonymous: anonymousHttp, recurseSubmodules: false, ...(depth === undefined ? {} : { depth }), ...(ref === undefined ? {} : { ref }) };
   } catch (error) {
     try {
       const actual = await realpath(destination);
@@ -692,7 +736,7 @@ export async function startStdio(input = process.stdin, output = process.stdout)
   });
 }
 
-export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=stage --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO [--repository=OWNER/OTHER_REPO ...]\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO [--repository=OWNER/OTHER_REPO ...]\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path>\n\nFor push/pull, --repository may be repeated to allow multiple GitHub repositories. Legacy --expected-remote-url=<exact-url> remains supported instead of --repository. clone_repository accepts HTTP/HTTPS/SSH URLs, including user@host:path, per call and preserves normal inherited Git authentication.\nEach process exposes one bounded Git capability group plus roots/get_working_directory/set_working_directory. stage exposes only add_all, stage_paths, and unstage_paths.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
+export const HELP = `git-capability MCP\n\nUsage:\n  node mcp/git-capability/server.mjs --mode=stage --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=commit --git-executable=<absolute-git-path>\n  node mcp/git-capability/server.mjs --mode=push --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO [--repository=OWNER/OTHER_REPO ...]\n  node mcp/git-capability/server.mjs --mode=pull --git-executable=<absolute-git-path> --remote=origin --repository=OWNER/REPO [--repository=OWNER/OTHER_REPO ...]\n  node mcp/git-capability/server.mjs --mode=clone --git-executable=<absolute-git-path>\n\nFor push/pull, --repository may be repeated to allow multiple GitHub repositories. Legacy --expected-remote-url=<exact-url> remains supported instead of --repository. clone_repository accepts caller-supplied HTTP/HTTPS/SSH URLs. HTTP(S) is always anonymous: credential helpers, AskPass, terminal prompting, inherited Git config injection, and system/global Git config are disabled. SSH is accepted only with sandbox=never and then inherits normal local SSH authentication. Optional ref selects either a branch or a tag using git clone --branch.\nEach process exposes one bounded Git capability group plus roots/get_working_directory/set_working_directory. stage exposes only add_all, stage_paths, and unstage_paths.\nAll Gateway calls require the bundled HMAC-signed isolation context. The capability never accepts a repositoryPath, arbitrary Git arguments, arbitrary executable, arbitrary environment, or shell command.\n`;
 
 if (directExecution) {
   if (help) process.stdout.write(HELP);

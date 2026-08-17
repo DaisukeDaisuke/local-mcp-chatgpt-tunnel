@@ -131,7 +131,7 @@ test('git-capability exposes only the operations assigned to each mode', async (
     if (mode === 'push' || mode === 'pull') assert.deepEqual(Object.keys(listed.result.tools.at(-1).inputSchema.properties), []);
     if (mode === 'clone') {
       const schema = listed.result.tools.at(-1).inputSchema;
-      assert.deepEqual(Object.keys(schema.properties), ['url', 'destinationDirectory', 'depth']);
+      assert.deepEqual(Object.keys(schema.properties), ['url', 'destinationDirectory', 'depth', 'ref']);
       assert.deepEqual(schema.required, ['url', 'destinationDirectory']);
       assert.ok(!Object.hasOwn(schema.properties, 'parentDirectory'));
       assert.ok(!Object.hasOwn(schema.properties, 'recurseSubmodules'));
@@ -139,23 +139,29 @@ test('git-capability exposes only the operations assigned to each mode', async (
   }
 });
 
-test('git-capability clone accepts arbitrary HTTP(S)/SSH URLs at tool-call time and rejects embedded passwords', async () => {
+test('git-capability clone keeps HTTP(S) anonymous, permits SSH outside the sandbox, and accepts branch/tag refs', async () => {
   const root = await testRoot('git-capability-clone-url-');
-  const { createServer, safeCloneUrl } = await importCapability(root, 'clone', 'clone-url');
+  const { createServer, safeCloneUrl, safeCloneRef, cloneUsesAnonymousHttp } = await importCapability(root, 'clone', 'clone-url');
   const server = createServer();
   await server(request(1, 'initialize'));
 
-  for (const url of [
-    'https://github.com/OWNER/REPO.git',
-    'http://example.invalid/OWNER/REPO.git',
-    'ssh://git@github.com/OWNER/REPO.git',
-    'git@github.com:OWNER/REPO.git',
-    'deploy@example.invalid:projects/repository.git'
-  ]) assert.equal(safeCloneUrl(url), url);
+  for (const [url, anonymousHttp] of [
+    ['https://github.com/OWNER/REPO.git', true],
+    ['http://example.invalid/OWNER/REPO.git', true],
+    ['ssh://git@github.com/OWNER/REPO.git', false],
+    ['git@github.com:OWNER/REPO.git', false]
+  ]) {
+    assert.equal(safeCloneUrl(url), url);
+    assert.equal(cloneUsesAnonymousHttp(url), anonymousHttp);
+  }
+
+  for (const ref of ['main', 'release/1.27', 'v1.27.1']) assert.equal(safeCloneRef(ref), ref);
+  assert.equal(safeCloneRef(undefined), undefined);
+  for (const ref of ['', '-branch', 'bad\nref']) assert.throws(() => safeCloneRef(ref), /ref must be one branch or tag name/);
 
   for (const [id, url, expectedError] of [
     [2, 'file:///tmp/repository.git', /must use http, https, ssh, or user@host:path syntax/],
-    [3, 'https://user:secret@example.invalid/repository.git', /may not contain an embedded password/],
+    [3, 'https://user:secret@example.invalid/repository.git', /may not contain embedded credentials/],
     [4, 'ssh://git:secret@example.invalid/repository.git', /may not contain an embedded password/]
   ]) {
     const refused = await server(request(id, 'tools/call', {
@@ -165,6 +171,19 @@ test('git-capability clone accepts arbitrary HTTP(S)/SSH URLs at tool-call time 
     assert.equal(refused.result.isError, true);
     assert.match(refused.result.structuredContent.error, expectedError);
   }
+});
+
+test('git-capability clone refuses SSH when the Codex sandbox is active', async () => {
+  const root = await testRoot('git-capability-clone-ssh-sandbox-');
+  const { createServer } = await importCapability(root, 'clone', 'clone-ssh-sandbox', { sandboxMode: 'elevated' });
+  const server = createServer();
+  await server(request(1, 'initialize'));
+  const refused = await server(request(2, 'tools/call', {
+    name: 'clone_repository',
+    arguments: signedArguments(root, { url: 'git@github.com:OWNER/REPO.git', destinationDirectory: 'clone-ssh' })
+  }));
+  assert.equal(refused.result.isError, true);
+  assert.match(refused.result.structuredContent.error, /SSH cloning requires sandbox=never/);
 });
 
 test('git-capability stage updates only the Git index and preserves line-ending conversion', async () => {
