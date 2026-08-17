@@ -51,6 +51,7 @@ allowed_files = []
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']
+blocked_tool_substrings = ["worktree"]
 
 # Index staging is separated because git add/restore writes .git/index and .git/index.lock.
 [mcp_servers.git_stage]

@@ -59,6 +59,7 @@ allowed_files = []
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']
+blocked_tool_substrings = ["worktree"]
 # CodexのWindows sandboxは: minimal readでC:\Program Filesをsystem read rootとして扱うため、
 # 上記の標準Git for Windows配置は追加設定不要です。Portable Gitなどを別の場所へ置く場合だけ、
 # そのGitインストールディレクトリをsandbox_read_only_directoriesへ追加してください。
