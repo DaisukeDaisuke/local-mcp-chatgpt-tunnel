@@ -80,11 +80,11 @@ export function safeCloneUrl(value) {
   if (!['http:', 'https:', 'ssh:'].includes(parsed.protocol) || !parsed.hostname) {
     throw new Error('url must use http, https, ssh, or user@host:path syntax');
   }
+  if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && (parsed.username || parsed.password)) {
+    throw new Error('HTTP(S) url may not contain embedded credentials; HTTP(S) cloning is anonymous only');
+  }
   if (parsed.password) {
     throw new Error('url may not contain an embedded password');
-  }
-  if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.username) {
-    throw new Error('HTTP(S) url may not contain embedded credentials; HTTP(S) cloning is anonymous only');
   }
   return value;
 }

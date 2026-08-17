@@ -157,19 +157,24 @@ test('git-capability clone keeps HTTP(S) anonymous, permits SSH outside the sand
 
   for (const ref of ['main', 'release/1.27', 'v1.27.1']) assert.equal(safeCloneRef(ref), ref);
   assert.equal(safeCloneRef(undefined), undefined);
-  for (const ref of ['', '-branch', 'bad\nref']) assert.throws(() => safeCloneRef(ref), /ref must be one branch or tag name/);
+  for (const ref of ['', '-branch', 'bad\nref']) {
+    assert.throws(
+      () => safeCloneRef(ref),
+      (error) => error.message === 'ref must be one branch or tag name'
+    );
+  }
 
   for (const [id, url, expectedError] of [
-    [2, 'file:///tmp/repository.git', /must use http, https, ssh, or user@host:path syntax/],
-    [3, 'https://user:secret@example.invalid/repository.git', /may not contain embedded credentials/],
-    [4, 'ssh://git:secret@example.invalid/repository.git', /may not contain an embedded password/]
+    [2, 'file:///tmp/repository.git', 'url must use http, https, ssh, or user@host:path syntax'],
+    [3, 'https://user:secret@example.invalid/repository.git', 'HTTP(S) url may not contain embedded credentials; HTTP(S) cloning is anonymous only'],
+    [4, 'ssh://git:secret@example.invalid/repository.git', 'url may not contain an embedded password']
   ]) {
     const refused = await server(request(id, 'tools/call', {
       name: 'clone_repository',
       arguments: signedArguments(root, { url, destinationDirectory: `clone-${id}` })
     }));
     assert.equal(refused.result.isError, true);
-    assert.match(refused.result.structuredContent.error, expectedError);
+    assert.equal(refused.result.structuredContent.error, expectedError);
   }
 });
 
@@ -183,7 +188,10 @@ test('git-capability clone refuses SSH when the Codex sandbox is active', async 
     arguments: signedArguments(root, { url: 'git@github.com:OWNER/REPO.git', destinationDirectory: 'clone-ssh' })
   }));
   assert.equal(refused.result.isError, true);
-  assert.match(refused.result.structuredContent.error, /SSH cloning requires sandbox=never/);
+  assert.equal(
+    refused.result.structuredContent.error,
+    'SSH cloning requires sandbox=never so local SSH authentication is never exposed inside the Codex sandbox'
+  );
 });
 
 test('git-capability stage updates only the Git index and preserves line-ending conversion', async () => {
