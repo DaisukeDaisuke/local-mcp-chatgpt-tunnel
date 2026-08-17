@@ -187,7 +187,7 @@ allowed_files = ['C:\ABSOLUTE\PATH\TO\github-token.txt']
 disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
-blocked_tool_substrings = ["wait"]
+blocked_tool_substrings = ["watch_run"]
 
 # Read-only image transfer for ChatGPT vision. Enable it only after replacing every dummy path.
 [mcp_servers.images]
