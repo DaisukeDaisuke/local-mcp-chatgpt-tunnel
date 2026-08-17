@@ -124,7 +124,7 @@ remote検索は`roots`で`/workspaces`直下のworkspaceだけを列挙し、`gi
 ### git-capability
 `git-capability`は`mcp/git-capability/server.mjs`を`--mode=stage|commit|push|pull|clone`で複数登録し、用途ごとにGit capabilityを分離する同梱MCPです。各登録は独立した`[mcp_servers.<name>]`なので、`sandbox`、`allowed_directories`、timeout、`serial_group`を個別に選べます。`sandbox = "never"`は禁止せず、Git index、署名agent、networkとの互換性が必要な利用者も従来経路を選択できます。<br>
 全modeで`--git-executable=<absolute-path>`を起動時に固定し、tool引数からGit実行ファイル、repositoryPath、環境変数、任意Git引数を選べません。Gateway経由では通常のbundled MCPと同じHMAC署名済みisolated workspaceが必須です。リポジトリ内の`.git/config`またはworktree configに実行可能なhook / helper / filter / diff / merge driver / signing program / proxy / transport設定がある場合は、capability実行前に拒否します。<br>
-`stage` modeは`add_all`、`stage_paths`、`unstage_paths`だけを公開し、repository選択は署名済みworkspace/baseから固定します。`git add`やunstageは`.git/index`と`.git/index.lock`を書き換えるため、`.git`へのwriteを許さないCodex OS sandboxでは動作しません。その構成ではstage MCPだけを`sandbox = "never"`に分離し、読み取り中心の`gitmcp`はsandbox内に残せます。stage時も標準のignore、attributes、line-ending conversion、system/global clean filterを尊重し、deny対象のworktree pathは拒否します。<br>
+`stage` modeは`add_all`、`stage_paths`、`unstage_paths`だけを公開し、repository選択は署名済みworkspace/baseから固定します。Gatewayはsandboxed Git MCPの起動時、書き込み可能root配下にその時点で存在する`.git`を自前で走査し、Codex permission profileへ具体的なGit metadata write rootを追加します。これはCodex側の`is_metadata_write_denied` / `has_explicit_write_entry_for_metadata_path`が、保護metadata内のより具体的な明示write entryを許可する実装に基づきます。`.git/hooks`、`.git/objects/info`、`.git/modules`はwrite拒否のままにし、既存の`.git/config`、`config.worktree`、`commondir`、`gitdir`もwrite拒否します。そのためstageや通常のbranch/worktree metadata更新はsandbox内で利用できますが、submodule追加は対象外です。起動後に新しく作られる`.git`は自動許可しないため、`git init`とsandbox内cloneはこの仕組みでは扱いません。stage時も標準のignore、attributes、line-ending conversion、system/global clean filterを尊重し、deny対象のworktree pathは拒否します。<br>
 `commit` modeのtool引数は`message`だけで、既にstage済みのindexだけを`git commit --no-verify -m <message>`でcommitします。stage機能やrepository選択は持ちません。system/globalのcommit signing設定は維持するため、署名agentへアクセスさせたい構成ではcommit MCPだけを`sandbox = "never"`にし、より大きな`gitmcp`はsandbox内に残せます。<br>
 `push`と`pull`は起動時に`--remote=`と1個以上の`--repository=OWNER/REPO`を固定し、remote URLからGitHubのrepository identityを正規化して許可リストのいずれかと照合します。そのため`https://github.com/OWNER/REPO.git`と`git@github.com:OWNER/REPO.git`は同一repositoryとして扱いますが、repository名の部分一致は許可しません。複数workspaceを1つのcapabilityへ許可する場合は`--repository=`を繰り返せます。旧`--expected-remote-url=<exact-url>`も下位互換性のため利用できます。tool呼び出しはremote、URL、refspecを受け取りません。pushはcurrent branchだけをforceなしで送信し、upstream設定を書き換えません。pullは固定remoteをfetchし、incoming treeへpath policyを適用してから同名current branchへ`--ff-only`で反映します。<br>
 `clone`は起動時の`--url=`を廃止し、tool側で`url`、新規子ディレクトリ名、任意の`depth`を受け取ります。`url`は任意hostの`http://`、`https://`、`ssh://user@host/path`、`user@host:path`形式を許可します。HTTP(S) URLへの認証情報埋め込みとSSH URLへのパスワード埋め込みは拒否し、通常のGit credential helper、askpass、SSH agent / SSH設定などの継承認証経路を維持します。`--no-checkout`で取得後、incoming treeの許可・拒否パスを検査してからcheckoutし、失敗時はその呼び出しで新規作成したclone先だけを削除します。submodule再帰と任意parentは公開しません。<br>
@@ -187,6 +187,9 @@ Gatewayはその設定を読み取り、検証して適用しますが、利用�
 例外は上記の`codex-script`で、実行runtimeをMCP起動時に固定し、許可Workspace内の既存スクリプトだけをCodex Windows sandbox内で実行します。これはパス許可だけで任意コードを安全化するものではなく、OS sandboxを必須化した限定的なscript runnerです。<br>
 一般的な任意コード実行を直接公開すると、Tunnel IDやruntime API keyなどの接続情報が意図せず流出し、不正利用された場合、攻撃者がWindowsユーザー権限で任意の操作を実行できる可能性があります。そのため、外部の任意コード実行MCPを追加する場合も`sandbox = "elevated"`または`"unelevated"`を使い、書き込み可能rootを必要最小限にしてください。<br>
 コードの生成や変換などローカル実行を必要としない作業は、引き続きChatGPT側のサンドボックスを優先してください。ローカルのソースを渡すだけなら、`safe-download`で許可したファイルだけをZIP化できます。<br>
+### Gateway実行コードの保護
+`protect_gateway_app = true`を設定すると、Gateway自身の`app`ディレクトリが許可Workspaceと重なった場合でも子MCPからはread-onlyとして扱います。Gatewayコード上のデフォルトは`false`ですが、同梱の設定例では`true`です。sandboxed MCPではCodex permission profileへより具体的なread entryを追加し、`safe-files`では読み取りと`file_info`を維持したままwrite、replace、move元削除、patch、配下directory作成を拒否します。`file_info`では保護対象を`prohibited=true`として表示します。<br>
+この設定は`sandbox = "never"`の子プロセスが任意コード実行まで侵害された場合のOS境界にはなりません。`never`では子自身がGateway path policyを無視できるため、実行コードへの強制的な書込拒否が必要な用途ではCodex OS sandboxを使用してください。<br>
 ### パス許可
 `allowed_directories`は指定したディレクトリとその配下を許可し、`allowed_files`は指定したファイルだけを完全一致で許可します。<br>
 Gatewayはすべての子MCPのツール引数を再帰的に検査し、`path`、`filePath`、`files`、`directory`などのキーや絶対パスらしい文字列を許可リストへ照合します。相対パスは対象MCPの`cwd`から解決します。<br>
@@ -211,6 +214,7 @@ Codexの設定ファイルをそのまま読み込む互換機能ではなく、
 `config/gateway.toml`へMCPを追加する場合は、コメント用の`#`を付けず、次のように記述します。以下はGatewayが認識する全オプションを載せたテンプレートです。<br>
 ```toml
 private_use_only = true
+protect_gateway_app = true
 publish_tool_directory = false
 tool_annotations_path = "tool-annotations.toml"
 

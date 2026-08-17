@@ -56,6 +56,8 @@ export class StdioMcpChild {
       : protectedPathsInsideConfiguredAccess(this.config, this.config.protectedGatewayConfigPaths ?? []);
     const protectedGatewayLogDirectories = this.config.protectedGatewayLogDirectories ?? [];
     const protectedGatewayLogFiles = this.config.protectedGatewayLogFiles ?? [];
+    const protectedGatewayAppDirectories = this.config.protectedGatewayAppDirectories ?? [];
+    const protectedGatewayAppFiles = this.config.protectedGatewayAppFiles ?? [];
     const disallowedDirectories = [...new Set([
       ...(this.config.disallowedDirectories ?? []),
       ...protectedGatewayLogDirectories
@@ -71,6 +73,12 @@ export class StdioMcpChild {
       LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(disallowedDirectories),
       LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(disallowedFiles),
       LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? []),
+      ...(this.config.safeFilesServer
+        ? {
+          LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES: JSON.stringify(protectedGatewayAppDirectories),
+          LOCAL_MCP_WRITE_PROTECTED_FILES: JSON.stringify(protectedGatewayAppFiles)
+        }
+        : {}),
       LOCAL_MCP_CODEX_SANDBOX_MODE: this.config.sandbox ?? 'never',
       ...(this.config.codespaceSshRuntimeDirectory
         ? { LOCAL_MCP_CODESPACE_SSH_RUNTIME_DIRECTORY: this.config.codespaceSshRuntimeDirectory }

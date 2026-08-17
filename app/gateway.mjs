@@ -50,6 +50,7 @@ import { assertSandboxPathPolicyCompatible } from './sandbox-path-policy.mjs';
 import { createGatewayInfoLogger } from './gateway-info-log.mjs';
 import { gatewayPathPolicyArguments } from './gateway-path-arguments.mjs';
 import { sandboxDotPathWarningLines } from './sandbox-hidden-path-warning.mjs';
+import { scanGitMetadataPolicy } from './git-metadata-policy.mjs';
 
 scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
@@ -394,6 +395,21 @@ async function startChild(childConfig) {
             .filter((path) => childConfig.allowedDirectories.some((root) => pathInside(root, path))
               || childConfig.allowedFiles.some((file) => relative(file, path) === ''))
         ])];
+        childConfig.sandboxForcedReadOnlyDirectories = [...new Set([
+          ...(childConfig.sandboxForcedReadOnlyDirectories ?? []),
+          ...(childConfig.protectedGatewayAppDirectories ?? [])
+        ])];
+        childConfig.sandboxForcedReadOnlyFiles = [...new Set([
+          ...(childConfig.sandboxForcedReadOnlyFiles ?? []),
+          ...(childConfig.protectedGatewayAppFiles ?? [])
+        ])];
+        if (childConfig.gitMetadataWriteAccess) {
+          const gitMetadata = await scanGitMetadataPolicy(childConfig.allowedDirectories);
+          childConfig.sandboxGitMetadataWriteDirectories = gitMetadata.writableDirectories;
+          childConfig.sandboxGitMetadataDeniedDirectories = gitMetadata.deniedDirectories;
+          childConfig.sandboxGitMetadataDeniedFiles = gitMetadata.deniedFiles;
+          info(`git metadata sandbox policy: server=${JSON.stringify(childConfig.name)} repositories=${gitMetadata.writableDirectories.length} deny_directories=${gitMetadata.deniedDirectories.length} deny_files=${gitMetadata.deniedFiles.length} scanned_directories=${gitMetadata.scannedDirectories} truncated=${gitMetadata.truncated} skipped_git_pointers=${gitMetadata.skippedGitPointers}`);
+        }
         childConfig.codexExecutable = await canonicalExecutable(childConfig.codexExecutable, `${childConfig.name} codex_executable`);
         if (childConfig.sandbox === 'elevated' || childConfig.sandbox === 'onlineworkspace') {
           childConfig.command = await canonicalExecutable(childConfig.command, `${childConfig.name} command`);

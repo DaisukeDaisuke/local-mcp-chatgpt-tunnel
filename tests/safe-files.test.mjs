@@ -11,11 +11,51 @@ async function serverFor(root, suffix, options = {}) {
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = JSON.stringify(options.disallowedDirectories ?? []);
   process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
+  process.env.LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES = JSON.stringify(options.writeProtectedDirectories ?? []);
+  process.env.LOCAL_MCP_WRITE_PROTECTED_FILES = JSON.stringify(options.writeProtectedFiles ?? []);
   const { createServer } = await import(`../mcp/safe-files/server.mjs?test=${suffix}-${Date.now()}`);
   const server = createServer();
   await server(request(1, 'initialize', {}));
   return server;
 }
+
+test('safe-files reports Gateway source protection in file_info while keeping protected source readable and non-writable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'safe-files-write-protected-'));
+  const app = join(root, 'app');
+  const source = join(app, 'gateway.mjs');
+  await mkdir(app);
+  await writeFile(source, 'export const value = 1;\n', 'utf8');
+  const server = await serverFor(root, 'write-protected', { writeProtectedDirectories: [app] });
+
+  const info = await server(request(2, 'tools/call', {
+    name: 'file_info', arguments: { paths: [source] }
+  }));
+  const item = info.result.structuredContent.result.items[0];
+  assert.equal(item.ok, true);
+  assert.equal(item.prohibited, true);
+  assert.ok(item.prohibitedReasons.some((reason) => reason.startsWith('write_protected_directories:')));
+
+  const read = await server(request(3, 'tools/call', {
+    name: 'read_text', arguments: { path: source }
+  }));
+  assert.equal(read.result.isError, false);
+  assert.equal(read.result.structuredContent.result.results[0].content, 'export const value = 1;');
+
+  const write = await server(request(4, 'tools/call', {
+    name: 'write_text_file', arguments: { path: source, content: 'export const value = 2;\n', overwrite: true }
+  }));
+  assert.equal(write.result.isError, true);
+  assert.match(write.result.structuredContent.error, /read-only because it contains protected Gateway source code/);
+
+  const patch = await server(request(5, 'tools/call', {
+    name: 'apply_patch',
+    arguments: {
+      patch: '*** Begin Patch\n*** Update File: app/gateway.mjs\n@@\n-export const value = 1;\n+export const value = 2;\n*** End Patch'
+    }
+  }));
+  assert.equal(patch.result.isError, true);
+  assert.match(patch.result.structuredContent.error, /read-only because it contains protected Gateway source code/);
+});
 
 async function createSymlinkOrSkip(t, target, path) {
   try {

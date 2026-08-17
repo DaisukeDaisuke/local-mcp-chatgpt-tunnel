@@ -7,6 +7,10 @@ import { parseToml } from './toml-lite.mjs';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const gatewayLogsDirectory = resolve(repositoryRoot, 'logs');
+export const gatewayAppDirectory = resolve(repositoryRoot, 'app');
+const SAFE_FILES_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'safe-files', 'server.mjs');
+const GIT_MCP_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'gitmcp', 'server.mjs');
+const GIT_CAPABILITY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'git-capability', 'server.mjs');
 const CODEX_SCRIPT_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codex-script', 'server.mjs');
 const BUILD_V5T_ASSEMBLY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'buildv5tassembly', 'server.mjs');
 const INTERNET_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'internet', 'server.mjs');
@@ -34,6 +38,8 @@ const RESERVED_POLICY_ENVIRONMENT = new Set([
   'LOCAL_MCP_DISALLOWED_DIRECTORIES',
   'LOCAL_MCP_DISALLOWED_FILES',
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS',
+  'LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES',
+  'LOCAL_MCP_WRITE_PROTECTED_FILES',
   'LOCAL_MCP_GATEWAY_ISOLATION_KEY',
   'LOCAL_MCP_CODEX_SANDBOX_MODE',
   'LOCAL_MCP_CODEX_EXECUTABLE',
@@ -100,6 +106,25 @@ function isBundledServer(command, args, cwd, platform = process.platform) {
   if (executable !== 'node' && executable !== 'node.exe') return false;
   const candidate = comparablePath(absoluteFrom(cwd, args[0], platform), platform);
   return BUNDLED_SERVER_PATHS.some((path) => comparablePath(path, platform) === candidate);
+}
+
+function isServerPath(command, args, cwd, expectedPath, platform = process.platform) {
+  if (platform !== process.platform || args.length === 0) return false;
+  const executable = platformPath(platform).basename(command).toLowerCase();
+  if (executable !== 'node' && executable !== 'node.exe') return false;
+  return comparablePath(absoluteFrom(cwd, args[0], platform), platform) === comparablePath(expectedPath, platform);
+}
+
+function isSafeFilesServer(command, args, cwd, platform = process.platform) {
+  return isServerPath(command, args, cwd, SAFE_FILES_SERVER_PATH, platform);
+}
+
+function isGitMcpServer(command, args, cwd, platform = process.platform) {
+  return isServerPath(command, args, cwd, GIT_MCP_SERVER_PATH, platform);
+}
+
+function isGitCapabilityServer(command, args, cwd, platform = process.platform) {
+  return isServerPath(command, args, cwd, GIT_CAPABILITY_SERVER_PATH, platform);
 }
 
 function isCodexScriptServer(command, args, cwd, platform = process.platform) {
@@ -181,7 +206,7 @@ function normalizeLifecycle(raw, key, serverName) {
   return { server: value.server, tool: value.tool };
 }
 
-function protectedLogPolicyEntries(allowedDirectories, allowedFiles, protectedDirectory, platform = process.platform) {
+function protectedDirectoryPolicyEntries(allowedDirectories, allowedFiles, protectedDirectory, platform = process.platform) {
   if (platform !== process.platform) return { directories: [], files: [] };
   const directories = [];
   for (const allowed of allowedDirectories) {
@@ -195,7 +220,7 @@ function protectedLogPolicyEntries(allowedDirectories, allowedFiles, protectedDi
   };
 }
 
-function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths, protectedGatewayLogDirectory) {
+function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths, protectedGatewayLogDirectory, protectGatewayApp) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`mcp_servers.${name} must be a table`);
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error(`mcp_servers.${name}.enabled must be boolean`);
   if (raw.enabled === false) return null;
@@ -234,6 +259,12 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const internetServer = isInternetServer(raw.command, args, cwd, platform);
   const archiveServer = isArchiveServer(raw.command, args, cwd, platform);
   const codespaceServer = isCodespaceServer(raw.command, args, cwd, platform);
+  const safeFilesServer = isSafeFilesServer(raw.command, args, cwd, platform);
+  const gitMcpServer = isGitMcpServer(raw.command, args, cwd, platform);
+  const gitCapabilityServer = isGitCapabilityServer(raw.command, args, cwd, platform);
+  const gitCapabilityMode = gitCapabilityServer
+    ? args.find((argument) => argument.startsWith('--mode='))?.slice('--mode='.length)
+    : undefined;
   const bundledServer = codexScriptServer
     || buildV5tAssemblyServer
     || internetServer
@@ -272,12 +303,15 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const sandboxReadOnlyFiles = codespaceServer
     ? [codespaceGhExecutable, codespaceTokenFile].filter(Boolean)
     : [];
-  const protectedGatewayLogs = protectedLogPolicyEntries(
+  const protectedGatewayLogs = protectedDirectoryPolicyEntries(
     allowedDirectories,
     allowedFiles,
     protectedGatewayLogDirectory,
     platform
   );
+  const protectedGatewayApp = protectGatewayApp
+    ? protectedDirectoryPolicyEntries(allowedDirectories, allowedFiles, gatewayAppDirectory, platform)
+    : { directories: [], files: [] };
   const sandboxReadOnlyDirectories = absolutePathArray(raw.sandbox_read_only_directories, `mcp_servers.${name}.sandbox_read_only_directories`, platform);
   if (sandbox !== 'never' && !allowedDirectories.some((directory) => pathWithin(directory, cwd, platform))) {
     throw new Error(`mcp_servers.${name}.cwd must be inside allowed_directories when sandbox is enabled`);
@@ -314,6 +348,8 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     blockedTools: new Set(stringArray(raw.blocked_tools, `mcp_servers.${name}.blocked_tools`)),
     blockedToolSubstrings: blockedToolSubstringArray(raw.blocked_tool_substrings, `mcp_servers.${name}.blocked_tool_substrings`),
     gatewayArgumentPolicy: codespaceServer ? 'codespace' : 'default',
+    safeFilesServer,
+    gitMetadataWriteAccess: gitMcpServer || (gitCapabilityServer && gitCapabilityMode !== 'clone'),
     allowedDirectories,
     allowedFiles,
     sandboxReadOnlyFiles,
@@ -323,6 +359,8 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     disallowedPathGlobs: normalizeDisallowedPathGlobs(raw.disallowed_path_globs, `mcp_servers.${name}.disallowed_path_globs`),
     dangerousAllowGatewayConfigAccess: raw.dangerous_allow_gateway_config_access === true,
     protectedGatewayConfigPaths,
+    protectedGatewayAppDirectories: protectedGatewayApp.directories,
+    protectedGatewayAppFiles: protectedGatewayApp.files,
     protectedGatewayLogDirectories: protectedGatewayLogs.directories,
     protectedGatewayLogFiles: protectedGatewayLogs.files
   };
@@ -350,6 +388,9 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
   if (raw['enable-logging-files'] !== undefined && typeof raw['enable-logging-files'] !== 'boolean') {
     throw new Error('gateway.toml enable-logging-files must be boolean');
   }
+  if (raw.protect_gateway_app !== undefined && typeof raw.protect_gateway_app !== 'boolean') {
+    throw new Error('gateway.toml protect_gateway_app must be boolean');
+  }
   if (raw.tool_annotations_path !== undefined && (typeof raw.tool_annotations_path !== 'string' || !raw.tool_annotations_path)) {
     throw new Error('gateway.toml tool_annotations_path must be a non-empty string');
   }
@@ -376,7 +417,8 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
       base,
       platform,
       protectedGatewayConfigPaths,
-      gatewayLogsDirectory
+      gatewayLogsDirectory,
+      raw.protect_gateway_app === true
     );
     if (normalized) servers.push(normalized);
     else disabledServerNames.push(name);
@@ -388,6 +430,7 @@ export async function loadGatewayConfig(configPath = configPathFromArgs(), { pla
     privateUseOnly: true,
     publishToolDirectory: raw.publish_tool_directory === true,
     enableLoggingFiles: raw['enable-logging-files'] === true,
+    protectGatewayApp: raw.protect_gateway_app === true,
     gatewayLogsDirectory,
     servers,
     disabledServerNames,

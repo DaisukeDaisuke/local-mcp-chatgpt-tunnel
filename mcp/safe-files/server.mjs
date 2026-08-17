@@ -40,6 +40,8 @@ const configuredRoots = cli.help ? [] : JSON.parse(
 );
 const configuredDisallowedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES ?? '[]');
 const configuredDisallowedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_FILES ?? '[]');
+const configuredWriteProtectedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES ?? '[]');
+const configuredWriteProtectedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_FILES ?? '[]');
 const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
   JSON.parse(process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS ?? '[]'),
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
@@ -370,6 +372,7 @@ function assertSafePath(root, candidate) {
 
 let rootsPromise;
 let deniedPromise;
+let writeProtectedPromise;
 let workingDirectoryPromise;
 const roots = () => {
   const context = isolation.current();
@@ -421,6 +424,14 @@ const denied = () => {
   return deniedPromise;
 };
 
+const writeProtected = () => {
+  writeProtectedPromise ??= Promise.all([
+    Promise.all(configuredWriteProtectedDirectories.map(canonicalizeExistingPrefix)),
+    Promise.all(configuredWriteProtectedFiles.map(canonicalizeExistingPrefix))
+  ]).then(([directories, files]) => ({ directories, files }));
+  return writeProtectedPromise;
+};
+
 async function assertNotDenied(candidate, context = 'Path') {
   const status = await prohibitedPathStatus(candidate);
   if (status.globMatch) throw disallowedPathGlobError(context, status.globMatch);
@@ -438,6 +449,18 @@ async function prohibitedPathStatus(candidate) {
     deniedDirectory,
     deniedByConfiguration: deniedFile || deniedDirectory !== null
   };
+}
+
+async function writeProtectedPathStatus(candidate) {
+  const blocked = await writeProtected();
+  const protectedFile = blocked.files.includes(candidate);
+  const protectedDirectory = blocked.directories.find((directory) => within(directory, candidate)) ?? null;
+  return { protectedFile, protectedDirectory, writeProtected: protectedFile || protectedDirectory !== null };
+}
+
+async function assertWriteAllowed(candidate, context = 'Path') {
+  const status = await writeProtectedPathStatus(candidate);
+  if (status.writeProtected) throw new Error(`${context} is read-only because it contains protected Gateway source code`);
 }
 
 async function chooseRoot(path) {
@@ -477,10 +500,12 @@ async function resolveWritable(path) {
     if (!within(root, actual)) throw new Error('Resolved file escaped the allowed workspace root');
     assertSafePath(root, actual);
     await assertNotDenied(actual);
+    await assertWriteAllowed(actual);
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
   }
   await assertNotDenied(candidate);
+  await assertWriteAllowed(candidate);
   return { root, path: candidate };
 }
 
@@ -526,6 +551,7 @@ async function copyWorkspaceFile(sourcePath, destinationPath) {
 
 async function moveWorkspaceFile(sourcePath, destinationPath) {
   const source = await resolveTransferSource(sourcePath);
+  await assertWriteAllowed(source.path, 'Source path');
   const destination = await resolveTransferDestination(destinationPath);
   await copyFile(source.path, destination, constants.COPYFILE_EXCL);
   try {
@@ -756,10 +782,13 @@ async function inspectFileInfo(path) {
   const info = await stat(target.path);
   const type = info.isFile() ? 'file' : info.isDirectory() ? 'directory' : info.isSymbolicLink() ? 'symlink' : 'other';
   const pathStatus = await prohibitedPathStatus(target.path);
+  const writeStatus = await writeProtectedPathStatus(target.path);
   const prohibitedReasons = [];
   if (pathStatus.globMatch) prohibitedReasons.push(`disallowed_path_globs:${pathStatus.globMatch.pattern}`);
   if (pathStatus.deniedFile) prohibitedReasons.push('disallowed_files');
   if (pathStatus.deniedDirectory) prohibitedReasons.push(`disallowed_directories:${pathStatus.deniedDirectory}`);
+  if (writeStatus.protectedFile) prohibitedReasons.push('write_protected_files');
+  if (writeStatus.protectedDirectory) prohibitedReasons.push(`write_protected_directories:${writeStatus.protectedDirectory}`);
   if (type === 'file') {
     const extension = extname(target.path).toLowerCase();
     if (BLOCKED_TRANSFER_EXTENSIONS.has(extension)) prohibitedReasons.push(`blocked_transfer_extension:${extension}`);
@@ -1317,6 +1346,7 @@ async function callTool(name, args = {}) {
       const parent = await realpath(dirname(candidate));
       if (!within(root, parent)) throw new Error('Resolved parent escaped the allowed workspace root');
       assertSafePath(root, parent);
+      await assertWriteAllowed(candidate);
       try {
         await mkdir(candidate, { recursive: false, mode: 0o700 });
       } catch (error) {

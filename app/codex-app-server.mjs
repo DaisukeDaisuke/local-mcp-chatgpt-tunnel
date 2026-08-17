@@ -59,9 +59,16 @@ function permissionProfileOverrideFor(config) {
     ...(config.allowedDirectories ?? []),
     ...(config.sandboxInternalWritableDirectories ?? [])
   ])];
+  const gitMetadataWriteRoots = [...new Set(config.sandboxGitMetadataWriteDirectories ?? [])];
   const deniedPaths = [...new Set([
     ...(config.sandboxDeniedDirectories ?? config.disallowedDirectories ?? []),
-    ...(config.sandboxDeniedFiles ?? config.disallowedFiles ?? [])
+    ...(config.sandboxDeniedFiles ?? config.disallowedFiles ?? []),
+    ...(config.sandboxGitMetadataDeniedDirectories ?? []),
+    ...(config.sandboxGitMetadataDeniedFiles ?? [])
+  ])];
+  const forcedReadOnlyRoots = [...new Set([
+    ...(config.sandboxForcedReadOnlyDirectories ?? []),
+    ...(config.sandboxForcedReadOnlyFiles ?? [])
   ])];
   const executableName = typeof config.command === 'string' ? pathBasename(config.command).toLowerCase() : '';
   const interpreterEntryDirectory = [
@@ -82,6 +89,8 @@ function permissionProfileOverrideFor(config) {
     if (!writableRoots.some((root) => configuredWithin(root, path))) entries.set(path, 'read');
   }
   for (const path of writableRoots) entries.set(path, 'write');
+  for (const path of gitMetadataWriteRoots) entries.set(path, 'write');
+  for (const path of forcedReadOnlyRoots) entries.set(path, 'read');
   for (const path of deniedPaths) entries.set(path, 'deny');
   const filesystem = [...entries.entries()]
     .map(([path, access]) => `${tomlLiteral(path, 'sandbox path')}=${tomlLiteral(access, 'sandbox access')}`)

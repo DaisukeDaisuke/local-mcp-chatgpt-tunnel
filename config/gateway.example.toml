@@ -1,4 +1,6 @@
 private_use_only = true
+# Default false in Gateway code. The example enables Gateway app/*.mjs write protection for safe-files and for any child later moved into a Codex sandbox; sandbox="never" is not an OS write boundary.
+protect_gateway_app = true
 # Default false. When true, only [gateway] INFO lines are appended to logs/<startup-datetime>_pid-<pid>.txt.
 enable-logging-files = false
 # Publishes gateway__list_available_tools and gateway__get_prefix_list. They read only the gateway's existing in-memory tool registry.
@@ -51,7 +53,6 @@ allowed_files = []
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']
-blocked_tool_substrings = ["worktree"]
 
 # Index staging is separated because git add/restore writes .git/index and .git/index.lock.
 [mcp_servers.git_stage]

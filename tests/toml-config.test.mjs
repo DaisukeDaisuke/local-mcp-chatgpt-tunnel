@@ -40,6 +40,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   const path = join(directory, 'gateway.toml');
   await writeFile(path, [
     'private_use_only = true',
+    'protect_gateway_app = true',
     'enable-logging-files = true',
     'publish_tool_directory = true',
     '[mcp_servers.alpha]',
@@ -74,6 +75,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   ].join('\n'), 'utf8');
   const config = await loadGatewayConfig(path, { platform: 'win32' });
   assert.equal(config.servers.length, 1);
+  assert.equal(config.protectGatewayApp, true);
   assert.equal(config.enableLoggingFiles, true);
   assert.equal(config.publishToolDirectory, true);
   assert.deepEqual(config.disabledServerNames, ['beta']);
@@ -98,6 +100,71 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].disallowedDirectories, ['C:\\work\\project\\private']);
   assert.deepEqual(config.servers[0].disallowedFiles, ['C:\\work\\project\\.env']);
   assert.deepEqual(config.servers[0].disallowedPathGlobs, ['**.ssh**']);
+});
+
+test('Gateway app protection defaults false and becomes a write-protected/read-only overlap when enabled', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-app-protection-config-'));
+  const root = resolve('.');
+  const app = resolve('app');
+  const safeFiles = resolve('mcp/safe-files/server.mjs');
+
+  const defaultPath = join(directory, 'default.toml');
+  await writeFile(defaultPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    'command = "node"',
+    `args = ['${safeFiles}']`,
+    `cwd = '${root}'`,
+    `allowed_directories = ['${root}']`
+  ].join('\n'), 'utf8');
+  const defaultConfig = await loadGatewayConfig(defaultPath);
+  assert.equal(defaultConfig.protectGatewayApp, false);
+  assert.deepEqual(defaultConfig.servers[0].protectedGatewayAppDirectories, []);
+
+  const protectedPath = join(directory, 'protected.toml');
+  await writeFile(protectedPath, [
+    'private_use_only = true',
+    'protect_gateway_app = true',
+    '[mcp_servers.files]',
+    'command = "node"',
+    `args = ['${safeFiles}']`,
+    `cwd = '${root}'`,
+    `allowed_directories = ['${root}']`
+  ].join('\n'), 'utf8');
+  const protectedConfig = await loadGatewayConfig(protectedPath);
+  assert.equal(protectedConfig.protectGatewayApp, true);
+  assert.equal(protectedConfig.servers[0].safeFilesServer, true);
+  assert.deepEqual(protectedConfig.servers[0].protectedGatewayAppDirectories, [app]);
+});
+
+test('Bundled Git servers request metadata write scanning except clone, whose .git does not exist at startup', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-git-metadata-config-'));
+  const root = resolve('.');
+  const gitMcp = resolve('mcp/gitmcp/server.mjs');
+  const gitCapability = resolve('mcp/git-capability/server.mjs');
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.git]',
+    'command = "node"',
+    `args = ['${gitMcp}', '--git-executable=C:\\Program Files\\Git\\cmd\\git.exe']`,
+    `cwd = '${root}'`,
+    `allowed_directories = ['${root}']`,
+    '[mcp_servers.stage]',
+    'command = "node"',
+    `args = ['${gitCapability}', '--mode=stage', '--git-executable=C:\\Program Files\\Git\\cmd\\git.exe']`,
+    `cwd = '${root}'`,
+    `allowed_directories = ['${root}']`,
+    '[mcp_servers.clone]',
+    'command = "node"',
+    `args = ['${gitCapability}', '--mode=clone', '--git-executable=C:\\Program Files\\Git\\cmd\\git.exe']`,
+    `cwd = '${root}'`,
+    `allowed_directories = ['${root}']`
+  ].join('\n'), 'utf8');
+  const config = await loadGatewayConfig(path);
+  assert.equal(config.servers.find((server) => server.name === 'git').gitMetadataWriteAccess, true);
+  assert.equal(config.servers.find((server) => server.name === 'stage').gitMetadataWriteAccess, true);
+  assert.equal(config.servers.find((server) => server.name === 'clone').gitMetadataWriteAccess, false);
 });
 
 test('gateway file logging is disabled by default and requires a boolean top-level flag', async () => {

@@ -3,6 +3,8 @@
 # from an Administrator PowerShell before using this template.
 # Replace every absolute placeholder, including node.exe and codex.cmd.
 private_use_only = true
+# Default false in Gateway code. The example enables it so Gateway app/*.mjs is an explicit read-only carveout inside otherwise writable roots.
+protect_gateway_app = true
 # Default false. When true, only [gateway] INFO lines are appended to logs/<startup-datetime>_pid-<pid>.txt.
 enable-logging-files = false
 # Publishes gateway__list_available_tools and gateway__get_prefix_list. They read only the gateway's existing in-memory tool registry.
@@ -59,19 +61,21 @@ allowed_files = []
 disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']
-blocked_tool_substrings = ["worktree"]
 # CodexのWindows sandboxは: minimal readでC:\Program Filesをsystem read rootとして扱うため、
 # 上記の標準Git for Windows配置は追加設定不要です。Portable Gitなどを別の場所へ置く場合だけ、
 # そのGitインストールディレクトリをsandbox_read_only_directoriesへ追加してください。
 
-# git add/restore writes .git/index and .git/index.lock. The Codex Windows sandbox deliberately
-# blocks writable dot-directories, so keep index mutation in its own unsandboxed capability.
+# Git mutation needs .git writes. At child startup the Gateway recursively scans existing writable
+# roots for .git metadata and adds only those concrete metadata paths as explicit Codex write entries.
+# hooks, objects/info, modules, and existing executable/redirecting config files stay read-only.
+# Repositories created later by git init/clone are not discovered until restart.
 [mcp_servers.git_stage]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=stage', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
-sandbox = "never"
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "git_stage"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -84,15 +88,15 @@ disallowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\private']
 disallowed_files = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT\.env']
 disallowed_path_globs = ['**.ssh**']
 
-# Commit is intentionally a separate process so signing access does not force the larger gitmcp
-# outside the OS sandbox. This example uses sandbox="never" for compatibility with local signing agents.
-# Users who do not need that access may choose elevated/unelevated instead.
+# Commit is intentionally a separate process. The example keeps it sandboxed; if a local signing
+# agent is not reachable from the sandbox, users may explicitly choose sandbox="never" for this one capability.
 [mcp_servers.git_commit]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=commit', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
-sandbox = "never"
+sandbox = "elevated"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "git_commit"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -105,16 +109,16 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# The current Codex permission profile disables network. Remote Git capabilities therefore use
-# sandbox="never" in this example; they remain separate MCPs so a future/network-capable boundary
-# or a deliberately different policy can be selected per capability without moving gitmcp itself.
+# Remote Git capabilities use onlineworkspace so network is enabled while filesystem access remains
+# inside the same workspace boundary plus the startup-discovered .git metadata carveouts.
 # push/pull pin the remote name and GitHub OWNER/REPO identity at startup and accept no remote/refspec/URL tool arguments.
 [mcp_servers.git_push]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=push', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--repository=OWNER/REPO']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
-sandbox = "never"
+sandbox = "onlineworkspace"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "git_push"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -132,7 +136,8 @@ command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=pull', '--git-executable=C:\Program Files\Git\cmd\git.exe', '--remote=origin', '--repository=OWNER/REPO']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
-sandbox = "never"
+sandbox = "onlineworkspace"
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "git_pull"
 annotation_config = false
 dangerous_allow_gateway_config_access = false
@@ -162,6 +167,10 @@ allowed_files = []
 disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
+
+# clone remains unsandboxed in this template because its destination .git does not exist when the
+# child permission profile is built. The startup scanner intentionally does not predict or pre-authorize
+# future Git metadata paths; restart after creation is enough for later sandboxed Git operations.
 
 # GitHub Actions inspection and explicit run cancellation for a repository allowlist.
 # The MCP never invokes a shell and does not expose dispatch, rerun, delete, artifact download, or arbitrary gh commands.
