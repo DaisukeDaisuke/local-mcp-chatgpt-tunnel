@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { realpath, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
 
@@ -38,11 +38,25 @@ function stringOptions(name) {
     .map((value) => value.slice(prefix.length));
 }
 
+function stringOption(name) {
+  const prefix = `--${name}=`;
+  const matches = process.argv.slice(2).filter((value) => value.startsWith(prefix));
+  if (matches.length > 1) throw new Error(`${prefix}<value> may be specified only once`);
+  return matches.length === 1 ? matches[0].slice(prefix.length) : undefined;
+}
+
+function optionalAbsoluteFileArgument(value, name) {
+  if (value === undefined || help) return undefined;
+  if (value.length === 0 || !isAbsolute(value) || /[\0\r\n]/.test(value)) throw new Error(`${name} must be an absolute path`);
+  return value;
+}
+
 const help = process.argv.slice(2).some((value) => value === '--help' || value === '-h');
 const repositoryOptions = stringOptions('repository');
+const tokenFileConfigured = optionalAbsoluteFileArgument(stringOption('token-file'), '--token-file');
 
 for (const argument of process.argv.slice(2)) {
-  if (argument === '--help' || argument === '-h' || argument.startsWith('--repository=')) continue;
+  if (argument === '--help' || argument === '-h' || argument.startsWith('--repository=') || argument.startsWith('--token-file=')) continue;
   throw new Error(`Unknown argument: ${argument}`);
 }
 
@@ -58,11 +72,12 @@ const cli = {
 export const GH_WORKFLOW_MCP_HELP = `gh-workflow
 
 Usage:
-  node mcp/gh-workflow/server.mjs --repository=OWNER/REPO [--repository=OWNER/REPO ...]
+  node mcp/gh-workflow/server.mjs --repository=OWNER/REPO [--repository=OWNER/REPO ...] [--token-file=<absolute-token-file>]
 
 GitHub Actions inspection and explicit run cancellation for a repository allowlist.
 The server spawns gh directly with shell=false, a fixed subcommand allowlist,
 validated arguments, ignored stdin, bounded output, and an explicit cwd.
+When --token-file is configured, it is validated like the Codespace MCP token file and supplied only as GH_TOKEN.
 Gateway calls require an HMAC-signed isolated context, and public root or workspace overrides are rejected.
 `;
 
@@ -223,12 +238,35 @@ async function executionDirectory() {
   return executionDirectoryPromise;
 }
 
+function within(root, candidate) {
+  const path = relative(root, candidate);
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+let tokenPromise;
+async function githubToken() {
+  if (!tokenFileConfigured) return undefined;
+  tokenPromise ??= (async () => {
+    const info = await lstat(tokenFileConfigured);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('--token-file must be a non-symbolic-link regular file');
+    if (info.size < 1 || info.size > 8192) throw new Error('--token-file must contain from 1 through 8192 bytes');
+    const actual = await realpath(tokenFileConfigured);
+    const writableRoots = isolation.current()?.roots ?? [await executionDirectory()];
+    if (writableRoots.some((root) => within(root, actual))) throw new Error('--token-file must be outside writable workspace roots');
+    const value = (await readFile(actual, 'utf8')).trim();
+    if (value.length === 0 || value.length > 4096 || /\s/.test(value) || /[\0\r\n]/.test(value)) throw new Error('--token-file contains an invalid token');
+    return value;
+  })();
+  return tokenPromise;
+}
+
 function commandDescription(args) {
   return JSON.stringify(['gh', ...args]);
 }
 
 export async function runGh(args) {
   const cwd = await executionDirectory();
+  const token = await githubToken();
   return new Promise((resolvePromise, reject) => {
     const environment = {
       ...environmentWithoutBundledIsolationKey(),
@@ -238,6 +276,9 @@ export async function runGh(args) {
       PAGER: ''
     };
     delete environment.GH_FORCE_TTY;
+    delete environment.GITHUB_TOKEN;
+    delete environment.GH_TOKEN;
+    if (token) environment.GH_TOKEN = token;
     const child = spawn('gh', args, {
       cwd,
       shell: false,

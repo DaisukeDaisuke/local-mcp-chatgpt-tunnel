@@ -167,12 +167,14 @@ disallowed_path_globs = ['**.ssh**']
 # The MCP never invokes a shell and does not expose dispatch, rerun, delete, artifact download, or arbitrary gh commands.
 # Repeat --repository=OWNER/REPO to allow multiple repositories. No other repository can be selected.
 # cwd is mandatory here even though every GitHub repository argument is allowlisted by --repository.
+# onlineworkspace gives this network-facing capability outbound access while keeping workspace writes sandboxed.
+# The fixed token file must live outside allowed_directories; list it exactly in allowed_files so the sandbox grants read-only access.
 [mcp_servers.gh_workflow]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs', '--repository=DaisukeDaisuke/desmume_webassembly']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-workflow\server.mjs', '--repository=DaisukeDaisuke/desmume_webassembly', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
-sandbox = "elevated"
+sandbox = "onlineworkspace"
 codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "gh_workflow"
 annotation_config = false
@@ -181,7 +183,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 1800
 serial_group = "gh_workflow"
 allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
-allowed_files = []
+allowed_files = ['C:\ABSOLUTE\PATH\TO\github-token.txt']
 disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']

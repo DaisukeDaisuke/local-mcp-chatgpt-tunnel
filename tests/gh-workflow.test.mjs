@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
 
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
 
@@ -18,6 +21,48 @@ test('gh-workflow requires one fixed repository and rejects arbitrary CLI option
   await assert.rejects(
     importGhWorkflow(['--repository=DaisukeDaisuke/desmume_webassembly', '--command=marker'], 'unknown-option'),
     /Unknown argument/
+  );
+});
+
+test('gh-workflow accepts one absolute token file and validates it before spawning gh', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gh-workflow-token-'));
+  const tokenFile = join(directory, 'token.txt');
+  await writeFile(tokenFile, 'invalid token with whitespace\n', 'utf8');
+  const { runGh } = await importGhWorkflow([
+    '--repository=DaisukeDaisuke/desmume_webassembly',
+    `--token-file=${tokenFile}`
+  ], 'token-file');
+  await assert.rejects(
+    runGh(['run', 'list', '--repo', 'DaisukeDaisuke/desmume_webassembly']),
+    (error) => {
+      assert.equal(error?.message, '--token-file contains an invalid token');
+      return true;
+    }
+  );
+});
+
+test('gh-workflow rejects relative and repeated token-file startup arguments', async () => {
+  await assert.rejects(
+    importGhWorkflow([
+      '--repository=DaisukeDaisuke/desmume_webassembly',
+      '--token-file=relative-token.txt'
+    ], 'relative-token-file'),
+    (error) => {
+      assert.equal(error?.message, '--token-file must be an absolute path');
+      return true;
+    }
+  );
+  const absoluteToken = join(tmpdir(), 'gh-workflow-token.txt');
+  await assert.rejects(
+    importGhWorkflow([
+      '--repository=DaisukeDaisuke/desmume_webassembly',
+      `--token-file=${absoluteToken}`,
+      `--token-file=${absoluteToken}`
+    ], 'duplicate-token-file'),
+    (error) => {
+      assert.equal(error?.message, '--token-file=<value> may be specified only once');
+      return true;
+    }
   );
 });
 
