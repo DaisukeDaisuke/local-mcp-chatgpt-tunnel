@@ -95,7 +95,6 @@ command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=commit', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
-sandbox = "elevated"
 codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "git_commit"
 annotation_config = false
