@@ -628,7 +628,7 @@ gatewayIntegrationTest('gateway refuses isolated workspaces when a bundled MCP h
   assert.match(noAllowlist.result.structuredContent.error, /outside every bundled MCP allowlist or is denied/);
 });
 
-gatewayIntegrationTest('gateway caps only files responses at 128KB by default and allows an env override', async (t) => {
+gatewayIntegrationTest('gateway caps only files responses at 15KB by default, returns a 0.5KB preview, and allows an env override', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-files-response-limit-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-files-response-limit-config-'));
   const configPath = join(configDirectory, 'gateway.toml');
@@ -670,11 +670,11 @@ gatewayIntegrationTest('gateway caps only files responses at 128KB by default an
   } })}\n`);
   const rejected = await nextLine(defaultGateway.stdout);
   assert.equal(rejected.result.isError, true);
-  assert.match(rejected.result.content[0].text, /^返却文字列のサイズが\d+(?:\.\d+)?(?:KB|MB|GB)のため/);
-  assert.match(rejected.result.content[0].text, /破壊的操作はすでに行われている可能性があります。/);
-  assert.match(rejected.result.content[0].text, /現在の制限は128KBです/);
-  assert.match(rejected.result.content[0].text, /\*\*downloads__download_zip\*\*/);
-  assert.equal(rejected.result.structuredContent.result.limitBytes, 128 * 1024);
+  assert.equal(rejected.result.content.length, 2);
+  assert.ok(rejected.result.content[1].text.startsWith('{"jsonrpc":"2.0","id":3,"result":'));
+  assert.ok(Buffer.byteLength(rejected.result.content[1].text, 'utf8') <= 512);
+  assert.equal(rejected.result.structuredContent.result.previewBytes, Buffer.byteLength(rejected.result.content[1].text, 'utf8'));
+  assert.equal(rejected.result.structuredContent.result.limitBytes, 100 * 1024);
   assert.ok(rejected.result.structuredContent.result.responseBytes > rejected.result.structuredContent.result.limitBytes);
 
   const raisedGateway = await startGateway({
@@ -689,7 +689,7 @@ gatewayIntegrationTest('gateway caps only files responses at 128KB by default an
   assert.equal(allowed.result.structuredContent.result.results[0].content, payload);
 });
 
-gatewayIntegrationTest('gateway also caps codespace responses at 128KB and allows an independent env override', async (t) => {
+gatewayIntegrationTest('gateway also caps codespace responses at 15KB, returns a 0.5KB preview, and allows an independent env override', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-codespace-response-limit-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-codespace-response-limit-config-'));
   const serverPath = join(workspace, 'server.mjs');
@@ -755,11 +755,11 @@ process.stdin.on('data', (chunk) => {
   delete defaultEnv.LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES;
   const rejected = await callGateway(defaultEnv);
   assert.equal(rejected.result.isError, true);
-  assert.match(rejected.result.content[0].text, /^返却文字列のサイズが\d+(?:\.\d+)?(?:KB|MB|GB)のため/);
-  assert.match(rejected.result.content[0].text, /破壊的操作はすでに行われている可能性があります。/);
-  assert.match(rejected.result.content[0].text, /現在の制限は128KBです/);
-  assert.match(rejected.result.content[0].text, /\*\*codespace__copy_from_codespace\*\*/);
-  assert.equal(rejected.result.structuredContent.result.limitBytes, 128 * 1024);
+  assert.equal(rejected.result.content.length, 2);
+  assert.ok(rejected.result.content[1].text.startsWith('{"jsonrpc":"2.0","id":2,"result":'));
+  assert.ok(Buffer.byteLength(rejected.result.content[1].text, 'utf8') <= 512);
+  assert.equal(rejected.result.structuredContent.result.previewBytes, Buffer.byteLength(rejected.result.content[1].text, 'utf8'));
+  assert.equal(rejected.result.structuredContent.result.limitBytes, 100 * 1024);
   assert.ok(rejected.result.structuredContent.result.responseBytes > rejected.result.structuredContent.result.limitBytes);
 
   const allowed = await callGateway({

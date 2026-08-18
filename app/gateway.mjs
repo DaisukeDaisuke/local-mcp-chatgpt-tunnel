@@ -56,7 +56,8 @@ scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
 
 const MAX_TOOL_NAME = 64;
-const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 15 * 1024;
+const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 100 * 1024;
+const TEXT_RESPONSE_PREVIEW_BYTES = 512;
 const FILES_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_FILES_MAX_RESPONSE_BYTES';
 const CODESPACE_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES';
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
@@ -85,6 +86,14 @@ function formatTextBytes(bytes) {
   if (bytes >= gibibyte) return `${Math.ceil((bytes / gibibyte) * 10) / 10}GB`;
   if (bytes >= mebibyte) return `${Math.ceil((bytes / mebibyte) * 10) / 10}MB`;
   return `${Math.ceil(bytes / kibibyte)}KB`;
+}
+
+function utf8Prefix(text, maxBytes) {
+  const buffer = Buffer.from(text, 'utf8');
+  if (buffer.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1;
+  return buffer.subarray(0, end).toString('utf8');
 }
 
 function pathInside(directory, candidate) {
@@ -235,14 +244,17 @@ function textLimitedResponse(id, route, result) {
       ? codespaceResponseLimit
       : null;
   if (responseLimit === null) return message;
-  const bytes = Buffer.byteLength(JSON.stringify(message), 'utf8') + 1;
+  const serialized = `${JSON.stringify(message)}\n`;
+  const bytes = Buffer.byteLength(serialized, 'utf8');
   if (bytes <= responseLimit) return message;
+  const preview = utf8Prefix(serialized, TEXT_RESPONSE_PREVIEW_BYTES);
+  const previewBytes = Buffer.byteLength(preview, 'utf8');
   const recovery = prefix === 'files'
     ? 'ダウンロードツール（**downloads__download_zip**）を直接使うか、クエリを狭めるようにしてください。'
     : '大きな出力はファイルへ保存して**codespace__copy_from_codespace**で取得するか、クエリを狭めるようしてください。';
-  const text = `返却文字列が${formatTextBytes(bytes)}のため、このリクエストはゲートウェイによって拒否されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatTextBytes(responseLimit)}です。${recovery}`;
+  const text = `返却文字列が${formatTextBytes(bytes)}のため、このリクエストはゲートウェイによって拒否されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatTextBytes(responseLimit)}です。${recovery} デバッグ用に元の返却文字列の先頭0.5KBを添付します。`;
   const limited = {
-    content: [{ type: 'text', text }],
+    content: [{ type: 'text', text }, { type: 'text', text: preview }],
     isError: true
   };
   if (supportsGatewayErrorEnvelope(route.tool)) {
@@ -251,7 +263,8 @@ function textLimitedResponse(id, route, result) {
       error: text,
       result: {
         responseBytes: bytes,
-        limitBytes: responseLimit
+        limitBytes: responseLimit,
+        previewBytes
       }
     };
   }
