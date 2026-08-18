@@ -628,6 +628,148 @@ gatewayIntegrationTest('gateway refuses isolated workspaces when a bundled MCP h
   assert.match(noAllowlist.result.structuredContent.error, /outside every bundled MCP allowlist or is denied/);
 });
 
+gatewayIntegrationTest('gateway caps only files responses at 128KB by default and allows an env override', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-files-response-limit-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-files-response-limit-config-'));
+  const configPath = join(configDirectory, 'gateway.toml');
+  const payload = 'x'.repeat(80 * 1024);
+  await writeFile(join(workspace, 'large.txt'), payload, 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.files]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/safe-files/server.mjs')}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "files"'
+  ].join('\n'), 'utf8');
+
+  async function startGateway(env, isolatedId) {
+    const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+      cwd: resolve('.'),
+      env,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    t.after(() => child.kill());
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+    await nextLine(child.stdout);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+      name: 'isolated__create', arguments: { isolatedId, purpose: 'verify files response byte limit', workspaces: [workspace] }
+    } })}\n`);
+    const created = await nextLine(child.stdout);
+    assert.equal(created.result.isError, false);
+    return child;
+  }
+
+  const defaultEnv = { ...process.env };
+  delete defaultEnv.LOCAL_MCP_FILES_MAX_RESPONSE_BYTES;
+  const defaultGateway = await startGateway(defaultEnv, 'files-limit-default');
+  defaultGateway.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId: 'files-limit-default', path: 'large.txt' }
+  } })}\n`);
+  const rejected = await nextLine(defaultGateway.stdout);
+  assert.equal(rejected.result.isError, true);
+  assert.match(rejected.result.content[0].text, /^返却文字列のサイズが\d+(?:\.\d+)?(?:KB|MB|GB)のため/);
+  assert.match(rejected.result.content[0].text, /破壊的操作はすでに行われている可能性があります。/);
+  assert.match(rejected.result.content[0].text, /現在の制限は128KBです/);
+  assert.match(rejected.result.content[0].text, /\*\*downloads__download_zip\*\*/);
+  assert.equal(rejected.result.structuredContent.result.limitBytes, 128 * 1024);
+  assert.ok(rejected.result.structuredContent.result.responseBytes > rejected.result.structuredContent.result.limitBytes);
+
+  const raisedGateway = await startGateway({
+    ...process.env,
+    LOCAL_MCP_FILES_MAX_RESPONSE_BYTES: String(256 * 1024)
+  }, 'files-limit-raised');
+  raisedGateway.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'files__read_text', arguments: { isolatedId: 'files-limit-raised', path: 'large.txt' }
+  } })}\n`);
+  const allowed = await nextLine(raisedGateway.stdout);
+  assert.equal(allowed.result.isError, false);
+  assert.equal(allowed.result.structuredContent.result.results[0].content, payload);
+});
+
+gatewayIntegrationTest('gateway also caps codespace responses at 128KB and allows an independent env override', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-codespace-response-limit-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-codespace-response-limit-config-'));
+  const serverPath = join(workspace, 'server.mjs');
+  const configPath = join(configDirectory, 'gateway.toml');
+  const payload = 'c'.repeat(80 * 1024);
+  await writeFile(serverPath, `
+const payload = 'c'.repeat(80 * 1024);
+let initialized = false;
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).replace(/\\r$/, '');
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    let reply = null;
+    if (request.method === 'initialize') {
+      initialized = true;
+      reply = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'codespace-limit-fixture', version: '1.0.0' } } };
+    } else if (request.method === 'tools/list' && initialized) {
+      reply = { jsonrpc: '2.0', id: request.id, result: { tools: [{
+        name: 'huge',
+        description: 'large response fixture',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' }, result: { type: 'object' } }, required: ['ok', 'result'] }
+      }] } };
+    } else if (request.method === 'tools/call' && initialized) {
+      reply = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: payload }], structuredContent: { ok: true, result: { payload } }, isError: false } };
+    }
+    if (reply) process.stdout.write(JSON.stringify(reply) + '\\n');
+  }
+});
+`, 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.codespace]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "codespace"'
+  ].join('\n'), 'utf8');
+
+  async function callGateway(env) {
+    const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+      cwd: resolve('.'),
+      env,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    t.after(() => child.kill());
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+    await nextLine(child.stdout);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'codespace__huge', arguments: {} } })}\n`);
+    return nextLine(child.stdout);
+  }
+
+  const defaultEnv = { ...process.env };
+  delete defaultEnv.LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES;
+  const rejected = await callGateway(defaultEnv);
+  assert.equal(rejected.result.isError, true);
+  assert.match(rejected.result.content[0].text, /^返却文字列のサイズが\d+(?:\.\d+)?(?:KB|MB|GB)のため/);
+  assert.match(rejected.result.content[0].text, /破壊的操作はすでに行われている可能性があります。/);
+  assert.match(rejected.result.content[0].text, /現在の制限は128KBです/);
+  assert.match(rejected.result.content[0].text, /\*\*codespace__copy_from_codespace\*\*/);
+  assert.equal(rejected.result.structuredContent.result.limitBytes, 128 * 1024);
+  assert.ok(rejected.result.structuredContent.result.responseBytes > rejected.result.structuredContent.result.limitBytes);
+
+  const allowed = await callGateway({
+    ...process.env,
+    LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES: String(256 * 1024)
+  });
+  assert.equal(allowed.result.isError, false);
+  assert.equal(allowed.result.structuredContent.result.payload, payload);
+});
+
 gatewayIntegrationTest('gateway preserves safe-download outputSchema and embedded ZIP resource content', async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), 'gateway-download-workspace-'));
   const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-download-config-'));
@@ -645,7 +787,7 @@ gatewayIntegrationTest('gateway preserves safe-download outputSchema and embedde
   ].join('\n'), 'utf8');
   const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
     cwd: resolve('.'),
-    env: process.env,
+    env: { ...process.env, LOCAL_MCP_FILES_MAX_RESPONSE_BYTES: '1' },
     stdio: ['pipe', 'pipe', 'pipe']
   });
   t.after(() => child.kill());

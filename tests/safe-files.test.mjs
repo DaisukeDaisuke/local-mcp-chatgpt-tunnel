@@ -39,7 +39,7 @@ test('safe-files reports Gateway source protection in file_info while keeping pr
     name: 'read_text', arguments: { path: source }
   }));
   assert.equal(read.result.isError, false);
-  assert.equal(read.result.structuredContent.result.results[0].content, 'export const value = 1;');
+  assert.equal(read.result.structuredContent.result.results[0].content, 'export const value = 1;\n');
 
   const write = await server(request(4, 'tools/call', {
     name: 'write_text_file', arguments: { path: source, content: 'export const value = 2;\n', overwrite: true }

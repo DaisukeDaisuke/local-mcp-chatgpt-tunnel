@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import test from 'node:test';
 import { scanGitMetadataPolicy } from '../app/git-metadata-policy.mjs';
 
@@ -13,14 +13,15 @@ test('Git metadata scanner finds existing nested repositories and keeps executab
   await writeFile(join(git, 'config'), '[core]\nrepositoryformatversion = 0\n', 'utf8');
 
   const policy = await scanGitMetadataPolicy([root]);
-  assert.deepEqual(policy.writableDirectories, [resolve(git)]);
-  assert.ok(policy.deniedDirectories.includes(resolve(git, 'hooks')));
-  assert.ok(policy.deniedDirectories.includes(resolve(git, 'objects', 'info')));
-  assert.ok(policy.deniedDirectories.includes(resolve(git, 'modules')));
-  assert.ok(policy.deniedFiles.includes(resolve(git, 'config')));
-  assert.equal(policy.deniedFiles.includes(resolve(git, 'config.worktree')), false);
-  assert.equal(policy.deniedFiles.includes(resolve(git, 'commondir')), false);
-  assert.equal(policy.deniedFiles.includes(resolve(git, 'gitdir')), false);
+  const canonicalGit = await realpath(git);
+  assert.deepEqual(policy.writableDirectories, [canonicalGit]);
+  assert.ok(policy.deniedDirectories.includes(join(canonicalGit, 'hooks')));
+  assert.ok(policy.deniedDirectories.includes(join(canonicalGit, 'objects', 'info')));
+  assert.ok(policy.deniedDirectories.includes(join(canonicalGit, 'modules')));
+  assert.ok(policy.deniedFiles.includes(await realpath(join(git, 'config'))));
+  assert.equal(policy.deniedFiles.includes(join(canonicalGit, 'config.worktree')), false);
+  assert.equal(policy.deniedFiles.includes(join(canonicalGit, 'commondir')), false);
+  assert.equal(policy.deniedFiles.includes(join(canonicalGit, 'gitdir')), false);
   assert.equal(policy.truncated, false);
 });
 
@@ -38,9 +39,9 @@ test('Git metadata scanner resolves an existing in-scope gitdir pointer but neve
   await writeFile(join(externalWorktree, '.git'), `gitdir: ${outside}\n`, 'utf8');
 
   const policy = await scanGitMetadataPolicy([root]);
-  assert.ok(policy.writableDirectories.includes(resolve(commonGit)));
-  assert.ok(policy.writableDirectories.includes(resolve(worktreeGit)));
-  assert.equal(policy.writableDirectories.includes(resolve(outside)), false);
+  assert.ok(policy.writableDirectories.includes(await realpath(commonGit)));
+  assert.ok(policy.writableDirectories.includes(await realpath(worktreeGit)));
+  assert.equal(policy.writableDirectories.includes(await realpath(outside)), false);
   assert.equal(policy.skippedGitPointers, 1);
 });
 

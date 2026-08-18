@@ -16,7 +16,7 @@ const MAX_SYNC_WAIT_MS = 10_000;
 const IMMEDIATE_ASYNC_SYNC_WAIT_MS = 1_000;
 const MAX_ACTIVE_ASYNC_JOBS = 16;
 const MAX_RETAINED_ASYNC_JOBS = 64;
-const MAX_OUTPUT_BYTES = boundedIntegerEnvironment('CODESPACE_MCP_MAX_OUTPUT_BYTES', 8 * 1024 * 1024, 1024, 128 * 1024 * 1024);
+const MAX_OUTPUT_BYTES = boundedIntegerEnvironment('CODESPACE_MCP_MAX_OUTPUT_BYTES', 15 * 1024, 1024, 128 * 1024 * 1024);
 const MAX_TRANSFER_BYTES = boundedIntegerEnvironment('CODESPACE_MCP_MAX_TRANSFER_BYTES', 500_000_000, 1, 500_000_000);
 const MAX_SCAN_ENTRIES = boundedIntegerEnvironment('CODESPACE_MCP_MAX_SCAN_ENTRIES', 20_000, 1, 1_000_000);
 const MAX_CP_SOURCES = 200;
@@ -26,6 +26,17 @@ const MAX_ASYNC_STDIN_WRITE_BYTES = 64 * 1024;
 const MAX_ASYNC_STDIN_TOTAL_BYTES = 1024 * 1024;
 const REMOTE_MAX_TEXT_BYTES = 16 * 1024 * 1024;
 const FORWARD_REGISTRATION_POLL_MS = 100;
+
+function formatOutputBytes(bytes) {
+  const kibibyte = 1024;
+  const mebibyte = kibibyte * 1024;
+  const gibibyte = mebibyte * 1024;
+  if (bytes < kibibyte) return `${bytes}B`;
+  if (bytes >= gibibyte) return `${Math.ceil((bytes / gibibyte) * 10) / 10}GB`;
+  if (bytes >= mebibyte) return `${Math.ceil((bytes / mebibyte) * 10) / 10}MB`;
+  return `${Math.ceil(bytes / kibibyte)}KB`;
+}
+
 const REMOTE_BASH_SUPERVISOR_SOURCE = String.raw`
 const { spawn } = require("node:child_process");
 const { mkdtempSync, rmSync, writeFileSync } = require("node:fs");
@@ -230,7 +241,7 @@ const schemas = [
   { name: 'ssh', description: 'Run one simple remote command in an existing Codespace. The command is a strictly validated token array. Prefer codespace__run_bash_script for arbitrary code, multiple commands, shell operators, pipelines, redirection, variable expansion, or quoting-heavy shell work; do not emulate those cases through this older tokenized SSH interface. timeoutMs is only the hard remote-process runtime limit. Response behavior is controlled separately by async and syncWaitMs.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, command: { type: 'array', minItems: 1, maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 512 } }, timeoutMs: commonSshTimeout }, required: ['codespaceId', 'command'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
   { name: 'run_bash_script', description: 'Run arbitrary UTF-8 Bash source in one existing Codespace under a fixed remote Node.js supervisor. Node first reads the complete source from SSH stdin into a private temporary script, then spawns /bin/bash with runtime stdin closed. Shell syntax and command execution remain Bash responsibilities; Node only supervises exit/signal state and owns the detached Bash process group so cancellation or supervisor termination can tear descendants down. Commands inside the script cannot consume source stdin and stdin-reading programs receive EOF. This is intentionally arbitrary remote code execution. It always returns an asyncId immediately; use codespace__get_async_status with that asyncId to retrieve lifecycle state and complete retained output.', inputSchema: { type: 'object', properties: { codespaceId: commonCodespaceId, script: { type: 'string', minLength: 1, maxLength: MAX_REMOTE_STDIN_BYTES }, timeoutMs: commonSshTimeout }, required: ['codespaceId', 'script'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
   { name: 'get_async_status', description: 'Return the shared non-blocking async registry for this isolated session. Omit asyncId to list every retained async operation without repeating full logs/results; pass asyncId to retrieve the complete retained status, including stdout/stderr for process-backed jobs or the final structured result/error for automatically promoted tool calls. The registry is process-local: serverInstanceId changes after an MCP crash/restart, and asyncIds from an older instance cannot be recovered.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, additionalProperties: false }, outputSchema, annotations: readOnly },
-  { name: 'get_async_logs', description: 'Compatibility API returning the complete currently captured stdout and stderr for one process-backed async operation, including SSH/run_bash_script jobs and managed temporary port-forward processes. codespace__get_async_status with an asyncId now returns the same retained process output together with status. Output is bounded by CODESPACE_MCP_MAX_OUTPUT_BYTES; exceeding the bound terminates the process instead of growing without limit.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
+  { name: 'get_async_logs', description: 'Compatibility API returning the complete currently captured stdout and stderr for one process-backed async operation, including SSH/run_bash_script jobs and managed temporary port-forward processes. codespace__get_async_status with an asyncId now returns the same retained process output together with status. Output is bounded by CODESPACE_MCP_MAX_OUTPUT_BYTES, which defaults to 128 KiB; exceeding the bound terminates the process instead of growing without limit.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'write_async_stdin', description: 'Write bounded UTF-8 data to stdin of one already-running async SSH job. This is primarily a compatibility/interactive-input mechanism. Prefer codespace__run_bash_script when the intended stdin is actually Bash source or when arbitrary shell work is needed, rather than starting async SSH and feeding a script through this older two-step path. Each write is limited to 64 KiB and total stdin per job is limited to 1 MiB. Set end=true to close stdin after this write. This does not extend the job runtime deadline.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, data: { type: 'string', maxLength: MAX_ASYNC_STDIN_WRITE_BYTES }, end: { type: 'boolean', default: false } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: remoteMutation },
   { name: 'wait_async', description: 'Compatibility wait for one async SSH job. Prefer non-blocking codespace__get_async_status polling; it returns complete retained process output for an asyncId. Gateway configurations may block wait-style tools. For arbitrary shell execution, prefer codespace__run_bash_script rather than constructing an async SSH plus stdin plus wait workflow. waitTimeoutMs controls only this wait and is capped at 10 minutes; it does not extend the job runtime deadline. If the wait expires while the job is still running, the current running status is returned.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId, waitTimeoutMs: { type: 'integer', minimum: 1, maximum: MAX_ASYNC_WAIT_MS, default: MAX_ASYNC_WAIT_MS } }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: readOnly },
   { name: 'cancel_async', description: 'Cancel one process-backed async operation by terminating its managed local process. SSH/run_bash_script jobs and managed temporary port-forward processes are cancellable. Automatically promoted compound tool operations currently report cancelSupported=false because they can span multiple sequential GitHub CLI operations. Completed jobs are left unchanged.', inputSchema: { type: 'object', properties: { asyncId: commonAsyncId }, required: ['asyncId'], additionalProperties: false }, outputSchema, annotations: closeState },
@@ -766,7 +777,7 @@ async function startGhExecution(args, { timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS, 
     if (settled) return;
     totalBytes += chunk.length;
     if (totalBytes > MAX_OUTPUT_BYTES) {
-      failure = `gh output exceeded CODESPACE_MCP_MAX_OUTPUT_BYTES=${MAX_OUTPUT_BYTES} for ${commandDescription(args)}`;
+      failure = `返却文字列のサイズが${formatOutputBytes(totalBytes)}のため、Codespace MCPによって処理が中断されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatOutputBytes(MAX_OUTPUT_BYTES)}です。`;
       child.kill();
       finish('failed', { error: failure });
       return;

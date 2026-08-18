@@ -56,8 +56,36 @@ scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
 
 const MAX_TOOL_NAME = 64;
+const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 15 * 1024;
+const FILES_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_FILES_MAX_RESPONSE_BYTES';
+const CODESPACE_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES';
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
+
+function textResponseLimitBytes(environmentName, environment = process.env) {
+  const raw = environment[environmentName];
+  if (raw === undefined || raw === '') return DEFAULT_TEXT_RESPONSE_LIMIT_BYTES;
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error(`${environmentName} must be a positive integer number of bytes`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${environmentName} must be a positive safe integer number of bytes`);
+  }
+  return value;
+}
+
+const filesResponseLimit = textResponseLimitBytes(FILES_RESPONSE_LIMIT_ENV);
+const codespaceResponseLimit = textResponseLimitBytes(CODESPACE_RESPONSE_LIMIT_ENV);
+
+function formatTextBytes(bytes) {
+  const kibibyte = 1024;
+  const mebibyte = kibibyte * 1024;
+  const gibibyte = mebibyte * 1024;
+  if (bytes >= gibibyte) return `${Math.ceil((bytes / gibibyte) * 10) / 10}GB`;
+  if (bytes >= mebibyte) return `${Math.ceil((bytes / mebibyte) * 10) / 10}MB`;
+  return `${Math.ceil(bytes / kibibyte)}KB`;
+}
 
 function pathInside(directory, candidate) {
   const path = relative(directory, candidate);
@@ -196,6 +224,38 @@ function supportsGatewayErrorEnvelope(tool) {
   return tool?.outputSchema?.type === 'object'
     && tool.outputSchema.properties?.ok?.type === 'boolean'
     && tool.outputSchema.properties?.result?.type === 'object';
+}
+
+function textLimitedResponse(id, route, result) {
+  const message = response(id, result);
+  const prefix = route.child.config.prefix;
+  const responseLimit = prefix === 'files'
+    ? filesResponseLimit
+    : prefix === 'codespace'
+      ? codespaceResponseLimit
+      : null;
+  if (responseLimit === null) return message;
+  const bytes = Buffer.byteLength(JSON.stringify(message), 'utf8') + 1;
+  if (bytes <= responseLimit) return message;
+  const recovery = prefix === 'files'
+    ? 'ダウンロードツール（**downloads__download_zip**）を直接使うか、クエリを狭めるようにしてください。'
+    : '大きな出力はファイルへ保存して**codespace__copy_from_codespace**で取得するか、クエリを狭めるようしてください。';
+  const text = `返却文字列が${formatTextBytes(bytes)}のため、このリクエストはゲートウェイによって拒否されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatTextBytes(responseLimit)}です。${recovery}`;
+  const limited = {
+    content: [{ type: 'text', text }],
+    isError: true
+  };
+  if (supportsGatewayErrorEnvelope(route.tool)) {
+    limited.structuredContent = {
+      ok: false,
+      error: text,
+      result: {
+        responseBytes: bytes,
+        limitBytes: responseLimit
+      }
+    };
+  }
+  return response(id, limited);
 }
 
 function toolExposureReport() {
@@ -693,7 +753,7 @@ async function handle(request) {
             })
           };
         });
-        return response(request.id, accessScopeMcpResult(payload));
+        return textLimitedResponse(request.id, route, accessScopeMcpResult(payload));
       }
       if (state && route.originalName === 'get_working_directory') {
         const result = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
@@ -701,7 +761,7 @@ async function handle(request) {
           const context = await isolationContextForChild(state, route.child);
           return bundledStateResult({ workingDirectory: context.base });
         });
-        return response(request.id, result);
+        return textLimitedResponse(request.id, route, result);
       }
       if (state && route.originalName === 'set_working_directory') {
         const result = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
@@ -721,7 +781,7 @@ async function handle(request) {
           context.base = selected[0];
           return bundledStateResult({ workingDirectory: selected[0] });
         });
-        return response(request.id, result);
+        return textLimitedResponse(request.id, route, result);
       }
       const result = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
         markIsolationOperation(state, route.child.config.prefix);
@@ -748,7 +808,7 @@ async function handle(request) {
         return childResult;
       });
       await applyLifecycle(route, result);
-      return response(request.id, result);
+      return textLimitedResponse(request.id, route, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const result = {
@@ -762,7 +822,7 @@ async function handle(request) {
           result: { accessScope: error.accessScope }
         };
       }
-      return response(request.id, result);
+      return textLimitedResponse(request.id, route, result);
     }
   }
   return errorResponse(request.id, -32601, 'Method not found');
