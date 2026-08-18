@@ -231,6 +231,9 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if (raw.serial_group !== undefined && (typeof raw.serial_group !== 'string' || !raw.serial_group)) throw new Error(`mcp_servers.${name}.serial_group must be a non-empty string`);
   if (raw.deferred !== undefined && typeof raw.deferred !== 'boolean') throw new Error(`mcp_servers.${name}.deferred must be boolean`);
   if (raw.annotation_config !== undefined && typeof raw.annotation_config !== 'boolean') throw new Error(`mcp_servers.${name}.annotation_config must be boolean`);
+  if (raw.allow_local_binding !== undefined && typeof raw.allow_local_binding !== 'boolean') {
+    throw new Error(`mcp_servers.${name}.allow_local_binding must be boolean`);
+  }
   if (raw.dangerous_allow_gateway_config_access !== undefined && typeof raw.dangerous_allow_gateway_config_access !== 'boolean') {
     throw new Error(`mcp_servers.${name}.dangerous_allow_gateway_config_access must be boolean`);
   }
@@ -336,6 +339,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     isBundled: bundledServer,
     sandbox,
     sandboxDelegated,
+    allowLocalBinding: raw.allow_local_binding,
     codexExecutable,
     env,
     requestTimeoutMs: Math.round(timeoutSeconds * 1000),

@@ -50,6 +50,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
     'enabled = true',
     'prefix = "a"',
     'annotation_config = false',
+    'allow_local_binding = true',
     'sandbox = "elevated"',
     "codex_executable = 'C:\\runtime\\codex.exe'",
     'dangerous_allow_gateway_config_access = true',
@@ -82,6 +83,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.equal(config.servers[0].name, 'alpha');
   assert.equal(config.servers[0].prefix, 'a');
   assert.equal(config.servers[0].manageAnnotations, false);
+  assert.equal(config.servers[0].allowLocalBinding, true);
   assert.equal(config.servers[0].sandbox, 'elevated');
   assert.equal(config.servers[0].dangerousAllowGatewayConfigAccess, true);
   assert.ok(config.servers[0].protectedGatewayConfigPaths.includes(config.configPath));
@@ -92,6 +94,7 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.equal(config.servers[0].deferred, true);
   assert.equal(config.servers[0].serialGroup, 'browser');
   assert.deepEqual(config.servers[0].startAfter, { server: 'controller', tool: 'prepare' });
+
   assert.equal(config.servers[0].blockedTools.has('dangerous'), true);
   assert.deepEqual(config.servers[0].blockedToolSubstrings, ['script', 'shell']);
   assert.deepEqual(config.servers[0].allowedDirectories, ['C:\\work\\project']);
@@ -100,6 +103,19 @@ test('gateway config keeps arbitrary enabled stdio MCPs and skips disabled entri
   assert.deepEqual(config.servers[0].disallowedDirectories, ['C:\\work\\project\\private']);
   assert.deepEqual(config.servers[0].disallowedFiles, ['C:\\work\\project\\.env']);
   assert.deepEqual(config.servers[0].disallowedPathGlobs, ['**.ssh**']);
+});
+
+
+test('gateway config requires allow_local_binding to be boolean', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gateway-local-binding-config-'));
+  const path = join(directory, 'gateway.toml');
+  await writeFile(path, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    'allow_local_binding = "yes"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /mcp_servers\.alpha\.allow_local_binding must be boolean/);
 });
 
 test('Gateway app protection defaults false and becomes a write-protected/read-only overlap when enabled', async () => {

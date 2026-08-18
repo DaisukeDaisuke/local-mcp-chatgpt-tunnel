@@ -312,6 +312,20 @@ test('onlineworkspace permission profile enables network without widening filesy
   assert.equal(override.endsWith('},network={enabled=true}}'), true);
 });
 
+test('offline child MCP can explicitly enable local binding without enabling internet access', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\repo\\mcp\\typed-voice-worker\\server.mjs'],
+    allowedDirectories: [],
+    allowedFiles: ['C:\\repo\\mcp\\typed-voice-worker\\server.mjs'],
+    sandboxReadOnlyDirectories: [],
+    isBundled: false,
+    sandbox: 'elevated',
+    allowLocalBinding: true
+  });
+  assert.equal(override.includes('network={enabled=false,allow_local_binding=true}'), true);
+});
+
 test('Codex app-server forwards streamed text deltas without dropping MCP stdout', async () => {
   const fake = fakeAppServer();
   let stdout = '';

@@ -96,7 +96,10 @@ function permissionProfileOverrideFor(config) {
     .map(([path, access]) => `${tomlLiteral(path, 'sandbox path')}=${tomlLiteral(access, 'sandbox access')}`)
     .join(',');
   const networkEnabled = config.sandbox === 'onlineworkspace';
-  return `permissions.${CODEX_PERMISSION_PROFILE_ID}={filesystem={${filesystem}},network={enabled=${networkEnabled}}}`;
+  const localBinding = typeof config.allowLocalBinding === 'boolean'
+    ? `,allow_local_binding=${config.allowLocalBinding}`
+    : '';
+  return `permissions.${CODEX_PERMISSION_PROFILE_ID}={filesystem={${filesystem}},network={enabled=${networkEnabled}${localBinding}}}`;
 }
 
 function codexAppServerLaunchSpec(codexExecutable, cwd, { platform = process.platform, env = process.env, permissionProfileOverride } = {}) {
