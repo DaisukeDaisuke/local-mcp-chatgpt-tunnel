@@ -74,7 +74,6 @@ command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=stage', '--git-executable=C:\Program Files\Git\cmd\git.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
-sandbox = "elevated"
 codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
 prefix = "git_stage"
 annotation_config = false

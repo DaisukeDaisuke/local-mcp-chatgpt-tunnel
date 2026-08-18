@@ -252,7 +252,7 @@ function textLimitedResponse(id, route, result) {
   const recovery = prefix === 'files'
     ? 'ダウンロードツール（**downloads__download_zip**）を直接使うか、クエリを狭めるようにしてください。'
     : '大きな出力はファイルへ保存して**codespace__copy_from_codespace**で取得するか、クエリを狭めるようしてください。';
-  const text = `返却文字列が${formatTextBytes(bytes)}のため、このリクエストはゲートウェイによって拒否されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatTextBytes(responseLimit)}です。${recovery} デバッグ用に元の返却文字列の先頭0.5KBを添付します。`;
+  const text = `返却文字列が${formatTextBytes(bytes)}のため、このリクエストはゲートウェイによって拒否されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatTextBytes(responseLimit)}です。${recovery} デバッグ用に元の返却文字列の先頭1.0KBを添付します。`;
   const limited = {
     content: [{ type: 'text', text }, { type: 'text', text: preview }],
     isError: true
