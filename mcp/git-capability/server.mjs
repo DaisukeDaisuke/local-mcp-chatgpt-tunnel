@@ -179,7 +179,7 @@ const isolation = createBundledIsolation();
 let standaloneWorkingDirectoryPromise;
 let gitExecutablePromise;
 const codexSandboxMode = process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;
-const codexSandboxChangesUser = codexSandboxMode === 'elevated';
+const codexSandboxNeedsSafeDirectory = codexSandboxMode === 'elevated' || codexSandboxMode === 'unelevated' || codexSandboxMode === 'onlineworkspace';
 
 const RESPONSE_SCHEMA = {
   type: 'object',
@@ -380,7 +380,7 @@ function fixedGitConfigArguments(cwd, { anonymousClone = false } = {}) {
       ['core.askPass', ''],
       ['http.extraHeader', '']
     ] : []),
-    ...(codexSandboxChangesUser ? [['safe.directory', cwd]] : [])
+    ...(codexSandboxNeedsSafeDirectory ? [['safe.directory', cwd]] : [])
   ];
   return configEntries.flatMap(([key, value]) => ['-c', `${key}=${value}`]);
 }
