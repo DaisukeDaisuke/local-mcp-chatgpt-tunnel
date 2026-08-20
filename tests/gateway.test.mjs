@@ -340,7 +340,11 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   assert.ok(names.includes('isolated__create'));
   assert.ok(names.includes('isolated__list'));
   assert.ok(names.includes('isolated__close'));
-  assert.ok(names.every((name) => name.startsWith('files__') || name.startsWith('isolated__')));
+  assert.ok(names.every((name) =>
+    name === 'gateway_childs_mcp_async_status'
+      || name.startsWith('files__')
+      || name.startsWith('isolated__')
+  ));
   assert.ok(listed.result.tools.every((tool) => tool.outputSchema?.type === 'object'));
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 18, method: 'tools/call', params: {
     name: 'isolated__create', arguments: { isolatedId: 'missing-purpose', workspaces: [workspace] }
