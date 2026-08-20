@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 export const GATEWAY_CHILD_ASYNC_PROMOTION_MS = 11_000;
 const MAX_RETAINED_ASYNC_REQUESTS = 64;
 
-export const GATEWAY_CHILD_ASYNC_WARNING = '10秒以上の同期リクエストはgatewayのクラッシュさせるため、リクエストは非同期化されました。破壊的操作はすでに行われている可能性があります。今後は10秒以上の同期タスクをしないように努めてください。これはgatewayクラッシュの緊急回避であり、gateway_childs_mcp_async_statusが必要なリクエストを常用しないでください。状況は**gateway_childs_mcp_async_status**で確認し、ブロックを発生させたprefixは、現在の完了するまでリクエストしないでください。';
+export const GATEWAY_CHILD_ASYNC_WARNING = '10秒以上の同期リクエストはgatewayのクラッシュさせるため、リクエストは非同期化されました。破壊的操作はすでに行われている可能性があります。今後は10秒以上の同期タスクをしないように努めてください。これはgatewayクラッシュの緊急回避であり、gateway_childs_mcp_async_statusが必要なリクエストを常用しないでください。状況は**gateway_childs_mcp_async_status**で確認し、ブロックを発生させたprefixは、現在の非同期リクエストが完了するまでリクエストしないでください。';
 
 const errorMessage = (error) => error instanceof Error ? error.message : String(error);
 
