@@ -135,7 +135,23 @@ test('Gateway app protection defaults false and becomes a write-protected/read-o
   ].join('\n'), 'utf8');
   const defaultConfig = await loadGatewayConfig(defaultPath);
   assert.equal(defaultConfig.protectGatewayApp, false);
+  assert.equal(defaultConfig.servers[0].protectGatewayApp, false);
   assert.deepEqual(defaultConfig.servers[0].protectedGatewayAppDirectories, []);
+
+  const explicitFalsePath = join(directory, 'explicit-false.toml');
+  await writeFile(explicitFalsePath, [
+    'private_use_only = true',
+    'protect_gateway_app = false',
+    '[mcp_servers.files]',
+    'command = "node"',
+    `args = ['${safeFiles}']`,
+    `cwd = '${root}'`,
+    `allowed_directories = ['${root}']`
+  ].join('\n'), 'utf8');
+  const explicitFalseConfig = await loadGatewayConfig(explicitFalsePath);
+  assert.equal(explicitFalseConfig.protectGatewayApp, false);
+  assert.equal(explicitFalseConfig.servers[0].protectGatewayApp, false);
+  assert.deepEqual(explicitFalseConfig.servers[0].protectedGatewayAppDirectories, []);
 
   const protectedPath = join(directory, 'protected.toml');
   await writeFile(protectedPath, [
@@ -149,6 +165,7 @@ test('Gateway app protection defaults false and becomes a write-protected/read-o
   ].join('\n'), 'utf8');
   const protectedConfig = await loadGatewayConfig(protectedPath);
   assert.equal(protectedConfig.protectGatewayApp, true);
+  assert.equal(protectedConfig.servers[0].protectGatewayApp, true);
   assert.equal(protectedConfig.servers[0].safeFilesServer, true);
   assert.deepEqual(protectedConfig.servers[0].protectedGatewayAppDirectories, [app]);
 });

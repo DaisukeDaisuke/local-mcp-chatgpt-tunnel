@@ -32,17 +32,18 @@ import {
   syncDiscoveredToolAnnotations
 } from './tool-annotations.mjs';
 import {
+  GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME,
   GATEWAY_CONFIG_NAME,
   PREFIX_LIST_NAME,
   TOOL_DIRECTORY_NAME,
   createGatewayConfigPayload,
   createPrefixListPayload,
   createToolDirectoryPayload,
-  gatewayConfigDefinition,
+  gatewayBuiltinToolDefinitions,
+  gatewayBuiltinToolNames,
+  gatewayOperationalToolDefinitions,
   gatewayConfigMcpResult,
-  prefixListDefinition,
   prefixListMcpResult,
-  toolDirectoryDefinition,
   toolDirectoryMcpResult
 } from './tool-directory.mjs';
 import { assertNotElevatedWindows } from './windows-integrity.mjs';
@@ -51,6 +52,11 @@ import { createGatewayInfoLogger } from './gateway-info-log.mjs';
 import { gatewayPathPolicyArguments } from './gateway-path-arguments.mjs';
 import { sandboxDotPathWarningLines } from './sandbox-hidden-path-warning.mjs';
 import { scanGitMetadataPolicy } from './git-metadata-policy.mjs';
+import {
+  createGatewayChildAsyncRegistry,
+  gatewayChildAsyncPromotionMcpResult,
+  gatewayChildAsyncStatusMcpResult
+} from './gateway-child-async.mjs';
 
 scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
@@ -158,6 +164,7 @@ const toolAnnotationConfig = await loadToolAnnotationConfig(
   config.servers.filter((server) => server.manageAnnotations).map((server) => server.prefix)
 );
 const queues = new SerialQueues();
+const childAsyncRegistry = createGatewayChildAsyncRegistry();
 const children = [];
 const childrenByName = new Map();
 const childStarts = new Map();
@@ -178,8 +185,9 @@ function blockedToolReason(childConfig, toolName) {
   return substring ? { type: 'substring', value: substring } : null;
 }
 
-const gatewayBuiltinToolNames = new Set([TOOL_DIRECTORY_NAME, PREFIX_LIST_NAME, GATEWAY_CONFIG_NAME]);
-const collidesWithGatewayBuiltin = (publicName) => config.publishToolDirectory && gatewayBuiltinToolNames.has(publicName);
+const gatewayOperationalToolNames = new Set(gatewayOperationalToolDefinitions.map((tool) => tool.name));
+const collidesWithGatewayBuiltin = (publicName) => gatewayOperationalToolNames.has(publicName)
+  || (config.publishToolDirectory && gatewayBuiltinToolNames.has(publicName));
 
 function rebuildRoutes() {
   toolRoutes.clear();
@@ -218,14 +226,14 @@ const hasBundledChildren = () => children.some((child) => child.config.isBundled
 function publishedTools() {
   const tools = [...toolRoutes.values()].map((route) => route.tool);
   if (hasBundledChildren()) tools.unshift(...isolatedToolDefinitions);
-  if (config.publishToolDirectory) tools.unshift(toolDirectoryDefinition, prefixListDefinition, gatewayConfigDefinition);
+  tools.unshift(...(config.publishToolDirectory ? gatewayBuiltinToolDefinitions : gatewayOperationalToolDefinitions));
   return tools;
 }
 
 function activePrefixes() {
   const prefixes = children.map((child) => child.config.prefix);
   if (hasBundledChildren()) prefixes.push('isolated');
-  if (config.publishToolDirectory) prefixes.push('gateway');
+  prefixes.push('gateway');
   return [...new Set(prefixes)];
 }
 
@@ -235,7 +243,7 @@ function supportsGatewayErrorEnvelope(tool) {
     && tool.outputSchema.properties?.result?.type === 'object';
 }
 
-function textLimitedResponse(id, route, result) {
+function textLimitedResult(id, route, result) {
   const message = response(id, result);
   const prefix = route.child.config.prefix;
   const responseLimit = prefix === 'files'
@@ -243,10 +251,10 @@ function textLimitedResponse(id, route, result) {
     : prefix === 'codespace'
       ? codespaceResponseLimit
       : null;
-  if (responseLimit === null) return message;
+  if (responseLimit === null) return result;
   const serialized = `${JSON.stringify(message)}\n`;
   const bytes = Buffer.byteLength(serialized, 'utf8');
-  if (bytes <= responseLimit) return message;
+  if (bytes <= responseLimit) return result;
   const preview = utf8Prefix(serialized, TEXT_RESPONSE_PREVIEW_BYTES);
   const previewBytes = Buffer.byteLength(preview, 'utf8');
   const recovery = prefix === 'files'
@@ -268,8 +276,10 @@ function textLimitedResponse(id, route, result) {
       }
     };
   }
-  return response(id, limited);
+  return limited;
 }
+
+const textLimitedResponse = (id, route, result) => response(id, textLimitedResult(id, route, result));
 
 function toolExposureReport() {
   const disabled = [];
@@ -319,9 +329,8 @@ function logToolExposureReport() {
       info(`tool disabled: ${identity} status="rejected" blocked_tool_substrings=${JSON.stringify(item.reason.value)}`);
     }
   }
-  if (config.publishToolDirectory) {
-    info(`tool prefix: server="gateway" prefix="gateway" enabled=true found=${gatewayBuiltinToolNames.size} rejected=0 published=${gatewayBuiltinToolNames.size}`);
-  }
+  const publishedGatewayTools = config.publishToolDirectory ? gatewayBuiltinToolDefinitions : gatewayOperationalToolDefinitions;
+  info(`tool prefix: server="gateway" prefix="gateway" enabled=true found=${publishedGatewayTools.length} rejected=0 published=${publishedGatewayTools.length}`);
   if (hasBundledChildren()) {
     info(`tool prefix: server="gateway" prefix="isolated" enabled=true found=${isolatedToolDefinitions.length} rejected=0 published=${isolatedToolDefinitions.length}`);
   }
@@ -468,14 +477,12 @@ async function startChild(childConfig) {
             .filter((path) => childConfig.allowedDirectories.some((root) => pathInside(root, path))
               || childConfig.allowedFiles.some((file) => relative(file, path) === ''))
         ])];
-        childConfig.sandboxForcedReadOnlyDirectories = [...new Set([
-          ...(childConfig.sandboxForcedReadOnlyDirectories ?? []),
-          ...(childConfig.protectedGatewayAppDirectories ?? [])
-        ])];
-        childConfig.sandboxForcedReadOnlyFiles = [...new Set([
-          ...(childConfig.sandboxForcedReadOnlyFiles ?? []),
-          ...(childConfig.protectedGatewayAppFiles ?? [])
-        ])];
+        childConfig.sandboxForcedReadOnlyDirectories = childConfig.protectGatewayApp
+          ? [...new Set(childConfig.protectedGatewayAppDirectories ?? [])]
+          : [];
+        childConfig.sandboxForcedReadOnlyFiles = childConfig.protectGatewayApp
+          ? [...new Set(childConfig.protectedGatewayAppFiles ?? [])]
+          : [];
         if (childConfig.gitMetadataWriteAccess) {
           const gitMetadata = await scanGitMetadataPolicy(childConfig.allowedDirectories);
           childConfig.sandboxGitMetadataWriteDirectories = gitMetadata.writableDirectories;
@@ -599,6 +606,27 @@ async function handle(request) {
   if (request.method === 'ping') return response(request.id, {});
   if (request.method === 'tools/list') return response(request.id, { tools: publishedTools() });
   if (request.method === 'tools/call') {
+    if (request.params?.name === GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME) {
+      try {
+        const toolArguments = request.params?.arguments ?? {};
+        if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
+            || Object.keys(toolArguments).some((key) => !['asyncId', 'isolatedId'].includes(key))) {
+          throw new Error(`${GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME} accepts only asyncId and optional isolatedId`);
+        }
+        if (typeof toolArguments.asyncId !== 'string' || !/^[0-9a-fA-F-]{36}$/.test(toolArguments.asyncId)) {
+          throw new Error('asyncId must be a UUID string');
+        }
+        const isolatedId = toolArguments.isolatedId === undefined ? null : validateIsolatedId(toolArguments.isolatedId);
+        if (isolatedId !== null) isolationState(isolatedId);
+        const status = childAsyncRegistry.status(toolArguments.asyncId.toLowerCase(), isolatedId);
+        return response(request.id, gatewayChildAsyncStatusMcpResult({ ok: true, result: status }));
+      } catch (error) {
+        return response(request.id, gatewayChildAsyncStatusMcpResult({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        }, true));
+      }
+    }
     if (config.publishToolDirectory && request.params?.name === GATEWAY_CONFIG_NAME) {
       const toolArguments = request.params?.arguments ?? {};
       if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments) || Object.keys(toolArguments).length > 0) {
@@ -796,7 +824,7 @@ async function handle(request) {
         });
         return textLimitedResponse(request.id, route, result);
       }
-      const result = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
+      const childRequest = queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
         markIsolationOperation(state, route.child.config.prefix);
         const context = state ? await isolationContextForChild(state, route.child) : null;
         const base = context?.base ?? route.child.pathPolicy.cwd;
@@ -820,8 +848,18 @@ async function handle(request) {
         updateExternalWorkingDirectory(route, childResult);
         return childResult;
       });
-      await applyLifecycle(route, result);
-      return textLimitedResponse(request.id, route, result);
+      const completedRequest = childRequest.then(async (childResult) => {
+        await applyLifecycle(route, childResult);
+        return textLimitedResult(request.id, route, childResult);
+      });
+      const resolved = await childAsyncRegistry.resolveOrPromote({
+        tool: request.params.name,
+        prefix: route.child.config.prefix,
+        isolatedId,
+        promise: completedRequest
+      });
+      if (resolved.promoted) return response(request.id, gatewayChildAsyncPromotionMcpResult(resolved.status));
+      return response(request.id, resolved.result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const result = {

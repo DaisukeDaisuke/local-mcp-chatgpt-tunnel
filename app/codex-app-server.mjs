@@ -55,6 +55,7 @@ function configuredWithin(root, candidate) {
 }
 
 function permissionProfileOverrideFor(config) {
+  const gatewayAppRoot = config.gatewayAppDirectory ?? repositoryAppRoot;
   const writableRoots = [...new Set([
     ...(config.allowedDirectories ?? []),
     ...(config.sandboxInternalWritableDirectories ?? [])
@@ -82,7 +83,7 @@ function permissionProfileOverrideFor(config) {
     ...(config.sandboxReadOnlyDirectories ?? []),
     ...(absolutePath(config.command) ? [pathDirname(config.command)] : []),
     ...(interpreterEntryDirectory ? [interpreterEntryDirectory] : []),
-    ...(config.isBundled ? [repositoryAppRoot] : [])
+    ...(config.isBundled ? [gatewayAppRoot] : [])
   ])];
   const entries = new Map([[':minimal', 'read']]);
   for (const path of readableRoots) {
@@ -91,6 +92,10 @@ function permissionProfileOverrideFor(config) {
   for (const path of writableRoots) entries.set(path, 'write');
   for (const path of gitMetadataWriteRoots) entries.set(path, 'write');
   for (const path of forcedReadOnlyRoots) entries.set(path, 'read');
+  if (config.protectGatewayApp === false
+      && writableRoots.some((root) => configuredWithin(root, gatewayAppRoot))) {
+    entries.set(gatewayAppRoot, 'write');
+  }
   for (const path of deniedPaths) entries.set(path, 'deny');
   const filesystem = [...entries.entries()]
     .map(([path, access]) => `${tomlLiteral(path, 'sandbox path')}=${tomlLiteral(access, 'sandbox access')}`)

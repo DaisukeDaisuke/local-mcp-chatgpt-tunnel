@@ -274,10 +274,26 @@ test('Codex permission profile can carve protected Gateway app read-only out of 
     args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
     allowedDirectories: ['C:\\repo'],
     sandboxForcedReadOnlyDirectories: ['C:\\repo\\app'],
+    protectGatewayApp: true,
     isBundled: true
   });
   assert.equal(override.includes("'C:\\repo'='write'"), true);
   assert.equal(override.includes("'C:\\repo\\app'='read'"), true);
+});
+
+test('protect_gateway_app=false removes a stale Gateway app read-only carveout from the Codex permission profile', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
+    allowedDirectories: ['C:\\repo'],
+    sandboxForcedReadOnlyDirectories: ['C:\\repo\\app'],
+    protectGatewayApp: false,
+    gatewayAppDirectory: 'C:\\repo\\app',
+    isBundled: true
+  });
+  assert.equal(override.includes("'C:\\repo'='write'"), true);
+  assert.equal(override.includes("'C:\\repo\\app'='write'"), true);
+  assert.equal(override.includes("'C:\\repo\\app'='read'"), false);
 });
 
 test('Codex permission profile explicitly re-enables discovered Git metadata while denying executable and redirecting children', () => {

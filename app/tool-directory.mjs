@@ -1,6 +1,7 @@
 export const TOOL_DIRECTORY_NAME = 'gateway__list_available_tools';
 export const PREFIX_LIST_NAME = 'gateway__get_prefix_list';
 export const GATEWAY_CONFIG_NAME = 'gateway__get_config';
+export const GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME = 'gateway_childs_mcp_async_status';
 
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
@@ -129,6 +130,61 @@ export const gatewayConfigDefinition = {
     additionalProperties: false
   }
 };
+
+export const gatewayChildsMcpAsyncStatusDefinition = {
+  name: GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME,
+  description: 'Return the non-blocking status and retained result of one Gateway-managed child MCP async request.',
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      asyncId: {
+        type: 'string',
+        minLength: 36,
+        maxLength: 36,
+        pattern: '^[0-9a-fA-F-]{36}$'
+      },
+      isolatedId: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 64,
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+      }
+    },
+    required: ['asyncId'],
+    additionalProperties: false
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      ok: { type: 'boolean' },
+      result: { type: 'object' },
+      error: { type: 'string' }
+    },
+    required: ['ok'],
+    additionalProperties: false
+  }
+};
+
+export const gatewayDirectoryToolDefinitions = [
+  toolDirectoryDefinition,
+  prefixListDefinition,
+  gatewayConfigDefinition
+];
+
+export const gatewayOperationalToolDefinitions = [gatewayChildsMcpAsyncStatusDefinition];
+
+export const gatewayBuiltinToolDefinitions = [
+  ...gatewayDirectoryToolDefinitions,
+  ...gatewayOperationalToolDefinitions
+];
+
+export const gatewayBuiltinToolNames = new Set(gatewayBuiltinToolDefinitions.map((tool) => tool.name));
 
 const summarizeTool = (tool) => ({
   name: tool.name,

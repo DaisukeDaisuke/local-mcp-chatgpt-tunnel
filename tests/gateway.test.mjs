@@ -178,15 +178,19 @@ process.stdin.on('data', (chunk) => {
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   await nextLine(child.stdout);
-  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=2/g) ?? []).length >= 1);
+  await stderr.waitFor((text) => (text.match(/INFO tool exposure: found=5 disabled=4 published=3/g) ?? []).length >= 1);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
   await nextLine(child.stdout);
-  assert.equal((stderr.value.match(/INFO tool exposure: found=5 disabled=4 published=2/g) ?? []).length, 1);
+  assert.equal((stderr.value.match(/INFO tool exposure: found=5 disabled=4 published=3/g) ?? []).length, 1);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['demo__plain', 'demo__get_gateway_access_scope']);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
+    'gateway_childs_mcp_async_status',
+    'demo__plain',
+    'demo__get_gateway_access_scope'
+  ]);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'demo__runScript', arguments: {} } })}\n`);
   const blockedCall = await nextLine(child.stdout);
@@ -840,7 +844,7 @@ gatewayIntegrationTest('gateway initialization survives an unavailable child MCP
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
-  assert.deepEqual(listed.result.tools, []);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['gateway_childs_mcp_async_status']);
 });
 
 gatewayIntegrationTest('tools/list waits for concurrent initialization when a child MCP is unavailable', async (t) => {
@@ -869,7 +873,7 @@ gatewayIntegrationTest('tools/list waits for concurrent initialization when a ch
   assert.equal(initialized.id, 1);
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
   assert.equal(listed.id, 2);
-  assert.deepEqual(listed.result.tools, []);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['gateway_childs_mcp_async_status']);
 });
 
 gatewayIntegrationTest('optional gateway tool directory returns full names, prefix matches, counts, and disabled proxy names', async (t) => {
@@ -934,6 +938,7 @@ process.stdin.on('data', (chunk) => {
     'gateway__list_available_tools',
     'gateway__get_prefix_list',
     'gateway__get_config',
+    'gateway_childs_mcp_async_status',
     'demo__plain',
     'demo__get_gateway_access_scope'
   ]);
@@ -970,13 +975,14 @@ process.stdin.on('data', (chunk) => {
     name: 'gateway__list_available_tools', arguments: { prefix: 'no-such-prefix' }
   } })}\n`);
   const fallback = await nextLine(child.stdout);
-  assert.equal(fallback.result.structuredContent.availableToolCount, 5);
+  assert.equal(fallback.result.structuredContent.availableToolCount, 6);
   assert.deepEqual(fallback.result.structuredContent.tools.map((tool) => tool.name), [
     'demo__get_gateway_access_scope',
     'demo__plain',
     'gateway__get_config',
     'gateway__get_prefix_list',
-    'gateway__list_available_tools'
+    'gateway__list_available_tools',
+    'gateway_childs_mcp_async_status'
   ]);
   assert.equal(fallback.result.structuredContent.tools[0].inputSchema, undefined);
   assert.equal(fallback.result.structuredContent.tools[0].outputSchema, undefined);
