@@ -728,7 +728,11 @@ async function handle(request) {
           pendingIsolatedIds.delete(isolatedId);
         }
       } catch (error) {
-        return response(request.id, isolatedMcpResult({ ok: false, error: error instanceof Error ? error.message : String(error) }, true));
+        return response(request.id, isolatedMcpResult({
+          ok: false,
+          result: { gatewayConfig: createGatewayConfigPayload(config) },
+          error: error instanceof Error ? error.message : String(error)
+        }, true));
       }
     }
     if (request.params?.name === ISOLATED_LIST_TOOL && hasBundledChildren()) {
