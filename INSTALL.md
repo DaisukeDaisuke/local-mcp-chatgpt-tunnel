@@ -99,7 +99,7 @@ icacls $workspace /inheritancelevel:e /T /C
  
 ## 2. tunnel-clientを配置する
 ### 2.1 Windows用ZIPをダウンロードする
-[tunnel-client Windows amd64版ZIPをダウンロード](https://github.com/openai/tunnel-client/releases/latest/download/tunnel-client-v0.0.11-windows-amd64.zip)<br>
+[tunnel-client Windows amd64版ZIPをダウンロード](https://github.com/openai/tunnel-client/releases/latest/download/tunnel-client-v0.0.12-windows-amd64.zip)<br>
 このリンクを開くとZIPのダウンロードが始まります。<br>ブラウザーのダウンロード先へ`tunnel-client-v0.0.11-windows-amd64.zip`が保存されたことを確認します。<br>
 
 ### 2.2 SHA256SUMS.txtをダウンロードする
