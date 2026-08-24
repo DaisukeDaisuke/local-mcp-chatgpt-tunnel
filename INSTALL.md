@@ -143,16 +143,18 @@ node mcp\gh-workflow\server.mjs --help
 `.chatgpt-local-mcp-root`のようなマーカーファイルや`--root`引数は不要です。<br>
 ## 4. gateway.tomlを作成する
 ### 4.1 設定例をコピーする
-Codex sandboxを使わない場合は通常版をコピーします。<br>
-```powershell
-Copy-Item config\gateway.example.toml config\gateway.toml
-code config\gateway.toml
-```
+
 手順1.1でCodex elevated sandboxをセットアップした場合は、代わりにCodex版をコピーします。<br>
 ```powershell
 Copy-Item config\gateway.codex.example.toml config\gateway.toml
 code config\gateway.toml
 ```
+Codex sandboxを使わない場合は通常版をコピーします。**(非推奨！！！)**<br>
+```powershell
+Copy-Item config\gateway.example.toml config\gateway.toml
+code config\gateway.toml
+```
+
 どちらか一方だけを使用してください。<br>
 両方の設定例にある`C:\ABSOLUTE\PATH\TO`は説明用のダミーです。Codex版では`command`と`codex_executable`も実在する絶対パスへ置き換えます。<br>
 `args`にはこのリポジトリ内のMCPサーバーの絶対パスを、`cwd`と`allowed_directories`には実際に操作するWorkspaceの絶対パスを書きます。<br>
