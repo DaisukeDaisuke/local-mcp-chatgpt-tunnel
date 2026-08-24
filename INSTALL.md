@@ -577,13 +577,6 @@ ChatGPTで作成したカスタムアプリを有効にし、表示されたツ�
 このTunnelは自分専用として扱い、公開申請、第三者共有、共有Workspaceへの追加は行いません。
 ### 12.3 動作確認する
 ChatGPTに、作成したカスタムアプリのツールが利用可能になったか確認させてください。
-### 12.4 内蔵MCP用のisolated workspaceを作成する
-Gateway同梱MCPの公開ツールは`isolatedId`を必須とします。最初に`isolated__create`へ、そのGatewayプロセス内で一度も使用していないIDと、操作対象の絶対ディレクトリを`workspaces`配列で渡します。複数Workspaceをまたぐ必要がある場合は、すべて同じ配列へ指定できます。Gatewayは各MCPの`allowed_directories`と拒否設定を適用し、そのMCPで許可される範囲だけを使用します。<br>
-```json
-{"isolatedId":"chat-20260806-a","workspaces":["C:\\work\\project-a","C:\\work\\shared"]}
-```
-同じ`isolatedId`を同時に別用途へ使わず、`isolated__close`後もGatewayを再起動するまで再利用しません。現在開いているIDは`isolated__list`で確認できます。各内蔵MCP呼び出しと`get_gateway_access_scope`には同じ`isolatedId`を渡します。通常ツールへ`root`、`roots`、`workspace`、`workspaces`などを渡して分離範囲を上書きすることはできません。<br>
-Gatewayは起動時に内蔵MCPごとのランダム鍵を生成し、正規化済みの基準パスと複数rootをHMAC-SHA-256で署名して子MCPへ渡します。子MCPは未署名、改ざん済み、構造不正な分離コンテキストを拒否します。鍵を`gateway.toml`や環境変数へ手動設定する必要はありません。<br>
 > [!IMPORTANT]
 > お疲れさまでした。ChatGPTからローカルMCPを使用できるようになりました。
 
