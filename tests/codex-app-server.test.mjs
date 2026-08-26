@@ -296,22 +296,6 @@ test('protect_gateway_app=false removes a stale Gateway app read-only carveout f
   assert.equal(override.includes("'C:\\repo\\app'='read'"), false);
 });
 
-test('Codex permission profile explicitly re-enables discovered Git metadata while denying executable and redirecting children', () => {
-  const override = codexAppServerInternals.permissionProfileOverrideFor({
-    command: 'C:\\Program Files\\nodejs\\node.exe',
-    args: ['C:\\repo\\mcp\\git-capability\\server.mjs'],
-    allowedDirectories: ['C:\\repo'],
-    sandboxGitMetadataWriteDirectories: ['C:\\repo\\.git'],
-    sandboxGitMetadataDeniedDirectories: ['C:\\repo\\.git\\hooks', 'C:\\repo\\.git\\objects\\info'],
-    sandboxGitMetadataDeniedFiles: ['C:\\repo\\.git\\config'],
-    isBundled: true
-  });
-  assert.equal(override.includes("'C:\\repo'='write'"), true);
-  assert.equal(override.includes("'C:\\repo\\.git'='write'"), true);
-  assert.equal(override.includes("'C:\\repo\\.git\\hooks'='deny'"), true);
-  assert.equal(override.includes("'C:\\repo\\.git\\objects\\info'='deny'"), true);
-  assert.equal(override.includes("'C:\\repo\\.git\\config'='deny'"), true);
-});
 
 test('onlineworkspace permission profile enables network without widening filesystem roots', () => {
   const override = codexAppServerInternals.permissionProfileOverrideFor({

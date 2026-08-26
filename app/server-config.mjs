@@ -9,8 +9,6 @@ export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '
 export const gatewayLogsDirectory = resolve(repositoryRoot, 'logs');
 export const gatewayAppDirectory = resolve(repositoryRoot, 'app');
 const SAFE_FILES_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'safe-files', 'server.mjs');
-const GIT_MCP_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'gitmcp', 'server.mjs');
-const GIT_CAPABILITY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'git-capability', 'server.mjs');
 const CODEX_SCRIPT_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codex-script', 'server.mjs');
 const BUILD_V5T_ASSEMBLY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'buildv5tassembly', 'server.mjs');
 const INTERNET_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'internet', 'server.mjs');
@@ -117,14 +115,6 @@ function isServerPath(command, args, cwd, expectedPath, platform = process.platf
 
 function isSafeFilesServer(command, args, cwd, platform = process.platform) {
   return isServerPath(command, args, cwd, SAFE_FILES_SERVER_PATH, platform);
-}
-
-function isGitMcpServer(command, args, cwd, platform = process.platform) {
-  return isServerPath(command, args, cwd, GIT_MCP_SERVER_PATH, platform);
-}
-
-function isGitCapabilityServer(command, args, cwd, platform = process.platform) {
-  return isServerPath(command, args, cwd, GIT_CAPABILITY_SERVER_PATH, platform);
 }
 
 function isCodexScriptServer(command, args, cwd, platform = process.platform) {
@@ -263,11 +253,6 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const archiveServer = isArchiveServer(raw.command, args, cwd, platform);
   const codespaceServer = isCodespaceServer(raw.command, args, cwd, platform);
   const safeFilesServer = isSafeFilesServer(raw.command, args, cwd, platform);
-  const gitMcpServer = isGitMcpServer(raw.command, args, cwd, platform);
-  const gitCapabilityServer = isGitCapabilityServer(raw.command, args, cwd, platform);
-  const gitCapabilityMode = gitCapabilityServer
-    ? args.find((argument) => argument.startsWith('--mode='))?.slice('--mode='.length)
-    : undefined;
   const bundledServer = codexScriptServer
     || buildV5tAssemblyServer
     || internetServer
@@ -355,7 +340,6 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
     safeFilesServer,
     protectGatewayApp,
     gatewayAppDirectory,
-    gitMetadataWriteAccess: gitMcpServer || (gitCapabilityServer && gitCapabilityMode !== 'clone'),
     allowedDirectories,
     allowedFiles,
     sandboxReadOnlyFiles,

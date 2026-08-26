@@ -170,35 +170,6 @@ test('Gateway app protection defaults false and becomes a write-protected/read-o
   assert.deepEqual(protectedConfig.servers[0].protectedGatewayAppDirectories, [app]);
 });
 
-test('Bundled Git servers request metadata write scanning except clone, whose .git does not exist at startup', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'gateway-git-metadata-config-'));
-  const root = resolve('.');
-  const gitMcp = resolve('mcp/gitmcp/server.mjs');
-  const gitCapability = resolve('mcp/git-capability/server.mjs');
-  const path = join(directory, 'gateway.toml');
-  await writeFile(path, [
-    'private_use_only = true',
-    '[mcp_servers.git]',
-    'command = "node"',
-    `args = ['${gitMcp}', '--git-executable=C:\\Program Files\\Git\\cmd\\git.exe']`,
-    `cwd = '${root}'`,
-    `allowed_directories = ['${root}']`,
-    '[mcp_servers.stage]',
-    'command = "node"',
-    `args = ['${gitCapability}', '--mode=stage', '--git-executable=C:\\Program Files\\Git\\cmd\\git.exe']`,
-    `cwd = '${root}'`,
-    `allowed_directories = ['${root}']`,
-    '[mcp_servers.clone]',
-    'command = "node"',
-    `args = ['${gitCapability}', '--mode=clone', '--git-executable=C:\\Program Files\\Git\\cmd\\git.exe']`,
-    `cwd = '${root}'`,
-    `allowed_directories = ['${root}']`
-  ].join('\n'), 'utf8');
-  const config = await loadGatewayConfig(path);
-  assert.equal(config.servers.find((server) => server.name === 'git').gitMetadataWriteAccess, true);
-  assert.equal(config.servers.find((server) => server.name === 'stage').gitMetadataWriteAccess, true);
-  assert.equal(config.servers.find((server) => server.name === 'clone').gitMetadataWriteAccess, false);
-});
 
 test('gateway file logging is disabled by default and requires a boolean top-level flag', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gateway-file-logging-config-'));

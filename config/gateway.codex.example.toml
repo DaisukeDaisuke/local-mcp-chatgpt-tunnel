@@ -65,10 +65,8 @@ disallowed_path_globs = ['**.ssh**']
 # 上記の標準Git for Windows配置は追加設定不要です。Portable Gitなどを別の場所へ置く場合だけ、
 # そのGitインストールディレクトリをsandbox_read_only_directoriesへ追加してください。
 
-# Git mutation needs .git writes. At child startup the Gateway recursively scans existing writable
-# roots for .git metadata and adds only those concrete metadata paths as explicit Codex write entries.
-# hooks, objects/info, modules, and existing executable/redirecting config files stay read-only.
-# Repositories created later by git init/clone are not discovered until restart.
+# git add/restore writes .git/index and .git/index.lock. The Codex Windows sandbox deliberately
+# blocks writable dot-directories, so keep index mutation in its own unsandboxed capability.
 [mcp_servers.git_stage]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
 args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\git-capability\server.mjs', '--mode=stage', '--git-executable=C:\Program Files\Git\cmd\git.exe']
@@ -109,7 +107,7 @@ disallowed_path_globs = ['**.ssh**']
 sandbox_read_only_directories = ['C:\Program Files\GnuPG\bin']
 
 # Remote Git capabilities use onlineworkspace so network is enabled while filesystem access remains
-# inside the same workspace boundary plus the startup-discovered .git metadata carveouts.
+# inside the configured workspace boundary.
 # push/pull pin the remote name and GitHub OWNER/REPO identity at startup and accept no remote/refspec/URL tool arguments.
 [mcp_servers.git_push]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
@@ -166,9 +164,7 @@ disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = ['**.ssh**']
 
-# clone remains unsandboxed in this template because its destination .git does not exist when the
-# child permission profile is built. The startup scanner intentionally does not predict or pre-authorize
-# future Git metadata paths; restart after creation is enough for later sandboxed Git operations.
+# clone remains unsandboxed in this template because it creates Git metadata in the destination.
 
 # GitHub Actions inspection and explicit run cancellation for a repository allowlist.
 # The MCP never invokes a shell and does not expose dispatch, rerun, delete, artifact download, or arbitrary gh commands.
