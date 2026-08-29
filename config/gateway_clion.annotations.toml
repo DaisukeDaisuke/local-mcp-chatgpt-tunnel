@@ -1,0 +1,77 @@
+[tool_annotations.clion]
+default = "READ_ONLY_ANNOTATIONS"
+[tool_annotations.clion.tools]
+# ---- Run / debugger ----
+execute_run_configuration = "LOCAL_STATE_ANNOTATIONS"
+get_run_configurations = "READ_ONLY_ANNOTATIONS"
+xdebug_control_session = "LOCAL_STATE_ANNOTATIONS"
+xdebug_evaluate_expression = "LOCAL_STATE_ANNOTATIONS"
+xdebug_get_debugger_status = "READ_ONLY_ANNOTATIONS"
+xdebug_get_frame_values = "READ_ONLY_ANNOTATIONS"
+xdebug_get_stack = "READ_ONLY_ANNOTATIONS"
+xdebug_get_threads = "READ_ONLY_ANNOTATIONS"
+xdebug_get_value_by_path = "READ_ONLY_ANNOTATIONS"
+xdebug_list_breakpoints = "READ_ONLY_ANNOTATIONS"
+xdebug_remove_breakpoint = "LOCAL_STATE_ANNOTATIONS"
+xdebug_run_to_line = "LOCAL_STATE_ANNOTATIONS"
+xdebug_set_breakpoint = "LOCAL_STATE_ANNOTATIONS"
+xdebug_set_variable = "LOCAL_STATE_ANNOTATIONS"
+xdebug_start_debugger_session = "LOCAL_STATE_ANNOTATIONS"
+# ---- Files / editor / source inspection ----
+create_new_file = "LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS"
+get_all_open_file_paths = "READ_ONLY_ANNOTATIONS"
+list_directory_tree = "READ_ONLY_ANNOTATIONS"
+open_file_in_editor = "LOCAL_STATE_ANNOTATIONS"
+read_file = "READ_ONLY_ANNOTATIONS"
+apply_patch = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+search_file = "READ_ONLY_ANNOTATIONS"
+search_regex = "READ_ONLY_ANNOTATIONS"
+search_symbol = "READ_ONLY_ANNOTATIONS"
+search_text = "READ_ONLY_ANNOTATIONS"
+reformat_file = "LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS"
+# ---- Generic execution ----
+# Arbitrary terminal command: unlike Run/Debugger, the tool itself directly accepts arbitrary commands.
+execute_terminal_command = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+# Universal dispatcher. Preserve the child MCP annotation rather than falsely claiming
+# that every dynamically dispatched operation is local/read-only/destructive.
+execute_tool = "LOCAL_DESTRUCTIVE_NON_IDEMPOTENT_ANNOTATIONS"
+# ---- C/C++ diagnostics ----
+get_compiler_info = "READ_ONLY_ANNOTATIONS"
+get_diagnostic_info = "READ_ONLY_ANNOTATIONS"
+get_file_problems = "READ_ONLY_ANNOTATIONS"
+# ---- Python IDE configuration ----
+configure_python_interpreter = "LOCAL_STATE_ANNOTATIONS"
+get_python_environment = "READ_ONLY_ANNOTATIONS"
+# ---- Git integration ----
+get_repositories = "READ_ONLY_ANNOTATIONS"
+git_status = "READ_ONLY_ANNOTATIONS"
+# ---- Database connection configuration ----
+create_database_connection = "LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS"
+edit_database_connection = "LOCAL_STATE_ANNOTATIONS"
+list_database_connections = "READ_ONLY_ANNOTATIONS"
+test_database_connection = "READ_ONLY_ANNOTATIONS"
+# ---- Database metadata / inspection ----
+get_database_object_description = "READ_ONLY_ANNOTATIONS"
+introspect_schema = "LOCAL_STATE_ANNOTATIONS"
+list_database_schemas = "READ_ONLY_ANNOTATIONS"
+list_recent_sql_queries = "READ_ONLY_ANNOTATIONS"
+list_schema_object_kinds = "READ_ONLY_ANNOTATIONS"
+list_schema_objects = "READ_ONLY_ANNOTATIONS"
+preview_table_data = "READ_ONLY_ANNOTATIONS"
+# ---- SQL execution/result state ----
+execute_sql_query = "UNCLASSIFIED"
+fetch_query_result = "READ_ONLY_ANNOTATIONS"
+cancel_sql_query = "LOCAL_STATE_ANNOTATIONS"
+[tool_annotations.clion.open_world_tools]
+# These directly communicate with an external database/server.
+create_database_connection = true
+edit_database_connection = true
+test_database_connection = true
+introspect_schema = true
+list_database_schemas = true
+list_schema_objects = true
+list_schema_object_kinds = true
+get_database_object_description = true
+preview_table_data = true
+execute_sql_query = true
+cancel_sql_query = true

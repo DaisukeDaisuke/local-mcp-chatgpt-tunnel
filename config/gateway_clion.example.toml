@@ -1,0 +1,10 @@
+[mcp_servers.clion]
+command = 'C:\Users\owner\AppData\Local\Programs\CLion\bin\clion64.exe'
+args = ['stdioMcpServer']
+cwd = 'C:\Users\owner\Documents\tunnelworkspace\BattleArrow\BattleEmulator'
+blocked_tool_substrings = ["python", "terminal", "sql", "apply_patch", "create_new_file", "_schema", "database", "fetch_query", "_database", "read_file", "table_data"]
+allowed_directories = ['C:\Users\owner\Documents\tunnelworkspace\BattleArrow\BattleEmulator']
+
+[mcp_servers.clion.env]
+IJ_MCP_SERVER_PROJECT_PATH = 'C:\Users\owner\Documents\tunnelworkspace\BattleArrow\BattleEmulator'
+IJ_MCP_SERVER_PORT = '64362'
