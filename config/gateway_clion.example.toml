@@ -1,3 +1,4 @@
+# C:\Users\owner\AppData\Local\JetBrains\CLion2026.2\aia\agents\.agents\skills\clion-debugger
 [mcp_servers.clion]
 command = 'C:\Users\owner\AppData\Local\Programs\CLion\bin\clion64.exe'
 args = ['stdioMcpServer']
