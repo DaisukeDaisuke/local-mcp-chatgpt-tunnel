@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
@@ -41,6 +41,8 @@ import {
   GATEWAY_MULTI_STEP_OPENWORLD_NAME,
   GATEWAY_MULTI_STEP_WRITE_LIST_NAME,
   GATEWAY_MULTI_STEP_WRITE_NAME,
+  GATEWAY_TRANSCRIPT_GET_NAME,
+  GATEWAY_TRANSCRIPT_LIST_NAME,
   PREFIX_LIST_NAME,
   TOOL_DIRECTORY_NAME,
   createGatewayConfigPayload,
@@ -68,11 +70,15 @@ scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
 
 const MAX_TOOL_NAME = 64;
-const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 200 * 1024;
+const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 350 * 1024;
 const TEXT_RESPONSE_PREVIEW_BYTES = 512;
 const FILES_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_FILES_MAX_RESPONSE_BYTES';
 const CODESPACE_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES';
 const MULTI_STEP_RESPONSE_LIMIT_BYTES = 350 * 1024;
+const TRANSCRIPT_RETENTION_LIMIT_BYTES = 3 * 1024 * 1024;
+const TRANSCRIPT_PAGE_BYTES = 256 * 1024;
+const responseTranscripts = new Map();
+let responseTranscriptBytes = 0;
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 
@@ -107,6 +113,64 @@ function utf8Prefix(text, maxBytes) {
   let end = maxBytes;
   while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1;
   return buffer.subarray(0, end).toString('utf8');
+}
+
+function transcriptPages(text) {
+  const pages = [];
+  let remaining = text;
+  let pageId = 1;
+  while (remaining.length > 0) {
+    const pageText = utf8Prefix(remaining, TRANSCRIPT_PAGE_BYTES);
+    const bytes = Buffer.byteLength(pageText, 'utf8');
+    if (bytes < 1) break;
+    pages.push({ pageId, bytes, kilobytes: Math.round((bytes / 1024) * 10) / 10, text: pageText });
+    remaining = remaining.slice(pageText.length);
+    pageId += 1;
+  }
+  return pages;
+}
+
+function retainResponseTranscript(serialized) {
+  const originalBytes = Buffer.byteLength(serialized, 'utf8');
+  const retainedText = utf8Prefix(serialized, TRANSCRIPT_RETENTION_LIMIT_BYTES);
+  const retainedBytes = Buffer.byteLength(retainedText, 'utf8');
+  if (retainedBytes < 1) return null;
+  while (responseTranscripts.size > 0 && responseTranscriptBytes + retainedBytes > TRANSCRIPT_RETENTION_LIMIT_BYTES) {
+    const oldestId = responseTranscripts.keys().next().value;
+    const oldest = responseTranscripts.get(oldestId);
+    responseTranscriptBytes -= oldest.retainedBytes;
+    responseTranscripts.delete(oldestId);
+  }
+  const transcriptId = randomUUID();
+  const pages = transcriptPages(retainedText);
+  const transcript = {
+    transcriptId,
+    createdAt: new Date().toISOString(),
+    originalBytes,
+    retainedBytes,
+    truncated: retainedBytes < originalBytes,
+    pages
+  };
+  responseTranscripts.set(transcriptId, transcript);
+  responseTranscriptBytes += retainedBytes;
+  return transcript;
+}
+
+function transcriptListPayload() {
+  return {
+    transcripts: [...responseTranscripts.values()].map((transcript) => ({
+      transcriptId: transcript.transcriptId,
+      createdAt: transcript.createdAt,
+      originalBytes: transcript.originalBytes,
+      retainedBytes: transcript.retainedBytes,
+      retainedKilobytes: Math.round((transcript.retainedBytes / 1024) * 10) / 10,
+      truncated: transcript.truncated,
+      pages: transcript.pages.map((page) => ({ pageId: page.pageId, bytes: page.bytes, kilobytes: page.kilobytes }))
+    })),
+    transcriptCount: responseTranscripts.size,
+    retentionLimitBytes: TRANSCRIPT_RETENTION_LIMIT_BYTES,
+    retainedBytes: responseTranscriptBytes
+  };
 }
 
 function pathInside(directory, candidate) {
@@ -262,12 +326,16 @@ function textLimitedResult(id, route, result) {
   const serialized = `${JSON.stringify(message)}\n`;
   const bytes = Buffer.byteLength(serialized, 'utf8');
   if (bytes <= responseLimit) return result;
+  const transcript = retainResponseTranscript(serialized);
   const preview = utf8Prefix(serialized, TEXT_RESPONSE_PREVIEW_BYTES);
   const previewBytes = Buffer.byteLength(preview, 'utf8');
   const recovery = prefix === 'files'
     ? 'ダウンロードツール（**downloads__download_zip**）を直接使うか、クエリを狭めるようにしてください。'
     : '大きな出力はファイルへ保存して**codespace__copy_from_codespace**で取得するか、クエリを狭めるようしてください。';
-  const text = `返却文字列が${formatTextBytes(bytes)}のため、このリクエストはゲートウェイによって拒否されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatTextBytes(responseLimit)}です。${recovery} デバッグ用に元の返却文字列の先頭1.0KBを添付します。`;
+  const transcriptRecovery = transcript
+    ? `元の返却文字列はtranscriptId=${transcript.transcriptId}として最大3MBまでメモリ保持しました。gateway__transcript_listでpageIdと各ページのKB数を確認し、gateway__transcript_getで取得できます。`
+    : '元の返却文字列はtranscriptとして保持できませんでした。';
+  const text = `返却文字列が${formatTextBytes(bytes)}のため、このリクエストはゲートウェイによって拒否されました。破壊的操作はすでに行われている可能性があります。現在の制限は${formatTextBytes(responseLimit)}です。${recovery} ${transcriptRecovery} デバッグ用に元の返却文字列の先頭1.0KBを添付します。`;
   const limited = {
     content: [{ type: 'text', text }, { type: 'text', text: preview }],
     isError: true
@@ -279,7 +347,12 @@ function textLimitedResult(id, route, result) {
       result: {
         responseBytes: bytes,
         limitBytes: responseLimit,
-        previewBytes
+        previewBytes,
+        ...(transcript ? {
+          transcriptId: transcript.transcriptId,
+          transcriptRetainedBytes: transcript.retainedBytes,
+          transcriptTruncated: transcript.truncated
+        } : {})
       }
     };
   }
@@ -668,12 +741,20 @@ function multiStepMcpResult(payload, isError = false) {
   };
   const bytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
   if (bytes > MULTI_STEP_RESPONSE_LIMIT_BYTES) {
+    const transcript = retainResponseTranscript(`${JSON.stringify(result)}\n`);
     const limited = {
       ok: false,
       mode: payload.mode,
       status: 'completed',
-      error: `multi-step response exceeds the 350KB limit (${bytes} bytes)`
+      error: transcript
+        ? `multi-step response exceeds the 350KB limit (${bytes} bytes). Retained as transcriptId=${transcript.transcriptId}; use gateway__transcript_list then gateway__transcript_get.`
+        : `multi-step response exceeds the 350KB limit (${bytes} bytes)`
     };
+    if (transcript) {
+      limited.transcriptId = transcript.transcriptId;
+      limited.transcriptRetainedBytes = transcript.retainedBytes;
+      limited.transcriptTruncated = transcript.truncated;
+    }
     return {
       content: [{ type: 'text', text: JSON.stringify(limited) }],
       structuredContent: limited,
@@ -765,6 +846,55 @@ async function handle(request) {
         disabledProxyNames: config.disabledServerNames
       });
       return response(request.id, toolDirectoryMcpResult(payload));
+    }
+    if (request.params?.name === GATEWAY_TRANSCRIPT_LIST_NAME) {
+      const toolArguments = request.params?.arguments ?? {};
+      if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments) || Object.keys(toolArguments).length > 0) {
+        return response(request.id, {
+          content: [{ type: 'text', text: 'gateway__transcript_list does not accept arguments' }],
+          isError: true
+        });
+      }
+      const payload = transcriptListPayload();
+      return response(request.id, {
+        content: [{ type: 'text', text: JSON.stringify(payload) }],
+        structuredContent: payload,
+        isError: false
+      });
+    }
+    if (request.params?.name === GATEWAY_TRANSCRIPT_GET_NAME) {
+      const toolArguments = request.params?.arguments ?? {};
+      try {
+        if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
+            || Object.keys(toolArguments).some((key) => !['transcriptId', 'pageId'].includes(key))) {
+          throw new Error('gateway__transcript_get accepts only transcriptId and pageId');
+        }
+        const transcript = responseTranscripts.get(toolArguments.transcriptId);
+        if (!transcript) throw new Error(`Unknown or expired transcriptId: ${String(toolArguments.transcriptId)}`);
+        if (!Number.isInteger(toolArguments.pageId) || toolArguments.pageId < 1) throw new Error('pageId must be a positive integer');
+        const page = transcript.pages.find((candidate) => candidate.pageId === toolArguments.pageId);
+        if (!page) throw new Error(`Unknown pageId ${toolArguments.pageId} for transcriptId ${toolArguments.transcriptId}`);
+        const payload = {
+          ok: true,
+          transcriptId: transcript.transcriptId,
+          pageId: page.pageId,
+          bytes: page.bytes,
+          kilobytes: page.kilobytes,
+          text: page.text
+        };
+        return response(request.id, {
+          content: [{ type: 'text', text: JSON.stringify({ transcriptId: transcript.transcriptId, pageId: page.pageId, bytes: page.bytes, kilobytes: page.kilobytes }) }],
+          structuredContent: payload,
+          isError: false
+        });
+      } catch (error) {
+        const payload = { ok: false, error: error instanceof Error ? error.message : String(error) };
+        return response(request.id, {
+          content: [{ type: 'text', text: payload.error }],
+          structuredContent: payload,
+          isError: true
+        });
+      }
     }
     const requestedMultiStepKind = multiStepKind(request.params?.name);
     if ([GATEWAY_MULTI_STEP_LIST_NAME, GATEWAY_MULTI_STEP_WRITE_LIST_NAME, GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME].includes(request.params?.name)) {

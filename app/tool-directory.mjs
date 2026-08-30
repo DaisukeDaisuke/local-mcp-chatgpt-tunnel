@@ -8,6 +8,8 @@ export const GATEWAY_MULTI_STEP_OPENWORLD_NAME = 'gateway__multi_step_openworld'
 export const GATEWAY_MULTI_STEP_LIST_NAME = 'gateway__multi_step_read_list';
 export const GATEWAY_MULTI_STEP_WRITE_LIST_NAME = 'gateway__multi_step_write_list';
 export const GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME = 'gateway__multi_step_openworld_list';
+export const GATEWAY_TRANSCRIPT_LIST_NAME = 'gateway__transcript_list';
+export const GATEWAY_TRANSCRIPT_GET_NAME = 'gateway__transcript_get';
 
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
@@ -177,6 +179,67 @@ export const gatewayChildsMcpAsyncStatusDefinition = {
   }
 };
 
+export const gatewayTranscriptListDefinition = {
+  name: GATEWAY_TRANSCRIPT_LIST_NAME,
+  description: 'List oversized Gateway response transcripts retained in process memory, including every page id and page size.',
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      transcripts: { type: 'array' },
+      transcriptCount: { type: 'integer', minimum: 0 },
+      retentionLimitBytes: { type: 'integer', minimum: 1 },
+      retainedBytes: { type: 'integer', minimum: 0 }
+    },
+    required: ['transcripts', 'transcriptCount', 'retentionLimitBytes', 'retainedBytes'],
+    additionalProperties: false
+  }
+};
+
+export const gatewayTranscriptGetDefinition = {
+  name: GATEWAY_TRANSCRIPT_GET_NAME,
+  description: 'Return one retained oversized Gateway response transcript page by transcriptId and pageId.',
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      transcriptId: { type: 'string', minLength: 36, maxLength: 36, pattern: '^[0-9a-fA-F-]{36}$' },
+      pageId: { type: 'integer', minimum: 1 }
+    },
+    required: ['transcriptId', 'pageId'],
+    additionalProperties: false
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      ok: { type: 'boolean' },
+      transcriptId: { type: 'string' },
+      pageId: { type: 'integer' },
+      bytes: { type: 'integer', minimum: 0 },
+      kilobytes: { type: 'number', minimum: 0 },
+      text: { type: 'string' },
+      error: { type: 'string' }
+    },
+    required: ['ok'],
+    additionalProperties: false
+  }
+};
+
 const multiStepInputSchema = {
   type: 'object',
   properties: {
@@ -220,6 +283,9 @@ const multiStepOutputSchema = {
     asyncId: { type: 'string' },
     stepAsyncIds: { type: 'array', items: { type: 'string' } },
     results: { type: 'array' },
+    transcriptId: { type: 'string' },
+    transcriptRetainedBytes: { type: 'integer', minimum: 0 },
+    transcriptTruncated: { type: 'boolean' },
     error: { type: 'string' }
   },
   required: ['ok'],
@@ -306,6 +372,8 @@ export const gatewayDirectoryToolDefinitions = [
 
 export const gatewayOperationalToolDefinitions = [
   gatewayChildsMcpAsyncStatusDefinition,
+  gatewayTranscriptListDefinition,
+  gatewayTranscriptGetDefinition,
   gatewayMultiStepDefinition,
   gatewayMultiStepWriteDefinition,
   gatewayMultiStepOpenWorldDefinition,

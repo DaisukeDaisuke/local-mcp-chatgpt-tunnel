@@ -188,6 +188,8 @@ process.stdin.on('data', (chunk) => {
   const listed = await nextLine(child.stdout);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
     'gateway_childs_mcp_async_status',
+    'gateway__transcript_list',
+    'gateway__transcript_get',
     'gateway__multi_step_read',
     'gateway__multi_step_write',
     'gateway__multi_step_openworld',
@@ -676,8 +678,7 @@ gatewayIntegrationTest('gateway caps only files responses at 15KB by default, re
     return child;
   }
 
-  const defaultEnv = { ...process.env };
-  delete defaultEnv.LOCAL_MCP_FILES_MAX_RESPONSE_BYTES;
+  const defaultEnv = { ...process.env, LOCAL_MCP_FILES_MAX_RESPONSE_BYTES: String(64 * 1024) };
   const defaultGateway = await startGateway(defaultEnv, 'files-limit-default');
   defaultGateway.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
     name: 'files__read_text', arguments: { isolatedId: 'files-limit-default', path: 'large.txt' }
@@ -688,8 +689,28 @@ gatewayIntegrationTest('gateway caps only files responses at 15KB by default, re
   assert.ok(rejected.result.content[1].text.startsWith('{"jsonrpc":"2.0","id":3,"result":'));
   assert.ok(Buffer.byteLength(rejected.result.content[1].text, 'utf8') <= 512);
   assert.equal(rejected.result.structuredContent.result.previewBytes, Buffer.byteLength(rejected.result.content[1].text, 'utf8'));
-  assert.equal(rejected.result.structuredContent.result.limitBytes, 100 * 1024);
+  assert.equal(rejected.result.structuredContent.result.limitBytes, 64 * 1024);
   assert.ok(rejected.result.structuredContent.result.responseBytes > rejected.result.structuredContent.result.limitBytes);
+  assert.match(rejected.result.structuredContent.result.transcriptId, /^[0-9a-f-]{36}$/i);
+
+  defaultGateway.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 31, method: 'tools/call', params: {
+    name: 'gateway__transcript_list', arguments: {}
+  } })}\n`);
+  const transcriptList = await nextLine(defaultGateway.stdout);
+  const retained = transcriptList.result.structuredContent.transcripts.find((entry) =>
+    entry.transcriptId === rejected.result.structuredContent.result.transcriptId);
+  assert.ok(retained);
+  assert.ok(retained.pages.length >= 1);
+  assert.ok(retained.pages.every((page) => Number.isInteger(page.pageId) && page.pageId >= 1 && page.kilobytes > 0));
+
+  defaultGateway.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 32, method: 'tools/call', params: {
+    name: 'gateway__transcript_get', arguments: { transcriptId: retained.transcriptId, pageId: retained.pages[0].pageId }
+  } })}\n`);
+  const transcriptPage = await nextLine(defaultGateway.stdout);
+  assert.equal(transcriptPage.result.structuredContent.ok, true);
+  assert.equal(transcriptPage.result.structuredContent.pageId, retained.pages[0].pageId);
+  assert.equal(transcriptPage.result.structuredContent.kilobytes, retained.pages[0].kilobytes);
+  assert.ok(transcriptPage.result.structuredContent.text.startsWith('{"jsonrpc":"2.0","id":3,"result":'));
 
   const raisedGateway = await startGateway({
     ...process.env,
@@ -856,6 +877,8 @@ gatewayIntegrationTest('gateway initialization survives an unavailable child MCP
   const listed = await nextLine(child.stdout);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
     'gateway_childs_mcp_async_status',
+    'gateway__transcript_list',
+    'gateway__transcript_get',
     'gateway__multi_step_read',
     'gateway__multi_step_write',
     'gateway__multi_step_openworld',
@@ -893,6 +916,8 @@ gatewayIntegrationTest('tools/list waits for concurrent initialization when a ch
   assert.equal(listed.id, 2);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
     'gateway_childs_mcp_async_status',
+    'gateway__transcript_list',
+    'gateway__transcript_get',
     'gateway__multi_step_read',
     'gateway__multi_step_write',
     'gateway__multi_step_openworld',
@@ -965,6 +990,8 @@ process.stdin.on('data', (chunk) => {
     'gateway__get_prefix_list',
     'gateway__get_config',
     'gateway_childs_mcp_async_status',
+    'gateway__transcript_list',
+    'gateway__transcript_get',
     'gateway__multi_step_read',
     'gateway__multi_step_write',
     'gateway__multi_step_openworld',
@@ -1007,7 +1034,7 @@ process.stdin.on('data', (chunk) => {
     name: 'gateway__list_available_tools', arguments: { prefix: 'no-such-prefix' }
   } })}\n`);
   const fallback = await nextLine(child.stdout);
-  assert.equal(fallback.result.structuredContent.availableToolCount, 12);
+  assert.equal(fallback.result.structuredContent.availableToolCount, 14);
   assert.deepEqual(fallback.result.structuredContent.tools.map((tool) => tool.name), [
     'demo__get_gateway_access_scope',
     'demo__plain',
@@ -1015,6 +1042,8 @@ process.stdin.on('data', (chunk) => {
     'gateway__get_prefix_list',
     'gateway__list_available_tools',
     'gateway_childs_mcp_async_status',
+    'gateway__transcript_list',
+    'gateway__transcript_get',
     'gateway__multi_step_openworld',
     'gateway__multi_step_openworld_list',
     'gateway__multi_step_read',
