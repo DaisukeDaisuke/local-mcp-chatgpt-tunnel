@@ -28,12 +28,19 @@ import {
 } from './isolated-workspaces.mjs';
 import {
   applyConfiguredAnnotations,
+  completeAnnotations,
   loadToolAnnotationConfig,
   syncDiscoveredToolAnnotations
 } from './tool-annotations.mjs';
 import {
   GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME,
   GATEWAY_CONFIG_NAME,
+  GATEWAY_MULTI_STEP_NAME,
+  GATEWAY_MULTI_STEP_LIST_NAME,
+  GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME,
+  GATEWAY_MULTI_STEP_OPENWORLD_NAME,
+  GATEWAY_MULTI_STEP_WRITE_LIST_NAME,
+  GATEWAY_MULTI_STEP_WRITE_NAME,
   PREFIX_LIST_NAME,
   TOOL_DIRECTORY_NAME,
   createGatewayConfigPayload,
@@ -65,6 +72,7 @@ const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 200 * 1024;
 const TEXT_RESPONSE_PREVIEW_BYTES = 512;
 const FILES_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_FILES_MAX_RESPONSE_BYTES';
 const CODESPACE_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES';
+const MULTI_STEP_RESPONSE_LIMIT_BYTES = 350 * 1024;
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const errorResponse = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
 
@@ -574,6 +582,107 @@ async function applyLifecycle(route, result) {
   if (changed) notifyToolsChanged();
 }
 
+const MULTI_STEP_READ = 'read';
+const MULTI_STEP_WRITE = 'write';
+const MULTI_STEP_OPENWORLD = 'openworld';
+
+function multiStepKind(toolName) {
+  if (toolName === GATEWAY_MULTI_STEP_NAME || toolName === GATEWAY_MULTI_STEP_LIST_NAME) return MULTI_STEP_READ;
+  if (toolName === GATEWAY_MULTI_STEP_WRITE_NAME || toolName === GATEWAY_MULTI_STEP_WRITE_LIST_NAME) return MULTI_STEP_WRITE;
+  if (toolName === GATEWAY_MULTI_STEP_OPENWORLD_NAME || toolName === GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME) return MULTI_STEP_OPENWORLD;
+  return null;
+}
+
+function multiStepAllowsRoute(kind, route) {
+  const publicName = route.tool?.name ?? '';
+  if (publicName.toLowerCase().includes('__multi_')) return false;
+  const annotations = completeAnnotations(route.tool?.annotations, route.tool?.name ?? 'multi-step route');
+  if (kind === MULTI_STEP_OPENWORLD) return true;
+  if (annotations.openWorldHint) return false;
+  if (kind === MULTI_STEP_WRITE) return true;
+  return annotations.readOnlyHint === true && annotations.destructiveHint === false;
+}
+
+function multiStepAvailableTools(kind) {
+  return [...toolRoutes.entries()]
+    .filter(([, route]) => multiStepAllowsRoute(kind, route))
+    .map(([name, route]) => ({ name, description: typeof route.tool?.description === 'string' ? route.tool.description : '' }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function resolveMultiStepRoute(requestedName, kind) {
+  if (typeof requestedName !== 'string' || requestedName.length < 1) throw new Error('step tool must be a non-empty string');
+  const exact = toolRoutes.get(requestedName);
+  if (exact) {
+    if (!multiStepAllowsRoute(kind, exact)) throw new Error(`${requestedName} is not allowed by this multi-step variant`);
+    return { publicName: requestedName, route: exact };
+  }
+  const suffix = requestedName.toLowerCase();
+  const matches = [...toolRoutes.entries()].filter(([publicName, route]) =>
+    publicName.toLowerCase().endsWith(suffix) && multiStepAllowsRoute(kind, route));
+  if (matches.length === 1) return { publicName: matches[0][0], route: matches[0][1] };
+  if (matches.length === 0) throw new Error(`Unknown step tool suffix: ${requestedName}`);
+  throw new Error(`Ambiguous step tool suffix ${requestedName}: ${matches.slice(0, 12).map(([name]) => name).join(', ')}`);
+}
+
+function multiStepArguments(route, argumentsValue, rootIsolatedId) {
+  if (argumentsValue !== undefined && (!argumentsValue || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue))) {
+    throw new Error('step arguments must be an object');
+  }
+  const args = { ...(argumentsValue ?? {}) };
+  const acceptsIsolatedId = route.tool?.inputSchema?.properties?.isolatedId !== undefined;
+  if (!acceptsIsolatedId || rootIsolatedId === undefined) return args;
+  if (args.isolatedId !== undefined && args.isolatedId !== rootIsolatedId) {
+    throw new Error(`${route.tool.name} step isolatedId conflicts with the root isolatedId`);
+  }
+  args.isolatedId = rootIsolatedId;
+  return args;
+}
+
+function stepPromotionDetails(message) {
+  if (message?.result?.isError !== true || !Array.isArray(message.result.content)) return null;
+  for (const item of message.result.content) {
+    if (item?.type !== 'text' || typeof item.text !== 'string' || !item.text.startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(item.text);
+      if (parsed?.statusTool === GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME && typeof parsed.asyncId === 'string') return parsed;
+    } catch {}
+  }
+  return null;
+}
+
+function multiStepMcpResult(payload, isError = false) {
+  const summary = JSON.stringify({
+    ok: payload.ok,
+    mode: payload.mode,
+    status: payload.status,
+    ...(payload.asyncId ? { asyncId: payload.asyncId } : {}),
+    stepAsyncIds: payload.stepAsyncIds ?? [],
+    resultCount: Array.isArray(payload.results) ? payload.results.length : 0,
+    ...(payload.error ? { error: payload.error } : {})
+  });
+  const result = {
+    content: [{ type: 'text', text: summary }],
+    structuredContent: payload,
+    isError
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
+  if (bytes > MULTI_STEP_RESPONSE_LIMIT_BYTES) {
+    const limited = {
+      ok: false,
+      mode: payload.mode,
+      status: 'completed',
+      error: `multi-step response exceeds the 350KB limit (${bytes} bytes)`
+    };
+    return {
+      content: [{ type: 'text', text: JSON.stringify(limited) }],
+      structuredContent: limited,
+      isError: true
+    };
+  }
+  return result;
+}
+
 async function handle(request) {
   if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') return errorResponse(request?.id, -32600, 'Invalid Request');
   if (request.method === 'initialize') {
@@ -656,6 +765,133 @@ async function handle(request) {
         disabledProxyNames: config.disabledServerNames
       });
       return response(request.id, toolDirectoryMcpResult(payload));
+    }
+    const requestedMultiStepKind = multiStepKind(request.params?.name);
+    if ([GATEWAY_MULTI_STEP_LIST_NAME, GATEWAY_MULTI_STEP_WRITE_LIST_NAME, GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME].includes(request.params?.name)) {
+      const toolArguments = request.params?.arguments ?? {};
+      if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments) || Object.keys(toolArguments).length > 0) {
+        return response(request.id, {
+          content: [{ type: 'text', text: `${request.params.name} does not accept arguments` }],
+          isError: true
+        });
+      }
+      const tools = multiStepAvailableTools(requestedMultiStepKind);
+      const payload = { tools, availableToolCount: tools.length };
+      return response(request.id, {
+        content: [{ type: 'text', text: JSON.stringify(payload) }],
+        structuredContent: payload,
+        isError: false
+      });
+    }
+    if ([GATEWAY_MULTI_STEP_NAME, GATEWAY_MULTI_STEP_WRITE_NAME, GATEWAY_MULTI_STEP_OPENWORLD_NAME].includes(request.params?.name)) {
+      try {
+        const multiStepToolName = request.params.name;
+        const toolArguments = request.params?.arguments ?? {};
+        if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
+            || Object.keys(toolArguments).some((key) => !['isolatedId', 'mode', 'steps'].includes(key))) {
+          throw new Error(`${multiStepToolName} accepts only isolatedId, mode, and steps`);
+        }
+        const mode = toolArguments.mode ?? 'parallel';
+        if (!['parallel', 'serial'].includes(mode)) throw new Error('mode must be parallel or serial');
+        const rootIsolatedId = toolArguments.isolatedId === undefined ? undefined : validateIsolatedId(toolArguments.isolatedId);
+        if (rootIsolatedId !== undefined) isolationState(rootIsolatedId);
+        if (!Array.isArray(toolArguments.steps) || toolArguments.steps.length < 1 || toolArguments.steps.length > 128) {
+          throw new Error('steps must contain from 1 through 128 operations');
+        }
+        const steps = toolArguments.steps.map((step, index) => {
+          if (!step || typeof step !== 'object' || Array.isArray(step)
+              || Object.keys(step).some((key) => !['tool', 'arguments'].includes(key))) {
+            throw new Error(`step ${index} accepts only tool and arguments`);
+          }
+          const selected = resolveMultiStepRoute(step.tool, requestedMultiStepKind);
+          return {
+            index,
+            requestedTool: step.tool,
+            ...selected,
+            arguments: multiStepArguments(selected.route, step.arguments, rootIsolatedId)
+          };
+        });
+
+        const results = new Array(steps.length);
+        const stepAsyncIds = [];
+        const runStep = async (step) => {
+          const stepMessage = await handle({
+            jsonrpc: '2.0',
+            id: `multi-step-${request.id}-${step.index}`,
+            method: 'tools/call',
+            params: { name: step.publicName, arguments: step.arguments }
+          });
+          if (stepMessage?.error) {
+            results[step.index] = { index: step.index, tool: step.publicName, error: stepMessage.error.message ?? 'MCP error' };
+            return;
+          }
+          const promoted = stepPromotionDetails(stepMessage);
+          if (promoted) {
+            stepAsyncIds.push(promoted.asyncId);
+            try {
+              const completed = await childAsyncRegistry.completion(promoted.asyncId, promoted.isolatedId ?? null);
+              results[step.index] = { index: step.index, tool: step.publicName, asyncId: promoted.asyncId, result: completed };
+            } catch (error) {
+              results[step.index] = { index: step.index, tool: step.publicName, asyncId: promoted.asyncId, error: error instanceof Error ? error.message : String(error) };
+            }
+            return;
+          }
+          results[step.index] = { index: step.index, tool: step.publicName, result: stepMessage.result };
+        };
+
+        let groups;
+        if (mode === 'serial') {
+          groups = [steps];
+        } else {
+          const byChild = new Map();
+          for (const step of steps) {
+            const childName = step.route.child.config.name;
+            if (!byChild.has(childName)) byChild.set(childName, []);
+            byChild.get(childName).push(step);
+          }
+          groups = [...byChild.values()];
+        }
+        const execution = Promise.all(groups.map(async (group) => {
+          for (const step of group) await runStep(step);
+        })).then(() => {
+          const ok = results.every((entry) => entry && entry.error === undefined && entry.result?.isError !== true);
+          return { ok, mode, status: 'completed', stepAsyncIds: [...stepAsyncIds], results };
+        }, (error) => ({
+          ok: false,
+          mode,
+          status: 'completed',
+          stepAsyncIds: [...stepAsyncIds],
+          results: results.filter(Boolean),
+          error: error instanceof Error ? error.message : String(error)
+        }));
+
+        let settled = false;
+        let finalPayload;
+        const tracked = execution.then((value) => { settled = true; finalPayload = value; return value; });
+        await Promise.race([tracked, new Promise((resolvePromise) => setTimeout(resolvePromise, 11_020))]);
+        if (settled) return response(request.id, multiStepMcpResult(finalPayload, !finalPayload.ok));
+
+        const topStatus = childAsyncRegistry.promote({
+          tool: multiStepToolName,
+          prefix: 'gateway',
+          isolatedId: rootIsolatedId ?? null,
+          promise: tracked.then((payload) => multiStepMcpResult(payload, !payload.ok))
+        });
+        return response(request.id, multiStepMcpResult({
+          ok: true,
+          mode,
+          status: 'running',
+          asyncId: topStatus.asyncId,
+          stepAsyncIds: [...stepAsyncIds],
+          results: results.filter(Boolean)
+        }));
+      } catch (error) {
+        return response(request.id, multiStepMcpResult({
+          ok: false,
+          status: 'completed',
+          error: error instanceof Error ? error.message : String(error)
+        }, true));
+      }
     }
     if (request.params?.name === ISOLATED_CREATE_TOOL && hasBundledChildren()) {
       try {
@@ -820,7 +1056,7 @@ async function handle(request) {
         });
         return textLimitedResponse(request.id, route, result);
       }
-      const childRequest = queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
+      const resolved = await queues.run(routeQueueGroup(route, isolatedId, childArguments), async () => {
         markIsolationOperation(state, route.child.config.prefix);
         const context = state ? await isolationContextForChild(state, route.child) : null;
         const base = context?.base ?? route.child.pathPolicy.cwd;
@@ -835,24 +1071,23 @@ async function handle(request) {
           await isolationPolicy.allowed();
           await isolationPolicy.assertToolArguments(route.originalName, pathArguments, context.base);
         }
-        const childResult = await route.child.request('tools/call', {
+        const childRequest = route.child.request('tools/call', {
           name: route.originalName,
           arguments: context
             ? privateIsolationArguments(route.child, context, childArguments)
             : childArguments
         });
-        updateExternalWorkingDirectory(route, childResult);
-        return childResult;
-      });
-      const completedRequest = childRequest.then(async (childResult) => {
-        await applyLifecycle(route, childResult);
-        return textLimitedResult(request.id, route, childResult);
-      });
-      const resolved = await childAsyncRegistry.resolveOrPromote({
-        tool: request.params.name,
-        prefix: route.child.config.prefix,
-        isolatedId,
-        promise: completedRequest
+        const completedRequest = childRequest.then(async (childResult) => {
+          updateExternalWorkingDirectory(route, childResult);
+          await applyLifecycle(route, childResult);
+          return textLimitedResult(request.id, route, childResult);
+        });
+        return childAsyncRegistry.resolveOrPromote({
+          tool: request.params.name,
+          prefix: route.child.config.prefix,
+          isolatedId,
+          promise: completedRequest
+        });
       });
       if (resolved.promoted) return response(request.id, gatewayChildAsyncPromotionMcpResult(resolved.status));
       return response(request.id, resolved.result);

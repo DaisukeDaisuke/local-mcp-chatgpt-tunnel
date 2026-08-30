@@ -188,6 +188,12 @@ process.stdin.on('data', (chunk) => {
   const listed = await nextLine(child.stdout);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
     'gateway_childs_mcp_async_status',
+    'gateway__multi_step_read',
+    'gateway__multi_step_write',
+    'gateway__multi_step_openworld',
+    'gateway__multi_step_read_list',
+    'gateway__multi_step_write_list',
+    'gateway__multi_step_openworld_list',
     'demo__plain',
     'demo__get_gateway_access_scope'
   ]);
@@ -848,7 +854,15 @@ gatewayIntegrationTest('gateway initialization survives an unavailable child MCP
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['gateway_childs_mcp_async_status']);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
+    'gateway_childs_mcp_async_status',
+    'gateway__multi_step_read',
+    'gateway__multi_step_write',
+    'gateway__multi_step_openworld',
+    'gateway__multi_step_read_list',
+    'gateway__multi_step_write_list',
+    'gateway__multi_step_openworld_list'
+  ]);
 });
 
 gatewayIntegrationTest('tools/list waits for concurrent initialization when a child MCP is unavailable', async (t) => {
@@ -877,7 +891,15 @@ gatewayIntegrationTest('tools/list waits for concurrent initialization when a ch
   assert.equal(initialized.id, 1);
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
   assert.equal(listed.id, 2);
-  assert.deepEqual(listed.result.tools.map((tool) => tool.name), ['gateway_childs_mcp_async_status']);
+  assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
+    'gateway_childs_mcp_async_status',
+    'gateway__multi_step_read',
+    'gateway__multi_step_write',
+    'gateway__multi_step_openworld',
+    'gateway__multi_step_read_list',
+    'gateway__multi_step_write_list',
+    'gateway__multi_step_openworld_list'
+  ]);
 });
 
 gatewayIntegrationTest('optional gateway tool directory returns full names, prefix matches, counts, and disabled proxy names', async (t) => {
@@ -943,6 +965,12 @@ process.stdin.on('data', (chunk) => {
     'gateway__get_prefix_list',
     'gateway__get_config',
     'gateway_childs_mcp_async_status',
+    'gateway__multi_step_read',
+    'gateway__multi_step_write',
+    'gateway__multi_step_openworld',
+    'gateway__multi_step_read_list',
+    'gateway__multi_step_write_list',
+    'gateway__multi_step_openworld_list',
     'demo__plain',
     'demo__get_gateway_access_scope'
   ]);
@@ -979,14 +1007,20 @@ process.stdin.on('data', (chunk) => {
     name: 'gateway__list_available_tools', arguments: { prefix: 'no-such-prefix' }
   } })}\n`);
   const fallback = await nextLine(child.stdout);
-  assert.equal(fallback.result.structuredContent.availableToolCount, 6);
+  assert.equal(fallback.result.structuredContent.availableToolCount, 12);
   assert.deepEqual(fallback.result.structuredContent.tools.map((tool) => tool.name), [
     'demo__get_gateway_access_scope',
     'demo__plain',
     'gateway__get_config',
     'gateway__get_prefix_list',
     'gateway__list_available_tools',
-    'gateway_childs_mcp_async_status'
+    'gateway_childs_mcp_async_status',
+    'gateway__multi_step_openworld',
+    'gateway__multi_step_openworld_list',
+    'gateway__multi_step_read',
+    'gateway__multi_step_read_list',
+    'gateway__multi_step_write',
+    'gateway__multi_step_write_list'
   ]);
   assert.equal(fallback.result.structuredContent.tools[0].inputSchema, undefined);
   assert.equal(fallback.result.structuredContent.tools[0].outputSchema, undefined);
@@ -1010,4 +1044,270 @@ process.stdin.on('data', (chunk) => {
   }]);
   assert.equal(JSON.stringify(gatewayConfig.result.structuredContent).includes('env'), false);
   assert.equal(JSON.stringify(gatewayConfig.result.structuredContent).includes(serverPath), false);
+});
+
+gatewayIntegrationTest('gateway multi-step resolves unique suffixes, injects root isolation, serializes one stdio, and parallelizes different stdio children', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-multi-step-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-multi-step-config-'));
+  const serverPath = join(workspace, 'delay-server.mjs');
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(join(workspace, 'inside.txt'), 'inside', 'utf8');
+  await writeFile(serverPath, `
+const label = process.argv[2];
+const toolName = label + '_delay';
+const tools = [{
+  name: toolName,
+  description: 'Delay and echo',
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  inputSchema: {
+    type: 'object',
+    properties: { delayMs: { type: 'integer' }, value: { type: 'string' } },
+    additionalProperties: false
+  }
+}];
+let initialized = false;
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).replace(/\\r$/, '');
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    if (request.method === 'initialize') {
+      initialized = true;
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: label, version: '1.0.0' } } }) + '\\n');
+      continue;
+    }
+    if (request.method === 'tools/list' && initialized) {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools } }) + '\\n');
+      continue;
+    }
+    if (request.method === 'tools/call' && initialized) {
+      const args = request.params?.arguments ?? {};
+      setTimeout(() => {
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+          content: [{ type: 'text', text: JSON.stringify({ label, value: args.value ?? '' }) }],
+          structuredContent: { label, value: args.value ?? '' },
+          isError: false
+        } }) + '\\n');
+      }, args.delayMs ?? 0);
+    }
+  }
+});
+`, 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', 'alpha']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "alpha"',
+    '[mcp_servers.beta]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}', 'beta']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "beta"',
+    '[mcp_servers.files]',
+    `command = '${process.execPath}'`,
+    `args = ['${resolve('mcp/safe-files/server.mjs')}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "files"'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+    name: 'isolated__create',
+    arguments: { isolatedId: 'multi-step-test', purpose: 'test root isolation injection', workspaces: [workspace] }
+  } })}\n`);
+  const isolation = await nextLine(child.stdout);
+  assert.equal(isolation.result.structuredContent.ok, true);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'gateway__multi_step_read',
+    arguments: {
+      isolatedId: 'multi-step-test',
+      steps: [{ tool: 'file_info', arguments: { paths: ['inside.txt'] } }]
+    }
+  } })}\n`);
+  const injected = await nextLine(child.stdout);
+  assert.equal(injected.result.structuredContent.ok, true);
+  assert.equal(injected.result.structuredContent.results[0].tool, 'files__file_info');
+
+  const parallelStart = Date.now();
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'gateway__multi_step_read',
+    arguments: { steps: [
+      { tool: 'alpha_delay', arguments: { delayMs: 250, value: 'a' } },
+      { tool: 'beta_delay', arguments: { delayMs: 250, value: 'b' } }
+    ] }
+  } })}\n`);
+  const parallel = await nextLine(child.stdout);
+  const parallelElapsed = Date.now() - parallelStart;
+  assert.equal(parallel.result.structuredContent.ok, true);
+  assert.ok(parallelElapsed < 450, `different stdio children should overlap; elapsed=${parallelElapsed}`);
+
+  const serialStart = Date.now();
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: {
+    name: 'gateway__multi_step_read',
+    arguments: { steps: [
+      { tool: 'alpha_delay', arguments: { delayMs: 180, value: 'first' } },
+      { tool: 'alpha_delay', arguments: { delayMs: 180, value: 'second' } }
+    ] }
+  } })}\n`);
+  const serial = await nextLine(child.stdout);
+  const serialElapsed = Date.now() - serialStart;
+  assert.equal(serial.result.structuredContent.ok, true);
+  assert.ok(serialElapsed >= 320, `same stdio child must stay serial; elapsed=${serialElapsed}`);
+  assert.deepEqual(serial.result.structuredContent.results.map((entry) => entry.tool), ['alpha__alpha_delay', 'alpha__alpha_delay']);
+});
+
+gatewayIntegrationTest('gateway multi-step variants filter by final annotations and reject recursive multi tools', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-multi-step-filter-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-multi-step-filter-config-'));
+  const serverPath = join(workspace, 'server.mjs');
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(serverPath, `
+const tools = [
+  { name: 'inspect', description: 'read', annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: 'object' } },
+  { name: 'write_local', description: 'write', annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }, inputSchema: { type: 'object' } },
+  { name: 'fetch_remote', description: 'open', annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }, inputSchema: { type: 'object' } },
+  { name: 'child__multi_loop', description: 'recursive-looking', annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }, inputSchema: { type: 'object' } }
+];
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).replace(/\\r$/, '');
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    if (request.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'filter', version: '1' } } }) + '\\n');
+    else if (request.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools } }) + '\\n');
+    else if (request.method === 'tools/call') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: request.params.name }], isError: false } }) + '\\n');
+  }
+});
+`, 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.filter]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "filter"'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], { cwd: resolve('.'), env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+
+  const listNames = async (id, name) => {
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: {} } })}\n`);
+    return (await nextLine(child.stdout)).result.structuredContent.tools.map((tool) => tool.name);
+  };
+  assert.deepEqual(await listNames(2, 'gateway__multi_step_read_list'), ['filter__inspect']);
+  assert.deepEqual(await listNames(3, 'gateway__multi_step_write_list'), ['filter__inspect', 'filter__write_local']);
+  assert.deepEqual(await listNames(4, 'gateway__multi_step_openworld_list'), ['filter__fetch_remote', 'filter__inspect', 'filter__write_local']);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'gateway__multi_step_read', arguments: { steps: [{ tool: 'write_local' }] } } })}\n`);
+  assert.match((await nextLine(child.stdout)).result.structuredContent.error, /not allowed/);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'gateway__multi_step_write', arguments: { steps: [{ tool: 'write_local' }] } } })}\n`);
+  assert.equal((await nextLine(child.stdout)).result.structuredContent.ok, true);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'gateway__multi_step_write', arguments: { steps: [{ tool: 'fetch_remote' }] } } })}\n`);
+  assert.match((await nextLine(child.stdout)).result.structuredContent.error, /not allowed/);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'gateway__multi_step_openworld', arguments: { steps: [{ tool: 'fetch_remote' }] } } })}\n`);
+  assert.equal((await nextLine(child.stdout)).result.structuredContent.ok, true);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'gateway__multi_step_openworld', arguments: { steps: [{ tool: 'child__multi_loop' }] } } })}\n`);
+  assert.match((await nextLine(child.stdout)).result.structuredContent.error, /Unknown step tool suffix|not allowed/);
+});
+
+gatewayIntegrationTest('gateway releases a serial_group after top-level async promotion so the same MCP remains callable', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'gateway-async-queue-workspace-'));
+  const configDirectory = await mkdtemp(join(tmpdir(), 'gateway-async-queue-config-'));
+  const serverPath = join(workspace, 'delay-server.mjs');
+  const configPath = join(configDirectory, 'gateway.toml');
+  await writeFile(serverPath, `
+const tools = [{
+  name: 'delay',
+  description: 'Delay response',
+  inputSchema: { type: 'object', properties: { delayMs: { type: 'integer' } }, additionalProperties: false }
+}];
+let initialized = false;
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).replace(/\\r$/, '');
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    if (request.method === 'initialize') {
+      initialized = true;
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'delay', version: '1.0.0' } } }) + '\\n');
+    } else if (request.method === 'tools/list' && initialized) {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools } }) + '\\n');
+    } else if (request.method === 'tools/call' && initialized) {
+      setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'done' }], isError: false } }) + '\\n'), request.params?.arguments?.delayMs ?? 0);
+    }
+  }
+});
+`, 'utf8');
+  await writeFile(configPath, [
+    'private_use_only = true',
+    '[mcp_servers.delay]',
+    `command = '${process.execPath}'`,
+    `args = ['${serverPath}']`,
+    `cwd = '${workspace}'`,
+    `allowed_directories = ['${workspace}']`,
+    'enabled = true',
+    'prefix = "delay"',
+    'serial_group = "delay"'
+  ].join('\n'), 'utf8');
+  const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
+    cwd: resolve('.'),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  t.after(() => child.kill());
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } })}\n`);
+  await nextLine(child.stdout);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+    name: 'delay__delay', arguments: { delayMs: 15_000 }
+  } })}\n`);
+  const promoted = await nextLine(child.stdout, 13_000);
+  assert.equal(promoted.result.isError, true);
+  assert.match(promoted.result.content[1].text, /"status":"running"/);
+
+  const quickStart = Date.now();
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
+    name: 'delay__delay', arguments: { delayMs: 0 }
+  } })}\n`);
+  const quick = await nextLine(child.stdout, 1_500);
+  assert.equal(quick.result.isError, false);
+  assert.ok(Date.now() - quickStart < 1_500);
 });

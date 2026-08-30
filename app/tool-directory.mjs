@@ -2,6 +2,12 @@ export const TOOL_DIRECTORY_NAME = 'gateway__list_available_tools';
 export const PREFIX_LIST_NAME = 'gateway__get_prefix_list';
 export const GATEWAY_CONFIG_NAME = 'gateway__get_config';
 export const GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME = 'gateway_childs_mcp_async_status';
+export const GATEWAY_MULTI_STEP_NAME = 'gateway__multi_step_read';
+export const GATEWAY_MULTI_STEP_WRITE_NAME = 'gateway__multi_step_write';
+export const GATEWAY_MULTI_STEP_OPENWORLD_NAME = 'gateway__multi_step_openworld';
+export const GATEWAY_MULTI_STEP_LIST_NAME = 'gateway__multi_step_read_list';
+export const GATEWAY_MULTI_STEP_WRITE_LIST_NAME = 'gateway__multi_step_write_list';
+export const GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME = 'gateway__multi_step_openworld_list';
 
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
@@ -171,13 +177,142 @@ export const gatewayChildsMcpAsyncStatusDefinition = {
   }
 };
 
+const multiStepInputSchema = {
+  type: 'object',
+  properties: {
+    isolatedId: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
+      description: 'Optional root isolation id injected only into selected tools that define isolatedId.'
+    },
+    mode: {
+      type: 'string',
+      enum: ['parallel', 'serial'],
+      default: 'parallel'
+    },
+    steps: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 128,
+      items: {
+        type: 'object',
+        properties: {
+          tool: { type: 'string', minLength: 1, maxLength: 128 },
+          arguments: { type: 'object', default: {} }
+        },
+        required: ['tool'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['steps'],
+  additionalProperties: false
+};
+
+const multiStepOutputSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    mode: { type: 'string' },
+    status: { type: 'string' },
+    asyncId: { type: 'string' },
+    stepAsyncIds: { type: 'array', items: { type: 'string' } },
+    results: { type: 'array' },
+    error: { type: 'string' }
+  },
+  required: ['ok'],
+  additionalProperties: false
+};
+
+function multiStepDefinition(name, description, annotations) {
+  return {
+    name,
+    description,
+    annotations,
+    inputSchema: multiStepInputSchema,
+    outputSchema: multiStepOutputSchema
+  };
+}
+
+export const gatewayMultiStepDefinition = multiStepDefinition(
+  GATEWAY_MULTI_STEP_NAME,
+  'Execute multiple local read-only, non-open-world child MCP tools in one call. Tool names may use a unique case-insensitive suffix abbreviation. Parallel mode is the default and runs different child stdio MCPs concurrently while keeping steps for the same child stdio serial.',
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+);
+
+export const gatewayMultiStepWriteDefinition = multiStepDefinition(
+  GATEWAY_MULTI_STEP_WRITE_NAME,
+  'Execute multiple local child MCP tools in one call, including writes and destructive local-state operations, but excluding tools whose final annotation has openWorldHint=true. Read-only local tools are also allowed.',
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+);
+
+export const gatewayMultiStepOpenWorldDefinition = multiStepDefinition(
+  GATEWAY_MULTI_STEP_OPENWORLD_NAME,
+  'Execute multiple published child MCP tools in one call, including open-world operations. This is the unrestricted multi-step variant.',
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+);
+
+const multiStepListOutputSchema = {
+  type: 'object',
+  properties: {
+    tools: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' }
+        },
+        required: ['name', 'description'],
+        additionalProperties: false
+      }
+    },
+    availableToolCount: { type: 'integer', minimum: 0 }
+  },
+  required: ['tools', 'availableToolCount'],
+  additionalProperties: false
+};
+
+function multiStepListDefinition(name, description) {
+  return {
+    name,
+    description,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: multiStepListOutputSchema
+  };
+}
+
+export const gatewayMultiStepListDefinition = multiStepListDefinition(
+  GATEWAY_MULTI_STEP_LIST_NAME,
+  'List tools currently accepted by gateway__multi_step_read.'
+);
+export const gatewayMultiStepWriteListDefinition = multiStepListDefinition(
+  GATEWAY_MULTI_STEP_WRITE_LIST_NAME,
+  'List tools currently accepted by gateway__multi_step_write.'
+);
+export const gatewayMultiStepOpenWorldListDefinition = multiStepListDefinition(
+  GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME,
+  'List tools currently accepted by gateway__multi_step_openworld.'
+);
+
 export const gatewayDirectoryToolDefinitions = [
   toolDirectoryDefinition,
   prefixListDefinition,
   gatewayConfigDefinition
 ];
 
-export const gatewayOperationalToolDefinitions = [gatewayChildsMcpAsyncStatusDefinition];
+export const gatewayOperationalToolDefinitions = [
+  gatewayChildsMcpAsyncStatusDefinition,
+  gatewayMultiStepDefinition,
+  gatewayMultiStepWriteDefinition,
+  gatewayMultiStepOpenWorldDefinition,
+  gatewayMultiStepListDefinition,
+  gatewayMultiStepWriteListDefinition,
+  gatewayMultiStepOpenWorldListDefinition
+];
 
 export const gatewayBuiltinToolDefinitions = [
   ...gatewayDirectoryToolDefinitions,

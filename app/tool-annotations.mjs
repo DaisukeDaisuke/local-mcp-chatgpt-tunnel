@@ -183,7 +183,7 @@ export async function syncDiscoveredToolAnnotations(config, prefix, toolNames) {
   }
 }
 
-function completeAnnotations(value, context) {
+export function completeAnnotations(value, context = 'tool') {
   if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) throw new Error(`${context} annotations must be an object`);
   const result = { ...MCP_DEFAULT_ANNOTATIONS };
   for (const key of ANNOTATION_KEYS) {

@@ -64,3 +64,25 @@ test('Gateway child async emergency response uses the requested AI-facing error 
   assert.equal(result.content[0].text, GATEWAY_CHILD_ASYNC_WARNING);
   assert.match(result.content[1].text, /11111111-1111-4111-8111-111111111111/);
 });
+
+test('Gateway child async registry can retain an already-promoted aggregate and expose its completion promise', async () => {
+  let finish;
+  const pending = new Promise((resolvePromise) => { finish = resolvePromise; });
+  const registry = createGatewayChildAsyncRegistry({
+    promotionMs: 20,
+    createId: () => '22222222-2222-4222-8222-222222222222'
+  });
+  const status = registry.promote({
+    tool: 'gateway__multi_step_read',
+    prefix: 'gateway',
+    isolatedId: 'alpha',
+    promise: pending
+  });
+  assert.equal(status.status, 'running');
+  assert.equal(status.asyncId, '22222222-2222-4222-8222-222222222222');
+  const completion = registry.completion(status.asyncId, 'alpha');
+  finish({ content: [{ type: 'text', text: 'aggregate-done' }], isError: false });
+  const result = await completion;
+  assert.equal(result.content[0].text, 'aggregate-done');
+  assert.equal(registry.status(status.asyncId, 'alpha').status, 'completed');
+});

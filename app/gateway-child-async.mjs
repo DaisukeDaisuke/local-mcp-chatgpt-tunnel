@@ -35,6 +35,40 @@ export function createGatewayChildAsyncRegistry({
     ...(task.status === 'failed' ? { error: task.error } : {})
   });
 
+  const retain = ({ tool, prefix, isolatedId, promise, createdAt = new Date().toISOString() }) => {
+    prune();
+    const asyncId = createId();
+    const task = {
+      asyncId,
+      tool,
+      prefix,
+      isolatedId,
+      status: 'running',
+      createdAt,
+      finishedAt: null,
+      result: undefined,
+      error: null,
+      completion: null
+    };
+    task.completion = Promise.resolve(promise).then(
+      (value) => {
+        task.finishedAt = new Date().toISOString();
+        task.status = 'completed';
+        task.result = value;
+        return value;
+      },
+      (error) => {
+        task.finishedAt = new Date().toISOString();
+        task.status = 'failed';
+        task.error = errorMessage(error);
+        throw error;
+      }
+    );
+    tasks.set(asyncId, task);
+    void task.completion.catch(() => {});
+    return task;
+  };
+
   return {
     async resolveOrPromote({ tool, prefix, isolatedId = null, promise }) {
       const createdAt = new Date().toISOString();
@@ -67,31 +101,28 @@ export function createGatewayChildAsyncRegistry({
         return { promoted: false, result };
       }
 
-      prune();
-      const asyncId = createId();
-      const task = {
-        asyncId,
+      const task = retain({
         tool,
         prefix,
         isolatedId,
-        status: 'running',
         createdAt,
-        finishedAt: null,
-        result: undefined,
-        error: null
-      };
-      tasks.set(asyncId, task);
-      void tracked.then(() => {
-        task.finishedAt = new Date().toISOString();
-        if (failure) {
-          task.status = 'failed';
-          task.error = errorMessage(failure);
-        } else {
-          task.status = 'completed';
-          task.result = result;
-        }
+        promise: tracked.then(() => {
+          if (failure) throw failure;
+          return result;
+        })
       });
       return { promoted: true, status: summary(task) };
+    },
+
+    promote({ tool, prefix, isolatedId = null, promise }) {
+      return summary(retain({ tool, prefix, isolatedId, promise }));
+    },
+
+    completion(asyncId, isolatedId = null) {
+      const task = tasks.get(asyncId);
+      if (!task) throw new Error(`Unknown or expired asyncId: ${asyncId}`);
+      if (task.isolatedId !== isolatedId) throw new Error('asyncId belongs to a different isolated workspace context');
+      return task.completion;
     },
 
     status(asyncId, isolatedId = null) {
