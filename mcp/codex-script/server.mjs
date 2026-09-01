@@ -19,16 +19,25 @@ const SERVER_VERSION = '0.1.0';
 const cli = { help: process.argv.slice(2).some((value) => value === '--help' || value === '-h') };
 const MODES = new Set(['run', 'check']);
 
+function nodePermissionArgv(roots, { allowWrite }) {
+  const args = ['--permission'];
+  for (const root of roots) {
+    args.push(`--allow-fs-read=${root}`);
+    if (allowWrite) args.push(`--allow-fs-write=${root}`);
+  }
+  return args;
+}
+
 const RUNTIME_SPECS = {
   mjs: {
     label: 'ECMAScript module',
     extensions: ['.mjs'],
-    argvPrefix: () => []
+    argvPrefix: (roots) => nodePermissionArgv(roots, { allowWrite: true })
   },
   nodejs: {
     label: 'Node.js',
     extensions: ['.js', '.cjs', '.mjs'],
-    argvPrefix: () => []
+    argvPrefix: (roots) => nodePermissionArgv(roots, { allowWrite: true })
   },
   python: {
     label: 'Python',
@@ -46,7 +55,7 @@ const CHECK_SPECS = {
   nodejs: {
     label: 'Node.js --check',
     extensions: ['.js', '.cjs', '.mjs'],
-    argvPrefix: () => ['--check']
+    argvPrefix: (roots) => [...nodePermissionArgv(roots, { allowWrite: false }), '--check']
   },
   python: {
     label: 'Python py_compile',
@@ -86,6 +95,7 @@ Runs one existing script with literal argv, or checks one existing source file, 
 This server is intended to be launched from gateway.toml with sandbox = "elevated" or "unelevated".
 The gateway starts this MCP itself inside that Codex sandbox once.
 Each run/check starts only the fixed runtime as a child of the already-sandboxed MCP process.
+Node.js runtimes enable the Node Permission Model, allow workspace file access, and do not grant child-process permission.
 
 Options:
   --mode=run|check
