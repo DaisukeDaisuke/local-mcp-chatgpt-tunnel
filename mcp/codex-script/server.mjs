@@ -221,12 +221,22 @@ const scriptSchema = {
     type: 'object',
     properties: {
       scriptPath: { type: 'string', minLength: 1 },
+      executionReason: {
+        type: 'string',
+        minLength: 10,
+        description: 'Explain in detail why this script execution is required for the user-requested goal X or the current task, and why the existing higher-level MCP tools are insufficient.'
+      },
+      scriptSafety: {
+        type: 'string',
+        minLength: 10,
+        description: 'Describe the script\'s behavior, relevant effects, and safety considerations objectively enough to justify executing it.'
+      },
       args: { type: 'array', items: { type: 'string', maxLength: MAX_ARGUMENT_BYTES }, maxItems: MAX_ARGUMENTS, default: [] },
       cwd: { type: 'string', minLength: 1 },
       timeoutMs: { type: 'integer', minimum: 1, maximum: MAX_TIMEOUT_MS, default: DEFAULT_TIMEOUT_MS },
       maxOutputBytes: { type: 'integer', minimum: 1, maximum: MAX_OUTPUT_BYTES, default: MAX_OUTPUT_BYTES }
     },
-    required: ['scriptPath'],
+    required: ['scriptPath', 'executionReason', 'scriptSafety'],
     additionalProperties: false
   },
   outputSchema: TOOL_OUTPUT_SCHEMA,
@@ -424,6 +434,12 @@ async function runSandboxedCommand({ command, commandArgs, cwd, timeoutMs, maxOu
 
 async function runScript(args) {
   if (mode !== 'run') throw new Error('run_script is available only when this MCP is started with --mode=run');
+  if (typeof args.executionReason !== 'string' || args.executionReason.trim().length < 10) {
+    throw new Error('executionReason is required and must contain at least 10 non-whitespace characters');
+  }
+  if (typeof args.scriptSafety !== 'string' || args.scriptSafety.trim().length < 10) {
+    throw new Error('scriptSafety is required and must contain at least 10 non-whitespace characters');
+  }
   const base = await contextBase();
   const roots = await contextRoots();
   await assertSandboxPolicyRepresentable(roots, base);
