@@ -1268,23 +1268,25 @@ async function handle(request) {
           await isolationPolicy.allowed();
           await isolationPolicy.assertToolArguments(route.originalName, pathArguments, context.base);
         }
-        const childRequest = route.child.request('tools/call', {
+        const childRequest = route.child.requestWithControl('tools/call', {
           name: route.originalName,
           arguments: context
             ? privateIsolationArguments(route.child, context, childArguments)
             : childArguments
         });
-        const completedRequest = childRequest.then(async (childResult) => {
+        const completedRequest = childRequest.promise.then(async (childResult) => {
           updateExternalWorkingDirectory(route, childResult);
           await applyLifecycle(route, childResult);
           return textLimitedResult(request.id, route, childResult);
         });
-        return childAsyncRegistry.resolveOrPromote({
+        const resolvedChildRequest = await childAsyncRegistry.resolveOrPromote({
           tool: request.params.name,
           prefix: route.child.config.prefix,
           isolatedId,
           promise: completedRequest
         });
+        if (resolvedChildRequest.promoted) childRequest.clearDeadline();
+        return resolvedChildRequest;
       });
       if (resolved.promoted) return response(request.id, gatewayChildAsyncPromotionMcpResult(resolved.status));
       return response(request.id, resolved.result);

@@ -142,10 +142,19 @@ export class StdioMcpChild {
   }
 
   request(method, params = {}, timeoutOverrideMs) {
-    if (!this.isWritable()) return Promise.reject(new Error(`${this.config.name} is not running`));
+    return this.requestWithControl(method, params, timeoutOverrideMs).promise;
+  }
+
+  requestWithControl(method, params = {}, timeoutOverrideMs) {
+    if (!this.isWritable()) {
+      return {
+        promise: Promise.reject(new Error(`${this.config.name} is not running`)),
+        clearDeadline: () => false
+      };
+    }
     const id = this.nextId++;
     const payload = { jsonrpc: '2.0', id, method, params };
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${this.config.name} timed out handling ${method}`));
@@ -153,6 +162,16 @@ export class StdioMcpChild {
       this.pending.set(id, { resolve, reject, timeout });
       this.writeStdin(`${JSON.stringify(payload)}\n`);
     });
+    return {
+      promise,
+      clearDeadline: () => {
+        const pending = this.pending.get(id);
+        if (!pending || pending.timeout === null) return false;
+        clearTimeout(pending.timeout);
+        pending.timeout = null;
+        return true;
+      }
+    };
   }
 
   notify(method, params = {}) {

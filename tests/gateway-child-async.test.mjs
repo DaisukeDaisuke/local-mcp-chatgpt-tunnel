@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   GATEWAY_CHILD_ASYNC_PROMOTION_MS,
+  GATEWAY_CHILD_ASYNC_RETENTION_MS,
   GATEWAY_CHILD_ASYNC_WARNING,
   createGatewayChildAsyncRegistry,
   gatewayChildAsyncPromotionMcpResult
@@ -85,4 +86,65 @@ test('Gateway child async registry can retain an already-promoted aggregate and 
   const result = await completion;
   assert.equal(result.content[0].text, 'aggregate-done');
   assert.equal(registry.status(status.asyncId, 'alpha').status, 'completed');
+});
+
+test('Gateway child async registry expires finished results after ten minutes but never expires a running task', async () => {
+  assert.equal(GATEWAY_CHILD_ASYNC_RETENTION_MS, 10 * 60 * 1000);
+  let nowMs = 1_000_000;
+  let finishRunning;
+  const completedRegistry = createGatewayChildAsyncRegistry({
+    retentionMs: GATEWAY_CHILD_ASYNC_RETENTION_MS,
+    createId: () => '33333333-3333-4333-8333-333333333333',
+    now: () => nowMs
+  });
+  const completedStatus = completedRegistry.promote({
+    tool: 'files__read_text',
+    prefix: 'files',
+    isolatedId: 'alpha',
+    promise: Promise.resolve({ content: [{ type: 'text', text: 'done' }], isError: false })
+  });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  nowMs += GATEWAY_CHILD_ASYNC_RETENTION_MS - 1;
+  assert.equal(completedRegistry.status(completedStatus.asyncId, 'alpha').status, 'completed');
+  nowMs += 1;
+  assert.throws(
+    () => completedRegistry.status(completedStatus.asyncId, 'alpha'),
+    /Unknown or expired asyncId/
+  );
+
+  const runningRegistry = createGatewayChildAsyncRegistry({
+    retentionMs: GATEWAY_CHILD_ASYNC_RETENTION_MS,
+    createId: () => '44444444-4444-4444-8444-444444444444',
+    now: () => nowMs
+  });
+  const runningStatus = runningRegistry.promote({
+    tool: 'git__status',
+    prefix: 'git',
+    isolatedId: 'alpha',
+    promise: new Promise((resolvePromise) => { finishRunning = resolvePromise; })
+  });
+  nowMs += GATEWAY_CHILD_ASYNC_RETENTION_MS * 20;
+  assert.equal(runningRegistry.status(runningStatus.asyncId, 'alpha').status, 'running');
+  finishRunning({ content: [{ type: 'text', text: 'eventually-done' }], isError: false });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+});
+
+test('Gateway child async registry does not evict recent finished results at the old 64-request boundary', async () => {
+  let sequence = 0;
+  const registry = createGatewayChildAsyncRegistry({
+    now: () => 2_000_000,
+    createId: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`
+  });
+  let firstAsyncId;
+  for (let index = 0; index < 65; index += 1) {
+    const status = registry.promote({
+      tool: 'files__read_text',
+      prefix: 'files',
+      isolatedId: 'alpha',
+      promise: Promise.resolve({ content: [{ type: 'text', text: String(index) }], isError: false })
+    });
+    firstAsyncId ??= status.asyncId;
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  }
+  assert.equal(registry.status(firstAsyncId, 'alpha').status, 'completed');
 });

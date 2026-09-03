@@ -130,3 +130,54 @@ test('stdio child points setup refresh failures at the Codex sandbox log', async
     return true;
   });
 });
+
+test('stdio child can clear one request deadline after it is handed off to async handling', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'stdio-child-no-timeout-'));
+  const serverPath = join(workspace, 'delayed-server.mjs');
+  await writeFile(serverPath, `
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf('\\n');
+    if (newline < 0) break;
+    const line = buffer.slice(0, newline).replace(/\\r$/, '');
+    buffer = buffer.slice(newline + 1);
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    const send = (result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n');
+    if (request.method === 'initialize') send({ protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'delayed-fixture', version: '1.0.0' } });
+    else if (request.method === 'tools/list') send({ tools: [{ name: 'delayed', inputSchema: { type: 'object' } }] });
+    else if (request.method === 'tools/call') setTimeout(() => send({ ok: true }), 40);
+  }
+});
+`, 'utf8');
+  const child = new StdioMcpChild({
+    name: 'delayed-fixture',
+    command: process.execPath,
+    args: [serverPath],
+    cwd: workspace,
+    env: {},
+    allowedDirectories: [workspace],
+    allowedFiles: [],
+    disallowedDirectories: [],
+    disallowedFiles: [],
+    disallowedPathGlobs: [],
+    protectedGatewayConfigPaths: [],
+    dangerousAllowGatewayConfigAccess: false,
+    startupTimeoutMs: 5000,
+    requestTimeoutMs: 10,
+    sandbox: 'never'
+  });
+  t.after(() => child.close());
+  await child.start();
+  await assert.rejects(
+    child.request('tools/call', { name: 'delayed', arguments: {} }),
+    /timed out handling tools\/call/
+  );
+  const controlled = child.requestWithControl('tools/call', { name: 'delayed', arguments: {} });
+  assert.equal(controlled.clearDeadline(), true);
+  const result = await controlled.promise;
+  assert.equal(result.ok, true);
+});

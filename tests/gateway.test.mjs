@@ -1314,7 +1314,8 @@ process.stdin.on('data', (chunk) => {
     `allowed_directories = ['${workspace}']`,
     'enabled = true',
     'prefix = "delay"',
-    'serial_group = "delay"'
+    'serial_group = "delay"',
+    'tool_timeout_sec = 12'
   ].join('\n'), 'utf8');
   const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
     cwd: resolve('.'),
@@ -1331,6 +1332,7 @@ process.stdin.on('data', (chunk) => {
   const promoted = await nextLine(child.stdout, 13_000);
   assert.equal(promoted.result.isError, true);
   assert.match(promoted.result.content[1].text, /"status":"running"/);
+  const promotedDetails = JSON.parse(promoted.result.content[1].text);
 
   const quickStart = Date.now();
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: {
@@ -1339,4 +1341,12 @@ process.stdin.on('data', (chunk) => {
   const quick = await nextLine(child.stdout, 1_500);
   assert.equal(quick.result.isError, false);
   assert.ok(Date.now() - quickStart < 1_500);
+
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 4_500));
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+    name: 'gateway_childs_mcp_async_status', arguments: { asyncId: promotedDetails.asyncId }
+  } })}\n`);
+  const completed = await nextLine(child.stdout, 1_500);
+  assert.equal(completed.result.structuredContent.ok, true);
+  assert.equal(completed.result.structuredContent.result.status, 'completed');
 });
