@@ -35,6 +35,7 @@ import {
 import {
   GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME,
   GATEWAY_CONFIG_NAME,
+  GATEWAY_WAIT_ASYNC_NAME,
   GATEWAY_MULTI_STEP_NAME,
   GATEWAY_MULTI_STEP_LIST_NAME,
   GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME,
@@ -63,7 +64,9 @@ import { sandboxDotPathWarningLines } from './sandbox-hidden-path-warning.mjs';
 import {
   createGatewayChildAsyncRegistry,
   gatewayChildAsyncPromotionMcpResult,
-  gatewayChildAsyncStatusMcpResult
+  gatewayChildAsyncStatusMcpResult,
+  gatewayWaitAsyncMcpResult,
+  GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS
 } from './gateway-child-async.mjs';
 
 scrubSecretEnvironment(process.env);
@@ -788,6 +791,36 @@ async function handle(request) {
   if (request.method === 'ping') return response(request.id, {});
   if (request.method === 'tools/list') return response(request.id, { tools: publishedTools() });
   if (request.method === 'tools/call') {
+    if (request.params?.name === GATEWAY_WAIT_ASYNC_NAME) {
+      try {
+        const toolArguments = request.params?.arguments ?? {};
+        if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
+            || Object.keys(toolArguments).length !== 1 || !Object.hasOwn(toolArguments, 'ms')) {
+          throw new Error(`${GATEWAY_WAIT_ASYNC_NAME} accepts exactly one argument: ms`);
+        }
+        const ms = toolArguments.ms;
+        if (typeof ms !== 'number' || !Number.isFinite(ms) || !Number.isInteger(ms)
+            || ms < 0 || ms > GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS) {
+          throw new Error(`ms must be a finite integer between 0 and ${GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS}`);
+        }
+        const waitStartedAt = Date.now();
+        const completed = await childAsyncRegistry.waitForAnyCompletion(ms);
+        return response(request.id, gatewayWaitAsyncMcpResult({
+          ok: true,
+          result: {
+            waitStatus: completed ? 'interrupted' : 'timeout',
+            ...(completed ? { asyncId: completed.asyncId } : {}),
+            ms,
+            waitedMs: Date.now() - waitStartedAt
+          }
+        }));
+      } catch (error) {
+        return response(request.id, gatewayWaitAsyncMcpResult({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        }, true));
+      }
+    }
     if (request.params?.name === GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME) {
       try {
         const toolArguments = request.params?.arguments ?? {};

@@ -2,6 +2,7 @@ export const TOOL_DIRECTORY_NAME = 'gateway__list_available_tools';
 export const PREFIX_LIST_NAME = 'gateway__get_prefix_list';
 export const GATEWAY_CONFIG_NAME = 'gateway__get_config';
 export const GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME = 'gateway_childs_mcp_async_status';
+export const GATEWAY_WAIT_ASYNC_NAME = 'gateway__wait_async';
 export const GATEWAY_MULTI_STEP_NAME = 'gateway__multi_step_read';
 export const GATEWAY_MULTI_STEP_WRITE_NAME = 'gateway__multi_step_write';
 export const GATEWAY_MULTI_STEP_OPENWORLD_NAME = 'gateway__multi_step_openworld';
@@ -182,6 +183,41 @@ export const gatewayChildsMcpAsyncStatusDefinition = {
       error: { type: 'string' }
     },
     required: ['ok'],
+    additionalProperties: false
+  }
+};
+
+export const gatewayWaitAsyncDefinition = {
+  name: GATEWAY_WAIT_ASYNC_NAME,
+  description: 'Wait without performing work. If a Gateway-managed async task reaches a terminal state while this call is waiting, return that asyncId and stop waiting early. ms is the timeout in milliseconds and must be a finite integer from 0 through 9000. Waiting suspends only this tool call; Gateway continues accepting and processing other MCP requests concurrently. Async completions that happened before this call are not replayed.',
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ms: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 9000,
+        description: 'Timeout in milliseconds. The accepted range is 0..9000.'
+      }
+    },
+    required: ['ms'],
+    additionalProperties: false
+  },
+  outputSchema: {
+    type: 'object',
+    properties: {
+      ok: { type: 'boolean' },
+      result: { type: 'object' },
+      error: { type: 'string' },
+      message: { type: 'string' }
+    },
+    required: ['ok', 'message'],
     additionalProperties: false
   }
 };
@@ -379,6 +415,7 @@ export const gatewayDirectoryToolDefinitions = [
 
 export const gatewayOperationalToolDefinitions = [
   gatewayChildsMcpAsyncStatusDefinition,
+  gatewayWaitAsyncDefinition,
   gatewayTranscriptListDefinition,
   gatewayTranscriptGetDefinition,
   gatewayMultiStepDefinition,
