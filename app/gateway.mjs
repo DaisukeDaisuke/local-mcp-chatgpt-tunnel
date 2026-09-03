@@ -795,21 +795,40 @@ async function handle(request) {
       try {
         const toolArguments = request.params?.arguments ?? {};
         if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
-            || Object.keys(toolArguments).length !== 1 || !Object.hasOwn(toolArguments, 'ms')) {
-          throw new Error(`${GATEWAY_WAIT_ASYNC_NAME} accepts exactly one argument: ms`);
+            || !Object.hasOwn(toolArguments, 'ms')
+            || Object.keys(toolArguments).some((key) => !['ms', 'asyncId', 'isolatedId'].includes(key))) {
+          throw new Error(`${GATEWAY_WAIT_ASYNC_NAME} accepts ms and optional asyncId/isolatedId only`);
         }
         const ms = toolArguments.ms;
         if (typeof ms !== 'number' || !Number.isFinite(ms) || !Number.isInteger(ms)
             || ms < 0 || ms > GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS) {
           throw new Error(`ms must be a finite integer between 0 and ${GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS}`);
         }
+        if (toolArguments.asyncId !== undefined
+            && (typeof toolArguments.asyncId !== 'string' || !/^[0-9a-fA-F-]{36}$/.test(toolArguments.asyncId))) {
+          throw new Error('asyncId must be a UUID string');
+        }
+        if (toolArguments.isolatedId !== undefined && toolArguments.asyncId === undefined) {
+          throw new Error('isolatedId may be supplied only together with asyncId');
+        }
+        const isolatedId = toolArguments.isolatedId === undefined ? null : validateIsolatedId(toolArguments.isolatedId);
+        if (isolatedId !== null) isolationState(isolatedId);
         const waitStartedAt = Date.now();
-        const completed = await childAsyncRegistry.waitForAnyCompletion(ms);
+        let interrupted = false;
+        if (toolArguments.asyncId === undefined) {
+          if (ms > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+        } else {
+          interrupted = await childAsyncRegistry.waitForCompletion(
+            toolArguments.asyncId.toLowerCase(),
+            isolatedId,
+            ms
+          );
+        }
         return response(request.id, gatewayWaitAsyncMcpResult({
           ok: true,
           result: {
-            waitStatus: completed ? 'interrupted' : 'timeout',
-            ...(completed ? { asyncId: completed.asyncId } : {}),
+            waitStatus: interrupted ? 'interrupted' : 'timeout',
+            ...(interrupted ? { asyncId: toolArguments.asyncId.toLowerCase() } : {}),
             ms,
             waitedMs: Date.now() - waitStartedAt
           }

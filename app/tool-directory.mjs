@@ -189,7 +189,7 @@ export const gatewayChildsMcpAsyncStatusDefinition = {
 
 export const gatewayWaitAsyncDefinition = {
   name: GATEWAY_WAIT_ASYNC_NAME,
-  description: 'Wait without performing work. If a Gateway-managed async task reaches a terminal state while this call is waiting, return that asyncId and stop waiting early. ms is the timeout in milliseconds and must be a finite integer from 0 through 9000. Waiting suspends only this tool call; Gateway continues accepting and processing other MCP requests concurrently. Async completions that happened before this call are not replayed.',
+  description: 'Wait without performing work. Without asyncId, this is a pure timeout wait and does not inspect the async registry. With asyncId, only that exact caller-supplied async task may end the wait early; other async tasks are never observed or returned. ms is the timeout in milliseconds and must be a finite integer from 0 through 9000. Waiting suspends only this tool call; Gateway continues accepting and processing other MCP requests concurrently.',
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,
@@ -204,6 +204,20 @@ export const gatewayWaitAsyncDefinition = {
         minimum: 0,
         maximum: 9000,
         description: 'Timeout in milliseconds. The accepted range is 0..9000.'
+      },
+      asyncId: {
+        type: 'string',
+        minLength: 36,
+        maxLength: 36,
+        pattern: '^[0-9a-fA-F-]{36}$',
+        description: 'Optional exact Gateway-managed async task ID. Only this task may interrupt the wait early.'
+      },
+      isolatedId: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 64,
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
+        description: 'Optional isolated workspace context for asyncId. May be supplied only together with asyncId.'
       }
     },
     required: ['ms'],

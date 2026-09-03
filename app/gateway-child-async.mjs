@@ -14,27 +14,6 @@ export function createGatewayChildAsyncRegistry({
   createId = () => randomUUID().toLowerCase()
 } = {}) {
   const tasks = new Map();
-  const completionWaiters = [];
-
-  const terminalSummary = (task) => ({
-    asyncId: task.asyncId,
-    status: task.status,
-    tool: task.tool,
-    prefix: task.prefix,
-    isolatedId: task.isolatedId,
-    finishedAt: task.finishedAt
-  });
-
-  const publishCompletion = (task) => {
-    const completed = terminalSummary(task);
-    const waiters = completionWaiters.splice(0);
-    for (const waiter of waiters) {
-      if (waiter.settled) continue;
-      waiter.settled = true;
-      clearTimeout(waiter.timer);
-      waiter.resolve(completed);
-    }
-  };
 
   const prune = () => {
     if (tasks.size < MAX_RETAINED_ASYNC_REQUESTS) return;
@@ -78,14 +57,12 @@ export function createGatewayChildAsyncRegistry({
         task.finishedAt = new Date().toISOString();
         task.status = 'completed';
         task.result = value;
-        publishCompletion(task);
         return value;
       },
       (error) => {
         task.finishedAt = new Date().toISOString();
         task.status = 'failed';
         task.error = errorMessage(error);
-        publishCompletion(task);
         throw error;
       }
     );
@@ -159,26 +136,22 @@ export function createGatewayChildAsyncRegistry({
       return summary(task, true);
     },
 
-    waitForAnyCompletion(timeoutMs) {
+    waitForCompletion(asyncId, isolatedId = null, timeoutMs) {
       if (!Number.isFinite(timeoutMs) || !Number.isInteger(timeoutMs) || timeoutMs < 0) {
         throw new Error('timeoutMs must be a finite non-negative integer');
       }
+      const task = tasks.get(asyncId);
+      if (!task || task.isolatedId !== isolatedId) {
+        throw new Error('Async task is unavailable for the specified asyncId/context');
+      }
+      if (task.status !== 'running') return Promise.resolve(true);
       if (timeoutMs === 0) return Promise.resolve(null);
-      return new Promise((resolvePromise) => {
-        const waiter = {
-          resolve: resolvePromise,
-          settled: false,
-          timer: null
-        };
-        waiter.timer = setTimeout(() => {
-          if (waiter.settled) return;
-          waiter.settled = true;
-          const index = completionWaiters.indexOf(waiter);
-          if (index >= 0) completionWaiters.splice(index, 1);
-          resolvePromise(null);
-        }, timeoutMs);
-        completionWaiters.push(waiter);
+      let timer;
+      const timeout = new Promise((resolvePromise) => {
+        timer = setTimeout(() => resolvePromise(false), timeoutMs);
       });
+      const completion = task.completion.then(() => true, () => true);
+      return Promise.race([completion, timeout]).finally(() => clearTimeout(timer));
     }
   };
 }
