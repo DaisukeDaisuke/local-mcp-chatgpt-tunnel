@@ -148,7 +148,7 @@ export const gatewayConfigDefinition = {
 
 export const gatewayAwaitAsyncDefinition = {
   name: GATEWAY_AWAIT_ASYNC_NAME,
-  description: 'Await one exact Gateway-managed child MCP async request without spinning the agent loop. ms is the maximum wait and must be 6000..9000. If the task completes while this call is waiting, it returns immediately even before ms. If the task was already completed or failed before this call began, the tool returns a dedicated error explaining that this is not an OpenAI or Gateway time limit. The response includes the retained status/result for this asyncId only.',
+  description: 'Await one exact Gateway-managed child MCP async request without spinning the agent loop. ms is the maximum wait and must be 6000..28000. If the task completes while this call is waiting, it returns immediately even before ms. If the task was already completed or failed before this call began, the tool returns a dedicated error explaining that this is not an OpenAI or Gateway time limit. The response includes the retained status/result for this asyncId only.',
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,
@@ -161,8 +161,8 @@ export const gatewayAwaitAsyncDefinition = {
       ms: {
         type: 'integer',
         minimum: 6000,
-        maximum: 9000,
-        description: 'Maximum wait in milliseconds. Must be an integer from 6000 through 9000.'
+        maximum: 28000,
+        description: 'Maximum wait in milliseconds. Must be an integer from 6000 through 28000.'
       },
       asyncId: {
         type: 'string',

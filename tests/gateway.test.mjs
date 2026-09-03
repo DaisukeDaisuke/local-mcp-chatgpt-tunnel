@@ -1315,7 +1315,7 @@ process.stdin.on('data', (chunk) => {
     'enabled = true',
     'prefix = "delay"',
     'serial_group = "delay"',
-    'tool_timeout_sec = 12'
+    'tool_timeout_sec = 30'
   ].join('\n'), 'utf8');
   const child = spawn(process.execPath, [resolve('app/gateway.mjs'), '--config', configPath], {
     cwd: resolve('.'),
@@ -1327,9 +1327,9 @@ process.stdin.on('data', (chunk) => {
   await nextLine(child.stdout);
 
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
-    name: 'delay__delay', arguments: { delayMs: 15_000 }
+    name: 'delay__delay', arguments: { delayMs: 32_000 }
   } })}\n`);
-  const promoted = await nextLine(child.stdout, 13_000);
+  const promoted = await nextLine(child.stdout, 31_000);
   assert.equal(promoted.result.isError, true);
   assert.match(promoted.result.content[1].text, /"status":"running"/);
   const promotedDetails = JSON.parse(promoted.result.content[1].text);

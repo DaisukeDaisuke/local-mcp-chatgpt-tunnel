@@ -50,8 +50,8 @@ test('Gateway child async registry promotes a slow request and keeps its UUID in
 });
 
 test('Gateway child async emergency response points the AI at gateway__await_async', () => {
-  assert.equal(GATEWAY_CHILD_ASYNC_PROMOTION_MS, 11_000);
-  assert.match(GATEWAY_CHILD_ASYNC_WARNING, /10秒以上の同期リクエスト/);
+  assert.equal(GATEWAY_CHILD_ASYNC_PROMOTION_MS, 28_000);
+  assert.match(GATEWAY_CHILD_ASYNC_WARNING, /28秒継続/);
   assert.match(GATEWAY_CHILD_ASYNC_WARNING, /gateway__await_async/);
   const result = gatewayChildAsyncPromotionMcpResult({
     asyncId: '11111111-1111-4111-8111-111111111111',
@@ -59,7 +59,7 @@ test('Gateway child async emergency response points the AI at gateway__await_asy
     tool: 'files__read_text',
     isolatedId: 'alpha',
     status: 'running',
-    promotedAfterMs: 11_000
+    promotedAfterMs: 28_000
   });
   assert.equal(result.isError, true);
   assert.equal(result.content[0].text, GATEWAY_CHILD_ASYNC_WARNING);
