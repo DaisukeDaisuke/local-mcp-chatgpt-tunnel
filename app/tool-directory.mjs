@@ -13,7 +13,7 @@ export const GATEWAY_TRANSCRIPT_GET_NAME = 'gateway__transcript_get';
 
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
-  description: 'List currently available tools by full namespaced identifier and brief description. gateway__* and isolated__* tools are always included so callers can always discover Gateway and isolation controls. A prefix with zero matches returns the complete list.',
+  description: 'List currently available tools by full namespaced identifier and brief description. Accepts one prefix or multiple prefixes. gateway__* and isolated__* tools are always included so callers can always discover Gateway and isolation controls. If any requested prefix has zero matches, the complete list is returned.',
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,
@@ -25,7 +25,14 @@ export const toolDirectoryDefinition = {
     properties: {
       prefix: {
         type: 'string',
-        description: 'Optional case-insensitive full-name prefix, for example chrome-devtools__ or chrome-devtools__click. Filtering never removes gateway__* or isolated__* tools.'
+        description: 'Optional legacy single case-insensitive full-name prefix, for example chrome-devtools__ or chrome-devtools__click. Do not combine with prefixes. Filtering never removes gateway__* or isolated__* tools.'
+      },
+      prefixes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 64,
+        items: { type: 'string', minLength: 1 },
+        description: 'Optional case-insensitive full-name prefixes. Do not combine with prefix. If any requested prefix has zero matches, the complete list is returned. Filtering never removes gateway__* or isolated__* tools.'
       }
     },
     additionalProperties: false
@@ -396,13 +403,20 @@ const summarizeTool = (tool) => ({
 
 const ALWAYS_INCLUDED_DIRECTORY_PREFIXES = ['gateway__', 'isolated__'];
 
-export function createToolDirectoryPayload({ tools, prefix, enabledProxyCount, rejectedToolCount, disabledProxyNames }) {
+export function createToolDirectoryPayload({ tools, prefix, prefixes, enabledProxyCount, rejectedToolCount, disabledProxyNames }) {
   const available = tools.map(summarizeTool).sort((left, right) => left.name.localeCompare(right.name));
-  const normalizedPrefix = typeof prefix === 'string' ? prefix.trim().toLowerCase() : '';
-  const matches = normalizedPrefix
-    ? available.filter((tool) => tool.name.toLowerCase().startsWith(normalizedPrefix))
-    : available;
-  const requested = normalizedPrefix && matches.length === 0 ? available : matches;
+  const requestedPrefixes = Array.isArray(prefixes)
+    ? prefixes.map((value) => value.trim().toLowerCase())
+    : typeof prefix === 'string'
+      ? [prefix.trim().toLowerCase()]
+      : [];
+  const hasUnknownPrefix = requestedPrefixes.some((requestedPrefix) => !requestedPrefix
+    || !available.some((tool) => tool.name.toLowerCase().startsWith(requestedPrefix)));
+  const requested = requestedPrefixes.length === 0 || hasUnknownPrefix
+    ? available
+    : available.filter((tool) => requestedPrefixes.some(
+      (requestedPrefix) => tool.name.toLowerCase().startsWith(requestedPrefix)
+    ));
   const alwaysIncluded = available.filter((tool) => ALWAYS_INCLUDED_DIRECTORY_PREFIXES.some(
     (requiredPrefix) => tool.name.toLowerCase().startsWith(requiredPrefix)
   ));

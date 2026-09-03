@@ -837,10 +837,25 @@ async function handle(request) {
           isError: true
         });
       }
+      if (toolArguments.prefixes !== undefined && (!Array.isArray(toolArguments.prefixes)
+        || toolArguments.prefixes.length === 0
+        || toolArguments.prefixes.some((prefix) => typeof prefix !== 'string' || prefix.length === 0))) {
+        return response(request.id, {
+          content: [{ type: 'text', text: 'prefixes must be a non-empty array of non-empty strings' }],
+          isError: true
+        });
+      }
+      if (toolArguments.prefix !== undefined && toolArguments.prefixes !== undefined) {
+        return response(request.id, {
+          content: [{ type: 'text', text: 'prefix and prefixes cannot be combined' }],
+          isError: true
+        });
+      }
       const report = toolExposureReport();
       const payload = createToolDirectoryPayload({
         tools: publishedTools(),
         prefix: toolArguments.prefix,
+        prefixes: toolArguments.prefixes,
         enabledProxyCount: config.servers.length,
         rejectedToolCount: report.disabled.length,
         disabledProxyNames: config.disabledServerNames
