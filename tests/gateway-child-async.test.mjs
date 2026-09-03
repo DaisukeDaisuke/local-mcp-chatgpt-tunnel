@@ -49,10 +49,10 @@ test('Gateway child async registry promotes a slow request and keeps its UUID in
   assert.equal(completed.result.content[0].text, 'done');
 });
 
-test('Gateway child async emergency response uses the requested AI-facing error text and status tool name', () => {
+test('Gateway child async emergency response points the AI at gateway__await_async', () => {
   assert.equal(GATEWAY_CHILD_ASYNC_PROMOTION_MS, 11_000);
   assert.match(GATEWAY_CHILD_ASYNC_WARNING, /10秒以上の同期リクエスト/);
-  assert.match(GATEWAY_CHILD_ASYNC_WARNING, /gateway_childs_mcp_async_status/);
+  assert.match(GATEWAY_CHILD_ASYNC_WARNING, /gateway__await_async/);
   const result = gatewayChildAsyncPromotionMcpResult({
     asyncId: '11111111-1111-4111-8111-111111111111',
     prefix: 'files',
@@ -64,6 +64,7 @@ test('Gateway child async emergency response uses the requested AI-facing error 
   assert.equal(result.isError, true);
   assert.equal(result.content[0].text, GATEWAY_CHILD_ASYNC_WARNING);
   assert.match(result.content[1].text, /11111111-1111-4111-8111-111111111111/);
+  assert.match(result.content[1].text, /gateway__await_async/);
 });
 
 test('Gateway child async registry can retain an already-promoted aggregate and expose its completion promise', async () => {

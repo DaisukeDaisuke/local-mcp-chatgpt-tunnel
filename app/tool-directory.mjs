@@ -1,8 +1,7 @@
 export const TOOL_DIRECTORY_NAME = 'gateway__list_available_tools';
 export const PREFIX_LIST_NAME = 'gateway__get_prefix_list';
 export const GATEWAY_CONFIG_NAME = 'gateway__get_config';
-export const GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME = 'gateway_childs_mcp_async_status';
-export const GATEWAY_WAIT_ASYNC_NAME = 'gateway__wait_async';
+export const GATEWAY_AWAIT_ASYNC_NAME = 'gateway__await_async';
 export const GATEWAY_MULTI_STEP_NAME = 'gateway__multi_step_read';
 export const GATEWAY_MULTI_STEP_WRITE_NAME = 'gateway__multi_step_write';
 export const GATEWAY_MULTI_STEP_OPENWORLD_NAME = 'gateway__multi_step_openworld';
@@ -147,49 +146,9 @@ export const gatewayConfigDefinition = {
   }
 };
 
-export const gatewayChildsMcpAsyncStatusDefinition = {
-  name: GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME,
-  description: 'Return the non-blocking status and retained result of one Gateway-managed child MCP async request.',
-  annotations: {
-    readOnlyHint: true,
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false
-  },
-  inputSchema: {
-    type: 'object',
-    properties: {
-      asyncId: {
-        type: 'string',
-        minLength: 36,
-        maxLength: 36,
-        pattern: '^[0-9a-fA-F-]{36}$'
-      },
-      isolatedId: {
-        type: 'string',
-        minLength: 1,
-        maxLength: 64,
-        pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
-      }
-    },
-    required: ['asyncId'],
-    additionalProperties: false
-  },
-  outputSchema: {
-    type: 'object',
-    properties: {
-      ok: { type: 'boolean' },
-      result: { type: 'object' },
-      error: { type: 'string' }
-    },
-    required: ['ok'],
-    additionalProperties: false
-  }
-};
-
-export const gatewayWaitAsyncDefinition = {
-  name: GATEWAY_WAIT_ASYNC_NAME,
-  description: 'Wait without performing work. Without asyncId, this is a pure timeout wait and does not inspect the async registry. With asyncId, only that exact caller-supplied async task may end the wait early; other async tasks are never observed or returned. ms is the timeout in milliseconds and must be a finite integer from 0 through 9000. Waiting suspends only this tool call; Gateway continues accepting and processing other MCP requests concurrently.',
+export const gatewayAwaitAsyncDefinition = {
+  name: GATEWAY_AWAIT_ASYNC_NAME,
+  description: 'Await one exact Gateway-managed child MCP async request without spinning the agent loop. ms is the maximum wait and must be 6000..9000. If the task completes while this call is waiting, it returns immediately even before ms. If the task was already completed or failed before this call began, the tool returns a dedicated error explaining that this is not an OpenAI or Gateway time limit. The response includes the retained status/result for this asyncId only.',
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,
@@ -201,26 +160,26 @@ export const gatewayWaitAsyncDefinition = {
     properties: {
       ms: {
         type: 'integer',
-        minimum: 0,
+        minimum: 6000,
         maximum: 9000,
-        description: 'Timeout in milliseconds. The accepted range is 0..9000.'
+        description: 'Maximum wait in milliseconds. Must be an integer from 6000 through 9000.'
       },
       asyncId: {
         type: 'string',
         minLength: 36,
         maxLength: 36,
         pattern: '^[0-9a-fA-F-]{36}$',
-        description: 'Optional exact Gateway-managed async task ID. Only this task may interrupt the wait early.'
+        description: 'Exact Gateway-managed async task ID to await.'
       },
       isolatedId: {
         type: 'string',
         minLength: 1,
         maxLength: 64,
         pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
-        description: 'Optional isolated workspace context for asyncId. May be supplied only together with asyncId.'
+        description: 'Optional isolated workspace context for asyncId.'
       }
     },
-    required: ['ms'],
+    required: ['asyncId', 'ms'],
     additionalProperties: false
   },
   outputSchema: {
@@ -428,8 +387,7 @@ export const gatewayDirectoryToolDefinitions = [
 ];
 
 export const gatewayOperationalToolDefinitions = [
-  gatewayChildsMcpAsyncStatusDefinition,
-  gatewayWaitAsyncDefinition,
+  gatewayAwaitAsyncDefinition,
   gatewayTranscriptListDefinition,
   gatewayTranscriptGetDefinition,
   gatewayMultiStepDefinition,

@@ -187,7 +187,7 @@ process.stdin.on('data', (chunk) => {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
-    'gateway_childs_mcp_async_status',
+    'gateway__await_async',
     'gateway__transcript_list',
     'gateway__transcript_get',
     'gateway__multi_step_read',
@@ -349,7 +349,7 @@ gatewayIntegrationTest('gateway aggregates a selected local stdio MCP without mo
   assert.ok(names.includes('isolated__list'));
   assert.ok(names.includes('isolated__close'));
   assert.ok(names.every((name) =>
-    name === 'gateway_childs_mcp_async_status'
+    name === 'gateway__await_async'
       || name.startsWith('files__')
       || name.startsWith('isolated__')
   ));
@@ -876,7 +876,7 @@ gatewayIntegrationTest('gateway initialization survives an unavailable child MCP
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
   const listed = await nextLine(child.stdout);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
-    'gateway_childs_mcp_async_status',
+    'gateway__await_async',
     'gateway__transcript_list',
     'gateway__transcript_get',
     'gateway__multi_step_read',
@@ -915,7 +915,7 @@ gatewayIntegrationTest('tools/list waits for concurrent initialization when a ch
   assert.equal(initialized.result.serverInfo.name, 'local-mcp-gateway');
   assert.equal(listed.id, 2);
   assert.deepEqual(listed.result.tools.map((tool) => tool.name), [
-    'gateway_childs_mcp_async_status',
+    'gateway__await_async',
     'gateway__transcript_list',
     'gateway__transcript_get',
     'gateway__multi_step_read',
@@ -989,7 +989,7 @@ process.stdin.on('data', (chunk) => {
     'gateway__list_available_tools',
     'gateway__get_prefix_list',
     'gateway__get_config',
-    'gateway_childs_mcp_async_status',
+    'gateway__await_async',
     'gateway__transcript_list',
     'gateway__transcript_get',
     'gateway__multi_step_read',
@@ -1041,7 +1041,7 @@ process.stdin.on('data', (chunk) => {
     'gateway__get_config',
     'gateway__get_prefix_list',
     'gateway__list_available_tools',
-    'gateway_childs_mcp_async_status',
+    'gateway__await_async',
     'gateway__transcript_list',
     'gateway__transcript_get',
     'gateway__multi_step_openworld',
@@ -1342,11 +1342,22 @@ process.stdin.on('data', (chunk) => {
   assert.equal(quick.result.isError, false);
   assert.ok(Date.now() - quickStart < 1_500);
 
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 4_500));
+  const awaitStart = Date.now();
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
-    name: 'gateway_childs_mcp_async_status', arguments: { asyncId: promotedDetails.asyncId }
+    name: 'gateway__await_async', arguments: { asyncId: promotedDetails.asyncId, ms: 6000 }
   } })}\n`);
-  const completed = await nextLine(child.stdout, 1_500);
+  const completed = await nextLine(child.stdout, 6_500);
   assert.equal(completed.result.structuredContent.ok, true);
   assert.equal(completed.result.structuredContent.result.status, 'completed');
+  assert.equal(completed.result.structuredContent.result.waitStatus, 'settled');
+  assert.ok(Date.now() - awaitStart < 6_000);
+
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: {
+    name: 'gateway__await_async', arguments: { asyncId: promotedDetails.asyncId, ms: 6000 }
+  } })}\n`);
+  const alreadyCompleted = await nextLine(child.stdout, 1_500);
+  assert.equal(alreadyCompleted.result.isError, true);
+  assert.equal(alreadyCompleted.result.structuredContent.ok, false);
+  assert.equal(alreadyCompleted.result.structuredContent.result.status, 'completed');
+  assert.match(alreadyCompleted.result.structuredContent.message, /OpenAI/);
 });

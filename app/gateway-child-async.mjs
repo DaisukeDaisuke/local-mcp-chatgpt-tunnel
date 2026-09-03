@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 export const GATEWAY_CHILD_ASYNC_PROMOTION_MS = 11_000;
-export const GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS = 9_000;
+export const GATEWAY_AWAIT_ASYNC_MIN_TIMEOUT_MS = 6_000;
+export const GATEWAY_AWAIT_ASYNC_MAX_TIMEOUT_MS = 9_000;
 export const GATEWAY_CHILD_ASYNC_RETENTION_MS = 10 * 60 * 1000;
 
-export const GATEWAY_CHILD_ASYNC_WARNING = '10秒以上の同期リクエストはgatewayのクラッシュさせるため、リクエストは非同期化されました。破壊的操作はすでに行われている可能性があります。これはgatewayクラッシュの緊急回避です。このメッセージは絶対に、ゲートウェイの作業制限、もしくはopenAIによるツール呼び出し制限ではなく、そう解釈してはいけません。単にユーザダイヤログにユーザが気が付いてない可能性があります。進捗メッセージでブロッキングを解消するように伝えてください。状況は**gateway_childs_mcp_async_status**で確認し、操作が何かしらの理由でしばらくブロッキングしている場合は、そのasyncidを放棄して再度試してください';
-export const GATEWAY_WAIT_ASYNC_MESSAGE = '非同期タスクが長期間完了しない場合は、このタスクidは破棄して、やり直してください。あなたはユーザーにブロック原因を取り除くように助けを求めることができます。このメッセージは、openAIやgatewayの作業制限ではなく、そう解釈してはいけません。';
+export const GATEWAY_CHILD_ASYNC_WARNING = '10秒以上の同期リクエストはgatewayをクラッシュさせるため、リクエストは非同期化されました。破壊的操作はすでに行われている可能性があります。これはgatewayクラッシュの緊急回避です。進捗確認は**gateway__await_async**へこのasyncIdと6000〜9000msの待機上限を指定してください。await中に完了した場合は即時返却し、未完了の場合だけ指定上限まで待つため、短周期でstatus確認を繰り返さないでください。';
+export const GATEWAY_AWAIT_ASYNC_MESSAGE = '同じasyncIdを追跡する場合はgateway__await_asyncを使用してください。待機上限は6000〜9000msで、待機中に完了した場合は即時返却します。';
+export const GATEWAY_AWAIT_ASYNC_ALREADY_SETTLED_MESSAGE = 'この非同期タスクはgateway__await_asyncの開始前にすでに完了または失敗していました。これはOpenAIによるツール時間制限やGatewayの作業時間制限を示すものではありません。保持されているstatus/resultを確認してください。';
 
 const errorMessage = (error) => error instanceof Error ? error.message : String(error);
 
@@ -174,7 +176,7 @@ export function gatewayChildAsyncPromotionMcpResult(status) {
     isolatedId: status.isolatedId,
     status: status.status,
     promotedAfterMs: status.promotedAfterMs,
-    statusTool: 'gateway_childs_mcp_async_status'
+    awaitTool: 'gateway__await_async'
   };
   return {
     content: [
@@ -185,22 +187,26 @@ export function gatewayChildAsyncPromotionMcpResult(status) {
   };
 }
 
-export function gatewayChildAsyncStatusMcpResult(value, isError = false) {
+export function gatewayAwaitAsyncMcpResult(value, isError = false) {
+  const payload = { ...value, message: GATEWAY_AWAIT_ASYNC_MESSAGE };
   return {
-    content: [{ type: 'text', text: JSON.stringify(value) }],
-    structuredContent: value,
+    content: [
+      { type: 'text', text: JSON.stringify(payload) },
+      { type: 'text', text: GATEWAY_AWAIT_ASYNC_MESSAGE }
+    ],
+    structuredContent: payload,
     isError
   };
 }
 
-export function gatewayWaitAsyncMcpResult(value, isError = false) {
-  const payload = { ...value, message: GATEWAY_WAIT_ASYNC_MESSAGE };
+export function gatewayAwaitAsyncAlreadySettledMcpResult(value) {
+  const payload = { ...value, message: GATEWAY_AWAIT_ASYNC_ALREADY_SETTLED_MESSAGE };
   return {
     content: [
       { type: 'text', text: JSON.stringify(payload) },
-      { type: 'text', text: GATEWAY_WAIT_ASYNC_MESSAGE }
+      { type: 'text', text: GATEWAY_AWAIT_ASYNC_ALREADY_SETTLED_MESSAGE }
     ],
     structuredContent: payload,
-    isError
+    isError: true
   };
 }

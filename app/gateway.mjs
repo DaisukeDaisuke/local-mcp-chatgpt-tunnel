@@ -33,9 +33,8 @@ import {
   syncDiscoveredToolAnnotations
 } from './tool-annotations.mjs';
 import {
-  GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME,
+  GATEWAY_AWAIT_ASYNC_NAME,
   GATEWAY_CONFIG_NAME,
-  GATEWAY_WAIT_ASYNC_NAME,
   GATEWAY_MULTI_STEP_NAME,
   GATEWAY_MULTI_STEP_LIST_NAME,
   GATEWAY_MULTI_STEP_OPENWORLD_LIST_NAME,
@@ -64,9 +63,10 @@ import { sandboxDotPathWarningLines } from './sandbox-hidden-path-warning.mjs';
 import {
   createGatewayChildAsyncRegistry,
   gatewayChildAsyncPromotionMcpResult,
-  gatewayChildAsyncStatusMcpResult,
-  gatewayWaitAsyncMcpResult,
-  GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS
+  gatewayAwaitAsyncMcpResult,
+  gatewayAwaitAsyncAlreadySettledMcpResult,
+  GATEWAY_AWAIT_ASYNC_MIN_TIMEOUT_MS,
+  GATEWAY_AWAIT_ASYNC_MAX_TIMEOUT_MS
 } from './gateway-child-async.mjs';
 
 scrubSecretEnvironment(process.env);
@@ -721,7 +721,7 @@ function stepPromotionDetails(message) {
     if (item?.type !== 'text' || typeof item.text !== 'string' || !item.text.startsWith('{')) continue;
     try {
       const parsed = JSON.parse(item.text);
-      if (parsed?.statusTool === GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME && typeof parsed.asyncId === 'string') return parsed;
+      if (parsed?.awaitTool === GATEWAY_AWAIT_ASYNC_NAME && typeof parsed.asyncId === 'string') return parsed;
     } catch {}
   }
   return null;
@@ -791,71 +791,49 @@ async function handle(request) {
   if (request.method === 'ping') return response(request.id, {});
   if (request.method === 'tools/list') return response(request.id, { tools: publishedTools() });
   if (request.method === 'tools/call') {
-    if (request.params?.name === GATEWAY_WAIT_ASYNC_NAME) {
+    if (request.params?.name === GATEWAY_AWAIT_ASYNC_NAME) {
       try {
         const toolArguments = request.params?.arguments ?? {};
         if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
-            || !Object.hasOwn(toolArguments, 'ms')
-            || Object.keys(toolArguments).some((key) => !['ms', 'asyncId', 'isolatedId'].includes(key))) {
-          throw new Error(`${GATEWAY_WAIT_ASYNC_NAME} accepts ms and optional asyncId/isolatedId only`);
-        }
-        const ms = toolArguments.ms;
-        if (typeof ms !== 'number' || !Number.isFinite(ms) || !Number.isInteger(ms)
-            || ms < 0 || ms > GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS) {
-          throw new Error(`ms must be a finite integer between 0 and ${GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS}`);
-        }
-        if (toolArguments.asyncId !== undefined
-            && (typeof toolArguments.asyncId !== 'string' || !/^[0-9a-fA-F-]{36}$/.test(toolArguments.asyncId))) {
-          throw new Error('asyncId must be a UUID string');
-        }
-        if (toolArguments.isolatedId !== undefined && toolArguments.asyncId === undefined) {
-          throw new Error('isolatedId may be supplied only together with asyncId');
-        }
-        const isolatedId = toolArguments.isolatedId === undefined ? null : validateIsolatedId(toolArguments.isolatedId);
-        if (isolatedId !== null) isolationState(isolatedId);
-        const waitStartedAt = Date.now();
-        let interrupted = false;
-        if (toolArguments.asyncId === undefined) {
-          if (ms > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
-        } else {
-          interrupted = await childAsyncRegistry.waitForCompletion(
-            toolArguments.asyncId.toLowerCase(),
-            isolatedId,
-            ms
-          );
-        }
-        return response(request.id, gatewayWaitAsyncMcpResult({
-          ok: true,
-          result: {
-            waitStatus: interrupted ? 'interrupted' : 'timeout',
-            ...(interrupted ? { asyncId: toolArguments.asyncId.toLowerCase() } : {}),
-            ms,
-            waitedMs: Date.now() - waitStartedAt
-          }
-        }));
-      } catch (error) {
-        return response(request.id, gatewayWaitAsyncMcpResult({
-          ok: false,
-          error: error instanceof Error ? error.message : String(error)
-        }, true));
-      }
-    }
-    if (request.params?.name === GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME) {
-      try {
-        const toolArguments = request.params?.arguments ?? {};
-        if (!toolArguments || typeof toolArguments !== 'object' || Array.isArray(toolArguments)
-            || Object.keys(toolArguments).some((key) => !['asyncId', 'isolatedId'].includes(key))) {
-          throw new Error(`${GATEWAY_CHILDS_MCP_ASYNC_STATUS_NAME} accepts only asyncId and optional isolatedId`);
+            || Object.keys(toolArguments).some((key) => !['asyncId', 'isolatedId', 'ms'].includes(key))) {
+          throw new Error(`${GATEWAY_AWAIT_ASYNC_NAME} accepts asyncId, ms, and optional isolatedId only`);
         }
         if (typeof toolArguments.asyncId !== 'string' || !/^[0-9a-fA-F-]{36}$/.test(toolArguments.asyncId)) {
           throw new Error('asyncId must be a UUID string');
         }
+        const ms = toolArguments.ms;
+        if (typeof ms !== 'number' || !Number.isFinite(ms) || !Number.isInteger(ms)
+            || ms < GATEWAY_AWAIT_ASYNC_MIN_TIMEOUT_MS || ms > GATEWAY_AWAIT_ASYNC_MAX_TIMEOUT_MS) {
+          throw new Error(`ms must be a finite integer between ${GATEWAY_AWAIT_ASYNC_MIN_TIMEOUT_MS} and ${GATEWAY_AWAIT_ASYNC_MAX_TIMEOUT_MS}`);
+        }
         const isolatedId = toolArguments.isolatedId === undefined ? null : validateIsolatedId(toolArguments.isolatedId);
         if (isolatedId !== null) isolationState(isolatedId);
-        const status = childAsyncRegistry.status(toolArguments.asyncId.toLowerCase(), isolatedId);
-        return response(request.id, gatewayChildAsyncStatusMcpResult({ ok: true, result: status }));
+        const asyncId = toolArguments.asyncId.toLowerCase();
+        const awaitStartedAt = Date.now();
+        const initialStatus = childAsyncRegistry.status(asyncId, isolatedId);
+        if (initialStatus.status !== 'running') {
+          return response(request.id, gatewayAwaitAsyncAlreadySettledMcpResult({
+            ok: false,
+            error: 'async task was already settled before await started',
+            result: {
+              ...initialStatus,
+              waitedMs: Date.now() - awaitStartedAt
+            }
+          }));
+        }
+        await childAsyncRegistry.waitForCompletion(asyncId, isolatedId, ms);
+        const status = childAsyncRegistry.status(asyncId, isolatedId);
+        return response(request.id, gatewayAwaitAsyncMcpResult({
+          ok: true,
+          result: {
+            ...status,
+            waitStatus: status.status === 'running' ? 'timeout' : 'settled',
+            ms,
+            waitedMs: Date.now() - awaitStartedAt
+          }
+        }));
       } catch (error) {
-        return response(request.id, gatewayChildAsyncStatusMcpResult({
+        return response(request.id, gatewayAwaitAsyncMcpResult({
           ok: false,
           error: error instanceof Error ? error.message : String(error)
         }, true));
