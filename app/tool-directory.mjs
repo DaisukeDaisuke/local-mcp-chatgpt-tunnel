@@ -13,7 +13,7 @@ export const GATEWAY_TRANSCRIPT_GET_NAME = 'gateway__transcript_get';
 
 export const toolDirectoryDefinition = {
   name: TOOL_DIRECTORY_NAME,
-  description: 'List currently available tools by full namespaced identifier and brief description. A prefix with zero matches returns the complete list.',
+  description: 'List currently available tools by full namespaced identifier and brief description. gateway__* and isolated__* tools are always included so callers can always discover Gateway and isolation controls. A prefix with zero matches returns the complete list.',
   annotations: {
     readOnlyHint: true,
     destructiveHint: false,
@@ -25,7 +25,7 @@ export const toolDirectoryDefinition = {
     properties: {
       prefix: {
         type: 'string',
-        description: 'Optional case-insensitive full-name prefix, for example chrome-devtools__ or chrome-devtools__click.'
+        description: 'Optional case-insensitive full-name prefix, for example chrome-devtools__ or chrome-devtools__click. Filtering never removes gateway__* or isolated__* tools.'
       }
     },
     additionalProperties: false
@@ -394,13 +394,21 @@ const summarizeTool = (tool) => ({
   description: typeof tool.description === 'string' ? tool.description : ''
 });
 
+const ALWAYS_INCLUDED_DIRECTORY_PREFIXES = ['gateway__', 'isolated__'];
+
 export function createToolDirectoryPayload({ tools, prefix, enabledProxyCount, rejectedToolCount, disabledProxyNames }) {
   const available = tools.map(summarizeTool).sort((left, right) => left.name.localeCompare(right.name));
   const normalizedPrefix = typeof prefix === 'string' ? prefix.trim().toLowerCase() : '';
   const matches = normalizedPrefix
     ? available.filter((tool) => tool.name.toLowerCase().startsWith(normalizedPrefix))
     : available;
-  const selected = normalizedPrefix && matches.length === 0 ? available : matches;
+  const requested = normalizedPrefix && matches.length === 0 ? available : matches;
+  const alwaysIncluded = available.filter((tool) => ALWAYS_INCLUDED_DIRECTORY_PREFIXES.some(
+    (requiredPrefix) => tool.name.toLowerCase().startsWith(requiredPrefix)
+  ));
+  const selected = [...new Map(
+    [...requested, ...alwaysIncluded].map((tool) => [tool.name, tool])
+  ).values()].sort((left, right) => left.name.localeCompare(right.name));
   return {
     tools: selected,
     availableToolCount: selected.length,
