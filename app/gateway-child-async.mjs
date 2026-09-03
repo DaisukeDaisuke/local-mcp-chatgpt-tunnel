@@ -1,20 +1,22 @@
 import { randomUUID } from 'node:crypto';
 
-export const GATEWAY_CHILD_ASYNC_PROMOTION_MS = 11_000;
-export const GATEWAY_WAIT_ASYNC_MAX_TIMEOUT_MS = 9_000;
+export const GATEWAY_CHILD_ASYNC_PROMOTION_MS = 28_000;
+export const GATEWAY_AWAIT_ASYNC_MIN_TIMEOUT_MS = 6_000;
+export const GATEWAY_AWAIT_ASYNC_MAX_TIMEOUT_MS = 28_000;
 export const GATEWAY_CHILD_ASYNC_RETENTION_MS = 10 * 60 * 1000;
 
-export const GATEWAY_CHILD_ASYNC_WARNING = 'リクエストは非同期化されました。状況は**gateway_childs_mcp_async_status**で確認し、操作が何かしらの理由でしばらくブロッキングしている場合は、そのasyncidを放棄して再度試してください';
-export const GATEWAY_WAIT_ASYNC_MESSAGE = '非同期タスクが長期間完了しない場合は、このタスクidは破棄ししださい。現在のコンテキストを放棄するという意味ではありません。';
+export const GATEWAY_CHILD_ASYNC_WARNING = '同期リクエストが28秒継続したため、Gateway側で観測された30秒前後の境界に余裕を持たせてリクエストを非同期化しました。破壊的操作はすでに行われている可能性があります。進捗確認は**gateway__await_async**へこのasyncIdと6000〜28000msの待機上限を指定してください。await中に完了した場合は即時返却し、未完了の場合だけ指定上限まで待つため、短周期でstatus確認を繰り返さないでください。';
+export const GATEWAY_AWAIT_ASYNC_MESSAGE = '同じasyncIdを追跡する場合はgateway__await_asyncを使用してください。待機上限は6000〜28000msで、待機中に完了した場合は即時返却します。';
+export const GATEWAY_AWAIT_ASYNC_ALREADY_SETTLED_MESSAGE = 'この非同期タスクはgateway__await_asyncの開始前にすでに完了または失敗していました。これはOpenAIによるツール時間制限やGatewayの作業時間制限を示すものではありません。保持されているstatus/resultを確認してください。';
 
 const errorMessage = (error) => error instanceof Error ? error.message : String(error);
 
 export function createGatewayChildAsyncRegistry({
-  promotionMs = GATEWAY_CHILD_ASYNC_PROMOTION_MS,
-  retentionMs = GATEWAY_CHILD_ASYNC_RETENTION_MS,
-  createId = () => randomUUID().toLowerCase(),
-  now = () => Date.now()
-} = {}) {
+                                                  promotionMs = GATEWAY_CHILD_ASYNC_PROMOTION_MS,
+                                                  retentionMs = GATEWAY_CHILD_ASYNC_RETENTION_MS,
+                                                  createId = () => randomUUID().toLowerCase(),
+                                                  now = () => Date.now()
+                                                } = {}) {
   const tasks = new Map();
   const isoNow = () => new Date(now()).toISOString();
 
@@ -58,20 +60,20 @@ export function createGatewayChildAsyncRegistry({
       completion: null
     };
     task.completion = Promise.resolve(promise).then(
-      (value) => {
-        task.finishedAtMs = now();
-        task.finishedAt = new Date(task.finishedAtMs).toISOString();
-        task.status = 'completed';
-        task.result = value;
-        return value;
-      },
-      (error) => {
-        task.finishedAtMs = now();
-        task.finishedAt = new Date(task.finishedAtMs).toISOString();
-        task.status = 'failed';
-        task.error = errorMessage(error);
-        throw error;
-      }
+        (value) => {
+          task.finishedAtMs = now();
+          task.finishedAt = new Date(task.finishedAtMs).toISOString();
+          task.status = 'completed';
+          task.result = value;
+          return value;
+        },
+        (error) => {
+          task.finishedAtMs = now();
+          task.finishedAt = new Date(task.finishedAtMs).toISOString();
+          task.status = 'failed';
+          task.error = errorMessage(error);
+          throw error;
+        }
     );
     tasks.set(asyncId, task);
     void task.completion.catch(() => {});
@@ -85,16 +87,16 @@ export function createGatewayChildAsyncRegistry({
       let result;
       let failure;
       const tracked = Promise.resolve(promise).then(
-        (value) => {
-          settled = true;
-          result = value;
-          return value;
-        },
-        (error) => {
-          settled = true;
-          failure = error;
-          return undefined;
-        }
+          (value) => {
+            settled = true;
+            result = value;
+            return value;
+          },
+          (error) => {
+            settled = true;
+            failure = error;
+            return undefined;
+          }
       );
 
       let timer;
@@ -174,7 +176,7 @@ export function gatewayChildAsyncPromotionMcpResult(status) {
     isolatedId: status.isolatedId,
     status: status.status,
     promotedAfterMs: status.promotedAfterMs,
-    statusTool: 'gateway_childs_mcp_async_status'
+    awaitTool: 'gateway__await_async'
   };
   return {
     content: [
@@ -185,22 +187,26 @@ export function gatewayChildAsyncPromotionMcpResult(status) {
   };
 }
 
-export function gatewayChildAsyncStatusMcpResult(value, isError = false) {
+export function gatewayAwaitAsyncMcpResult(value, isError = false) {
+  const payload = { ...value, message: GATEWAY_AWAIT_ASYNC_MESSAGE };
   return {
-    content: [{ type: 'text', text: JSON.stringify(value) }],
-    structuredContent: value,
+    content: [
+      { type: 'text', text: JSON.stringify(payload) },
+      { type: 'text', text: GATEWAY_AWAIT_ASYNC_MESSAGE }
+    ],
+    structuredContent: payload,
     isError
   };
 }
 
-export function gatewayWaitAsyncMcpResult(value, isError = false) {
-  const payload = { ...value, message: GATEWAY_WAIT_ASYNC_MESSAGE };
+export function gatewayAwaitAsyncAlreadySettledMcpResult(value) {
+  const payload = { ...value, message: GATEWAY_AWAIT_ASYNC_ALREADY_SETTLED_MESSAGE };
   return {
     content: [
       { type: 'text', text: JSON.stringify(payload) },
-      { type: 'text', text: GATEWAY_WAIT_ASYNC_MESSAGE }
+      { type: 'text', text: GATEWAY_AWAIT_ASYNC_ALREADY_SETTLED_MESSAGE }
     ],
     structuredContent: payload,
-    isError
+    isError: true
   };
 }
