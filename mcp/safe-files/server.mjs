@@ -416,10 +416,22 @@ async function canonicalizeExistingPrefix(path) {
   }
 }
 
+async function canonicalizeConfiguredDeniedPath(path, canonicalize = canonicalizeExistingPrefix) {
+  try {
+    return await canonicalize(path);
+  } catch (error) {
+    if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error;
+    // A sandbox may intentionally deny even metadata access to a configured deny root.
+    // Keep the deny rule usable instead of making every safe-files operation fail while
+    // trying to realpath the path that the sandbox was specifically told to block.
+    return resolve(path);
+  }
+}
+
 const denied = () => {
   deniedPromise ??= Promise.all([
-    Promise.all(configuredDisallowedDirectories.map(canonicalizeExistingPrefix)),
-    Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix))
+    Promise.all(configuredDisallowedDirectories.map((path) => canonicalizeConfiguredDeniedPath(path))),
+    Promise.all(configuredDisallowedFiles.map((path) => canonicalizeConfiguredDeniedPath(path)))
   ]).then(([directories, files]) => ({ directories, files }));
   return deniedPromise;
 };
@@ -1423,6 +1435,10 @@ export async function startStdio(input = process.stdin, output = process.stdout)
     }
   });
 }
+
+export const safeFilesInternals = {
+  canonicalizeConfiguredDeniedPath
+};
 
 if (directExecution) {
   if (cli.help) process.stdout.write(SAFE_FILES_HELP);

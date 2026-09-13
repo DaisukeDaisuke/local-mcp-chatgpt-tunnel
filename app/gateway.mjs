@@ -750,8 +750,8 @@ function multiStepMcpResult(payload, isError = false) {
       mode: payload.mode,
       status: 'completed',
       error: transcript
-        ? `multi-step response exceeds the 500KB limit (${bytes} bytes). Retained as transcriptId=${transcript.transcriptId}; use gateway__transcript_list then gateway__transcript_get.`
-        : `multi-step response exceeds the 500KB limit (${bytes} bytes)`
+        ? `multi-step response exceeds the 400KB limit (${bytes} bytes). Retained as transcriptId=${transcript.transcriptId}; use gateway__transcript_list then gateway__transcript_get.`
+        : `multi-step response exceeds the 400KB limit (${bytes} bytes)`
     };
     if (transcript) {
       limited.transcriptId = transcript.transcriptId;

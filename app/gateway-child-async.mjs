@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
-export const GATEWAY_CHILD_ASYNC_PROMOTION_MS = 40_000;
+export const GATEWAY_CHILD_ASYNC_PROMOTION_MS = 20_000;
 export const GATEWAY_AWAIT_ASYNC_MIN_TIMEOUT_MS = 6_000;
-export const GATEWAY_AWAIT_ASYNC_MAX_TIMEOUT_MS = 40_000;
+export const GATEWAY_AWAIT_ASYNC_MAX_TIMEOUT_MS = 20_000;
 export const GATEWAY_CHILD_ASYNC_RETENTION_MS = 10 * 60 * 1000;
 
 export const GATEWAY_CHILD_ASYNC_WARNING = '同期リクエストが40秒継続したため、リクエストを非同期化しました。破壊的操作はすでに行われている可能性があります。進捗確認は**gateway__await_async**へこのasyncIdと6000〜40000msの待機上限を指定してください。await中に完了した場合は即時返却し、未完了の場合だけ指定上限まで待つため、短周期でstatus確認を繰り返さないでください。';
