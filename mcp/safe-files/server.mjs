@@ -40,6 +40,7 @@ const configuredRoots = cli.help ? [] : JSON.parse(
 );
 const configuredDisallowedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES ?? '[]');
 const configuredDisallowedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_FILES ?? '[]');
+const configuredDisallowedPathsCanonical = !cli.help && process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL === '1';
 const configuredWriteProtectedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES ?? '[]');
 const configuredWriteProtectedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_FILES ?? '[]');
 const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
