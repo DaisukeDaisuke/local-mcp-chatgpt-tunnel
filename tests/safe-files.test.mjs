@@ -10,6 +10,7 @@ async function serverFor(root, suffix, options = {}) {
   process.env.SAFE_FILES_ROOTS = JSON.stringify(options.roots ?? [root]);
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = JSON.stringify(options.disallowedDirectories ?? []);
   process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
+  process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL = options.disallowedPathsCanonical === true ? '1' : '0';
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
   process.env.LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES = JSON.stringify(options.writeProtectedDirectories ?? []);
   process.env.LOCAL_MCP_WRITE_PROTECTED_FILES = JSON.stringify(options.writeProtectedFiles ?? []);

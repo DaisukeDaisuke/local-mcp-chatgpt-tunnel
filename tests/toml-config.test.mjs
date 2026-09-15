@@ -472,6 +472,19 @@ test('gateway config reserves the delegated Codex sandbox marker', async () => {
     assert.equal(error.message, 'mcp_servers.alpha.env may not override reserved path-policy variable LOCAL_MCP_CODEX_EXECUTABLE');
     return true;
   });
+
+  const canonicalDenyPath = join(directory, 'gateway-canonical-deny.toml');
+  await writeFile(canonicalDenyPath, [
+    'private_use_only = true',
+    '[mcp_servers.alpha]',
+    'command = "node"',
+    '[mcp_servers.alpha.env]',
+    'LOCAL_MCP_DISALLOWED_PATHS_CANONICAL = "1"'
+  ].join('\n'), 'utf8');
+  await assert.rejects(loadGatewayConfig(canonicalDenyPath), (error) => {
+    assert.equal(error.message, 'mcp_servers.alpha.env may not override reserved path-policy variable LOCAL_MCP_DISALLOWED_PATHS_CANONICAL');
+    return true;
+  });
 });
 
 test('bundled codex-script is sandboxed once at MCP startup', async () => {

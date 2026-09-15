@@ -16,6 +16,7 @@ async function importGitMcp(root, args, suffix, options = {}) {
   const previousAllowedFiles = process.env.LOCAL_MCP_ALLOWED_FILES;
   const previousDeniedDirectories = process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES;
   const previousDeniedFiles = process.env.LOCAL_MCP_DISALLOWED_FILES;
+  const previousDeniedPathsCanonical = process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL;
   const previousDeniedPathGlobs = process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS;
   const previousSandboxMode = process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;
   const effectiveArgs = options.omitGitExecutable === true
@@ -26,6 +27,7 @@ async function importGitMcp(root, args, suffix, options = {}) {
   process.env.LOCAL_MCP_ALLOWED_FILES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = '[]';
   process.env.LOCAL_MCP_DISALLOWED_FILES = JSON.stringify(options.disallowedFiles ?? []);
+  process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL = options.disallowedPathsCanonical === true ? '1' : '0';
   process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = JSON.stringify(options.disallowedPathGlobs ?? []);
   process.env.LOCAL_MCP_CODEX_SANDBOX_MODE = options.sandboxMode ?? 'never';
   try {
@@ -40,6 +42,8 @@ async function importGitMcp(root, args, suffix, options = {}) {
     else process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES = previousDeniedDirectories;
     if (previousDeniedFiles === undefined) delete process.env.LOCAL_MCP_DISALLOWED_FILES;
     else process.env.LOCAL_MCP_DISALLOWED_FILES = previousDeniedFiles;
+    if (previousDeniedPathsCanonical === undefined) delete process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL;
+    else process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL = previousDeniedPathsCanonical;
     if (previousDeniedPathGlobs === undefined) delete process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS;
     else process.env.LOCAL_MCP_DISALLOWED_PATH_GLOBS = previousDeniedPathGlobs;
     if (previousSandboxMode === undefined) delete process.env.LOCAL_MCP_CODEX_SANDBOX_MODE;

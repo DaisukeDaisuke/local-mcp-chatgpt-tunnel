@@ -95,6 +95,33 @@ test('deny entries outside every allowed root are irrelevant instead of invalida
   await assert.doesNotReject(policy.assertToolArguments('read', { path: 'src\\index.js' }));
   await assert.rejects(policy.assertToolArguments('read', { path: 'C:\\other\\private\\secret.txt' }), /outside allowed_directories/);
 });
+
+test('path policy only trusts pre-canonicalized deny entries when explicitly requested by the caller', async () => {
+  const previous = process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL;
+  process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL = '1';
+  try {
+    const ordinary = new ToolPathPolicy({
+      serverName: 'gateway-parent',
+      platform: 'win32',
+      cwd: 'C:\\work',
+      allowedDirectories: ['C:\\work'],
+      disallowedDirectories: ['C:\\work\\private']
+    });
+    const delegated = new ToolPathPolicy({
+      serverName: 'sandbox-child',
+      platform: 'win32',
+      cwd: 'C:\\work',
+      allowedDirectories: ['C:\\work'],
+      disallowedDirectories: ['C:\\work\\private'],
+      disallowedPathsCanonical: true
+    });
+    assert.equal(ordinary.disallowedPathsCanonical, false);
+    assert.equal(delegated.disallowedPathsCanonical, true);
+  } finally {
+    if (previous === undefined) delete process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL;
+    else process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL = previous;
+  }
+});
 for (const platform of ['linux', 'darwin']) {
   test(`path policy uses POSIX path rules on ${platform}`, async () => {
     const policy = new ToolPathPolicy({

@@ -70,6 +70,7 @@ const configuredAllowedDirectories = cli.help ? [] : pathArray('LOCAL_MCP_ALLOWE
 const configuredAllowedFiles = cli.help ? [] : pathArray('LOCAL_MCP_ALLOWED_FILES');
 const configuredDisallowedDirectories = cli.help ? [] : pathArray('LOCAL_MCP_DISALLOWED_DIRECTORIES');
 const configuredDisallowedFiles = cli.help ? [] : pathArray('LOCAL_MCP_DISALLOWED_FILES');
+const configuredDisallowedPathsCanonical = !cli.help && process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL === '1';
 const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
   pathArray('LOCAL_MCP_DISALLOWED_PATH_GLOBS'),
   'LOCAL_MCP_DISALLOWED_PATH_GLOBS'
@@ -314,8 +315,12 @@ async function policy() {
     return {
       allowedDirectories: await Promise.all(configuredAllowedDirectories.map(canonicalDirectory)),
       allowedFiles: await Promise.all(configuredAllowedFiles.map(canonicalExisting)),
-      disallowedDirectories: await Promise.all(configuredDisallowedDirectories.map(canonicalizeExistingPrefix)),
-      disallowedFiles: await Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix)),
+      disallowedDirectories: configuredDisallowedPathsCanonical
+        ? configuredDisallowedDirectories.map((path) => resolve(path))
+        : await Promise.all(configuredDisallowedDirectories.map(canonicalizeExistingPrefix)),
+      disallowedFiles: configuredDisallowedPathsCanonical
+        ? configuredDisallowedFiles.map((path) => resolve(path))
+        : await Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix)),
       disallowedPathGlobs: configuredDisallowedPathGlobs
     };
   })();

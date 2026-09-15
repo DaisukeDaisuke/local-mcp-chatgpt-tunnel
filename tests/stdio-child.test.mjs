@@ -25,7 +25,13 @@ process.stdin.on('data', (chunk) => {
     } else if (request.method === 'tools/list') {
       reply = { jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'environment', inputSchema: { type: 'object' } }] } };
     } else if (request.method === 'tools/call' && request.params?.name === 'environment') {
-      reply = { jsonrpc: '2.0', id: request.id, result: { disallowedFiles: JSON.parse(process.env.LOCAL_MCP_DISALLOWED_FILES ?? '[]') } };
+      reply = { jsonrpc: '2.0', id: request.id, result: {
+        disallowedDirectories: JSON.parse(process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES ?? '[]'),
+        disallowedFiles: JSON.parse(process.env.LOCAL_MCP_DISALLOWED_FILES ?? '[]'),
+        disallowedPathsCanonical: process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL ?? null,
+        writeProtectedDirectories: JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES ?? '[]'),
+        writeProtectedFiles: JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_FILES ?? '[]')
+      } };
     }
     if (reply) process.stdout.write(JSON.stringify(reply) + '\\n');
   }
@@ -68,6 +74,47 @@ test('stdio child passes gateway config protection only when the config is insid
 
   assert.deepEqual(await observedDisallowedFiles([outsideConfig]), []);
   assert.deepEqual(await observedDisallowedFiles([insideConfig]), [insideConfig]);
+});
+
+test('stdio child passes pre-canonicalized sandbox deny paths without making the child resolve denied paths again', async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), 'stdio-child-canonical-deny-'));
+  const serverPath = await environmentFixture(workspace);
+  const canonicalDeniedDirectory = join(workspace, 'canonical-denied-directory');
+  const canonicalDeniedFile = join(workspace, 'canonical-denied-file.txt');
+  const protectedSourceDirectory = join(workspace, 'app');
+  const protectedSourceFile = join(protectedSourceDirectory, 'gateway.mjs');
+  const child = new StdioMcpChild({
+    name: 'environment-fixture',
+    command: process.execPath,
+    args: [serverPath],
+    cwd: workspace,
+    env: {},
+    allowedDirectories: [workspace],
+    allowedFiles: [],
+    disallowedDirectories: [join(workspace, 'uncanonicalized-directory')],
+    disallowedFiles: [join(workspace, 'uncanonicalized-file.txt')],
+    protectedGatewayConfigPaths: [],
+    protectedGatewayLogDirectories: [join(workspace, 'logs')],
+    protectedGatewayLogFiles: [],
+    protectedGatewayAppDirectories: [protectedSourceDirectory],
+    protectedGatewayAppFiles: [protectedSourceFile],
+    sandboxDeniedDirectories: [canonicalDeniedDirectory],
+    sandboxDeniedFiles: [canonicalDeniedFile],
+    safeFilesServer: true,
+    dangerousAllowGatewayConfigAccess: false,
+    startupTimeoutMs: 5000,
+    requestTimeoutMs: 5000,
+    sandbox: 'elevated',
+    sandboxDelegated: true
+  });
+  t.after(() => child.close());
+  await child.start();
+  const result = await child.request('tools/call', { name: 'environment', arguments: {} });
+  assert.deepEqual(result.disallowedDirectories, [canonicalDeniedDirectory]);
+  assert.deepEqual(result.disallowedFiles, [canonicalDeniedFile]);
+  assert.equal(result.disallowedPathsCanonical, '1');
+  assert.deepEqual(result.writeProtectedDirectories, [protectedSourceDirectory]);
+  assert.deepEqual(result.writeProtectedFiles, [protectedSourceFile]);
 });
 
 test('stdio child includes captured stdout and stderr when a child exits during initialization', async (t) => {

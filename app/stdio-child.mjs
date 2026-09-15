@@ -58,20 +58,31 @@ export class StdioMcpChild {
     const protectedGatewayLogFiles = this.config.protectedGatewayLogFiles ?? [];
     const protectedGatewayAppDirectories = this.config.protectedGatewayAppDirectories ?? [];
     const protectedGatewayAppFiles = this.config.protectedGatewayAppFiles ?? [];
-    const disallowedDirectories = [...new Set([
-      ...(this.config.disallowedDirectories ?? []),
-      ...protectedGatewayLogDirectories
-    ])];
-    const disallowedFiles = [...new Set([
-      ...(this.config.disallowedFiles ?? []),
-      ...protectedGatewayConfigPaths,
-      ...protectedGatewayLogFiles
-    ])];
+    // The Gateway canonicalizes these before the Codex sandbox activates its deny rules.
+    // Re-resolving the denied paths inside the child can now fail with EPERM on Windows.
+    const canonicalSandboxDenies = this.config.sandbox !== undefined
+      && this.config.sandbox !== 'never'
+      && Array.isArray(this.config.sandboxDeniedDirectories)
+      && Array.isArray(this.config.sandboxDeniedFiles);
+    const disallowedDirectories = canonicalSandboxDenies
+      ? [...new Set(this.config.sandboxDeniedDirectories)]
+      : [...new Set([
+        ...(this.config.disallowedDirectories ?? []),
+        ...protectedGatewayLogDirectories
+      ])];
+    const disallowedFiles = canonicalSandboxDenies
+      ? [...new Set(this.config.sandboxDeniedFiles)]
+      : [...new Set([
+        ...(this.config.disallowedFiles ?? []),
+        ...protectedGatewayConfigPaths,
+        ...protectedGatewayLogFiles
+      ])];
     const policyEnvironment = {
       LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify(this.config.allowedDirectories ?? []),
       LOCAL_MCP_ALLOWED_FILES: JSON.stringify(this.config.allowedFiles ?? []),
       LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify(disallowedDirectories),
       LOCAL_MCP_DISALLOWED_FILES: JSON.stringify(disallowedFiles),
+      LOCAL_MCP_DISALLOWED_PATHS_CANONICAL: canonicalSandboxDenies ? '1' : '0',
       LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(this.config.disallowedPathGlobs ?? []),
       ...(this.config.safeFilesServer
         ? {

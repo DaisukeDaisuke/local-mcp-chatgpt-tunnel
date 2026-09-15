@@ -169,7 +169,7 @@ function displayKeyPath(parts) {
   return parts.reduce((text, part) => typeof part === 'number' ? `${text}[${part}]` : text ? `${text}.${part}` : part, '');
 }
 
-async function normalizeAllowedEntries(values, base, kind, platform) {
+async function normalizeAllowedEntries(values, base, kind, platform, alreadyCanonical = false) {
   const entries = [];
   for (const value of values) {
     const normalized = normalizeLexical(value, base, platform);
@@ -180,7 +180,7 @@ async function normalizeAllowedEntries(values, base, kind, platform) {
     entries.push({
       style: normalized.style,
       lexical: normalized.path,
-      canonical: await canonicalizeExistingPrefix(normalized.style, normalized.path)
+      canonical: alreadyCanonical ? normalized.path : await canonicalizeExistingPrefix(normalized.style, normalized.path)
     });
   }
   return entries;
@@ -196,6 +196,7 @@ export class ToolPathPolicy {
     disallowedFiles = [],
     protectedFiles = [],
     disallowedPathGlobs = [],
+    disallowedPathsCanonical = false,
     platform = process.platform
   }) {
     this.serverName = serverName;
@@ -206,6 +207,7 @@ export class ToolPathPolicy {
     this.disallowedFilesInput = disallowedFiles;
     this.protectedFilesInput = protectedFiles;
     this.disallowedPathGlobs = normalizeDisallowedPathGlobs(disallowedPathGlobs);
+    this.disallowedPathsCanonical = disallowedPathsCanonical;
     this.platform = platform;
     this.allowedPromise = null;
   }
@@ -214,8 +216,8 @@ export class ToolPathPolicy {
     this.allowedPromise ??= Promise.all([
       normalizeAllowedEntries(this.allowedDirectoriesInput, this.cwd, 'allowed_directories', this.platform),
       normalizeAllowedEntries(this.allowedFilesInput, this.cwd, 'allowed_files', this.platform),
-      normalizeAllowedEntries(this.disallowedDirectoriesInput, this.cwd, 'disallowed_directories', this.platform),
-      normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files', this.platform),
+      normalizeAllowedEntries(this.disallowedDirectoriesInput, this.cwd, 'disallowed_directories', this.platform, this.disallowedPathsCanonical),
+      normalizeAllowedEntries(this.disallowedFilesInput, this.cwd, 'disallowed_files', this.platform, this.disallowedPathsCanonical),
       normalizeAllowedEntries(this.protectedFilesInput, this.cwd, 'protected_files', this.platform)
     ]).then(([directories, files, disallowedDirectories, disallowedFiles, protectedFiles]) => {
       const relevantDisallowedDirectories = disallowedDirectories.filter((entry) => directories.some((allowed) => allowed.style === entry.style

@@ -40,6 +40,7 @@ const configuredRoots = cli.help ? [] : JSON.parse(
 );
 const configuredDisallowedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_DIRECTORIES ?? '[]');
 const configuredDisallowedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_DISALLOWED_FILES ?? '[]');
+const configuredDisallowedPathsCanonical = !cli.help && process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL === '1';
 const configuredWriteProtectedDirectories = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_DIRECTORIES ?? '[]');
 const configuredWriteProtectedFiles = cli.help ? [] : JSON.parse(process.env.LOCAL_MCP_WRITE_PROTECTED_FILES ?? '[]');
 const configuredDisallowedPathGlobs = cli.help ? [] : normalizeDisallowedPathGlobs(
@@ -418,8 +419,12 @@ async function canonicalizeExistingPrefix(path) {
 
 const denied = () => {
   deniedPromise ??= Promise.all([
-    Promise.all(configuredDisallowedDirectories.map(canonicalizeExistingPrefix)),
-    Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix))
+    configuredDisallowedPathsCanonical
+      ? configuredDisallowedDirectories.map((path) => resolve(path))
+      : Promise.all(configuredDisallowedDirectories.map(canonicalizeExistingPrefix)),
+    configuredDisallowedPathsCanonical
+      ? configuredDisallowedFiles.map((path) => resolve(path))
+      : Promise.all(configuredDisallowedFiles.map(canonicalizeExistingPrefix))
   ]).then(([directories, files]) => ({ directories, files }));
   return deniedPromise;
 };

@@ -41,7 +41,16 @@ const allowedFiles = pathArray('LOCAL_MCP_ALLOWED_FILES');
 const disallowedDirectories = pathArray('LOCAL_MCP_DISALLOWED_DIRECTORIES');
 const disallowedFiles = pathArray('LOCAL_MCP_DISALLOWED_FILES');
 const isolation = createBundledIsolation();
-const policy = new ToolPathPolicy({ serverName: 'internet', cwd: process.cwd(), allowedDirectories, allowedFiles, disallowedDirectories, disallowedFiles, disallowedPathGlobs: pathArray('LOCAL_MCP_DISALLOWED_PATH_GLOBS') });
+const policy = new ToolPathPolicy({
+  serverName: 'internet',
+  cwd: process.cwd(),
+  allowedDirectories,
+  allowedFiles,
+  disallowedDirectories,
+  disallowedFiles,
+  disallowedPathGlobs: pathArray('LOCAL_MCP_DISALLOWED_PATH_GLOBS'),
+  disallowedPathsCanonical: process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL === '1'
+});
 const MAX_BYTES = positiveInteger('INTERNET_MAX_BYTES', DEFAULT_MAX_BYTES);
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });

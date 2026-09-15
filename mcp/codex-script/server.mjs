@@ -169,7 +169,8 @@ const policy = new ToolPathPolicy({
   allowedFiles: configuredAllowedFiles,
   disallowedDirectories: configuredDisallowedDirectories,
   disallowedFiles: configuredDisallowedFiles,
-  disallowedPathGlobs: configuredDisallowedPathGlobs
+  disallowedPathGlobs: configuredDisallowedPathGlobs,
+  disallowedPathsCanonical: process.env.LOCAL_MCP_DISALLOWED_PATHS_CANONICAL === '1'
 });
 let standaloneWorkingDirectoryPromise = null;
 
