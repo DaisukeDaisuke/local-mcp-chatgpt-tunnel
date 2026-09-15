@@ -16,3 +16,4 @@ profile-*/
 /.idea
 /config/tool-annotations.toml
 /logs
+/config/gateway-debug.toml

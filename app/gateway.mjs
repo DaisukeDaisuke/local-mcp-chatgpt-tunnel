@@ -73,13 +73,13 @@ scrubSecretEnvironment(process.env);
 await assertNotElevatedWindows();
 
 const MAX_TOOL_NAME = 64;
-const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 350 * 1024;
+const DEFAULT_TEXT_RESPONSE_LIMIT_BYTES = 400 * 1024;
 const TEXT_RESPONSE_PREVIEW_BYTES = 512;
 const FILES_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_FILES_MAX_RESPONSE_BYTES';
 const CODESPACE_RESPONSE_LIMIT_ENV = 'LOCAL_MCP_CODESPACE_MAX_RESPONSE_BYTES';
-const MULTI_STEP_RESPONSE_LIMIT_BYTES = 350 * 1024;
-const TRANSCRIPT_RETENTION_LIMIT_BYTES = 3 * 1024 * 1024;
-const TRANSCRIPT_PAGE_BYTES = 256 * 1024;
+const MULTI_STEP_RESPONSE_LIMIT_BYTES = 400 * 1024;
+const TRANSCRIPT_RETENTION_LIMIT_BYTES = 5 * 1024 * 1024;
+const TRANSCRIPT_PAGE_BYTES = 350 * 1024;
 const responseTranscripts = new Map();
 let responseTranscriptBytes = 0;
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
@@ -750,8 +750,8 @@ function multiStepMcpResult(payload, isError = false) {
       mode: payload.mode,
       status: 'completed',
       error: transcript
-        ? `multi-step response exceeds the 350KB limit (${bytes} bytes). Retained as transcriptId=${transcript.transcriptId}; use gateway__transcript_list then gateway__transcript_get.`
-        : `multi-step response exceeds the 350KB limit (${bytes} bytes)`
+        ? `multi-step response exceeds the 400KB limit (${bytes} bytes). Retained as transcriptId=${transcript.transcriptId}; use gateway__transcript_list then gateway__transcript_get.`
+        : `multi-step response exceeds the 400KB limit (${bytes} bytes)`
     };
     if (transcript) {
       limited.transcriptId = transcript.transcriptId;
