@@ -17,6 +17,7 @@ const CODESPACE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codespace', 'serve
 const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-files', 'server.mjs'],
   ['mcp', 'safe-images', 'server.mjs'],
+  ['mcp', 'image-magick', 'server.mjs'],
   ['mcp', 'safe-download', 'server.mjs'],
   ['mcp', 'gitmcp', 'server.mjs'],
   ['mcp', 'git-capability', 'server.mjs'],

@@ -1,0 +1,17 @@
+# Minimal gateway.toml fragment for the bundled image-magick MCP.
+# Replace every C:\ABSOLUTE\... placeholder before enabling it.
+[mcp_servers.image_magick]
+command = "node"
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\image-magick\server.mjs', '--magick-executable=C:\ABSOLUTE\PATH\TO\ImageMagick\magick.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\IMAGE\WORKSPACE'
+enabled = true
+prefix = "image_magick"
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\IMAGE\WORKSPACE']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']
