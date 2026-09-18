@@ -119,10 +119,7 @@ export function codexWindowsSandboxLaunchSpec(codexExecutable, config, childEnvi
   const permissionProfileOverride = codexAppServerInternals.permissionProfileOverrideFor(config, {
     requireElevatedWindowsRootRead: config.sandbox === 'elevated' || config.sandbox === 'onlineworkspace'
   });
-<<<<<<< HEAD
   const launcherEnvironment = codexLauncherEnvironment(config, childEnvironment);
-=======
->>>>>>> 05cd3fcbb9e2496e41b066c40a2c780dab019518
   const sandboxArgs = [
     '-c', permissionProfileOverride,
     '-c', windowsSandboxOverride(config.sandbox),
