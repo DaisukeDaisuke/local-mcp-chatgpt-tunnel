@@ -132,6 +132,66 @@ test('Windows MCP sandbox uses codex sandbox with inherited stdio instead of str
   );
 });
 
+test('elevated Windows MCP sandbox avoids Codex CUA runtime refresh while restoring LOCALAPPDATA for the MCP', () => {
+  const childEnvironment = {
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+    USERPROFILE: 'C:\\Users\\owner',
+    LOCALAPPDATA: 'C:\\Users\\owner\\AppData\\Local',
+    PATH: 'C:\\Windows\\System32'
+  };
+  const launch = codexWindowsSandboxLaunchSpec(
+    'C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd',
+    {
+      name: 'files',
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
+      cwd: 'C:\\work',
+      sandbox: 'elevated',
+      allowedDirectories: ['C:\\work'],
+      allowedFiles: [],
+      sandboxReadOnlyDirectories: [],
+      isBundled: false
+    },
+    childEnvironment
+  );
+
+  assert.notEqual(launch.options.env, childEnvironment);
+  assert.equal(launch.options.env.LOCALAPPDATA, 'C:\\__local_mcp_codex_no_runtime__');
+  assert.equal(childEnvironment.LOCALAPPDATA, 'C:\\Users\\owner\\AppData\\Local');
+  assert.equal(
+    launch.args[4].includes(
+      `"-c" "${codexWindowsSandboxInternals.sanitizedChildEnvironmentOverrideFor('C:\\Users\\owner\\AppData\\Local')}"`
+    ),
+    true
+  );
+});
+
+test('unelevated Windows MCP sandbox does not rewrite LOCALAPPDATA', () => {
+  const childEnvironment = {
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+    USERPROFILE: 'C:\\Users\\owner',
+    LOCALAPPDATA: 'C:\\Users\\owner\\AppData\\Local'
+  };
+  const launch = codexWindowsSandboxLaunchSpec(
+    'C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd',
+    {
+      name: 'files',
+      command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
+      cwd: 'C:\\work',
+      sandbox: 'unelevated',
+      allowedDirectories: ['C:\\work'],
+      allowedFiles: [],
+      sandboxReadOnlyDirectories: [],
+      isBundled: false
+    },
+    childEnvironment
+  );
+
+  assert.equal(launch.options.env, childEnvironment);
+  assert.equal(launch.options.env.LOCALAPPDATA, 'C:\\Users\\owner\\AppData\\Local');
+});
+
 test('Windows Codex sandbox process carries MCP JSON-RPC bidirectionally over inherited stdio', async () => {
   const child = new EventEmitter();
   child.stdin = new PassThrough();

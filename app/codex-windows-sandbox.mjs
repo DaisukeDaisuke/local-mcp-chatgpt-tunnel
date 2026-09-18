@@ -6,6 +6,72 @@ import { codexAppServerInternals } from './codex-app-server.mjs';
 const CODEX_PERMISSION_PROFILE_ID = 'local_mcp_gateway';
 const SANITIZED_CHILD_ENVIRONMENT_OVERRIDE = "shell_environment_policy={inherit='all',ignore_default_excludes=true,exclude=[],set={},include_only=[],use_profile=false}";
 
+function environmentValueCaseInsensitive(env, name) {
+  const target = String(name).toLowerCase();
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (key.toLowerCase() === target && typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function environmentWithoutKeyCaseInsensitive(env, name) {
+  const target = String(name).toLowerCase();
+  return Object.fromEntries(Object.entries(env ?? {}).filter(([key]) => key.toLowerCase() !== target));
+}
+
+function realLocalAppDataFor(env) {
+  const configured = environmentValueCaseInsensitive(env, 'LOCALAPPDATA');
+  if (configured) return configured;
+  const userProfile = environmentValueCaseInsensitive(env, 'USERPROFILE');
+  return userProfile ? win32.join(userProfile, 'AppData', 'Local') : null;
+}
+
+function tomlLiteral(value, label) {
+  const text = String(value);
+  if (/[\u0000-\u001f\u007f']/.test(text)) {
+    throw new Error(`${label} cannot be represented safely in the temporary Codex shell environment policy`);
+  }
+  return `'${text}'`;
+}
+
+function sanitizedChildEnvironmentOverrideFor(realLocalAppData) {
+  if (!realLocalAppData) return SANITIZED_CHILD_ENVIRONMENT_OVERRIDE;
+  return `shell_environment_policy={inherit='all',ignore_default_excludes=true,exclude=[],set={LOCALAPPDATA=${tomlLiteral(realLocalAppData, 'LOCALAPPDATA')}},include_only=[],use_profile=false}`;
+}
+
+function codexLauncherEnvironment(config, childEnvironment) {
+  if (config.sandbox !== 'elevated' && config.sandbox !== 'onlineworkspace') {
+    return {
+      env: childEnvironment,
+      childEnvironmentOverride: SANITIZED_CHILD_ENVIRONMENT_OVERRIDE
+    };
+  }
+
+  const realLocalAppData = realLocalAppDataFor(childEnvironment);
+  if (!realLocalAppData) {
+    return {
+      env: childEnvironment,
+      childEnvironmentOverride: SANITIZED_CHILD_ENVIRONMENT_OVERRIDE
+    };
+  }
+
+  // Codex 2026-09-18's elevated Windows setup refresh recursively validates
+  // %LOCALAPPDATA%\OpenAI\Codex\runtimes before launching every command. A
+  // deeply nested CUA pnpm cache can exceed what that helper's CreateFileW
+  // path handling accepts and abort otherwise unrelated MCP launches. The MCP
+  // does not consume that Codex-internal runtime. Point only the outer Codex
+  // launcher at a deliberately absent LocalAppData root, then restore the
+  // caller's real LOCALAPPDATA through Codex's child environment policy.
+  const driveRoot = win32.parse(realLocalAppData).root || win32.parse(config.cwd).root;
+  const syntheticLocalAppData = win32.join(driveRoot, '__local_mcp_codex_no_runtime__');
+  const env = environmentWithoutKeyCaseInsensitive(childEnvironment, 'LOCALAPPDATA');
+  env.LOCALAPPDATA = syntheticLocalAppData;
+  return {
+    env,
+    childEnvironmentOverride: sanitizedChildEnvironmentOverrideFor(realLocalAppData)
+  };
+}
+
 function within(root, candidate) {
   const path = win32.relative(root, candidate);
   return path === '' || (path !== '..' && !path.startsWith(`..${win32.sep}`) && !win32.isAbsolute(path));
@@ -53,10 +119,14 @@ export function codexWindowsSandboxLaunchSpec(codexExecutable, config, childEnvi
   const permissionProfileOverride = codexAppServerInternals.permissionProfileOverrideFor(config, {
     requireElevatedWindowsRootRead: config.sandbox === 'elevated' || config.sandbox === 'onlineworkspace'
   });
+<<<<<<< HEAD
+  const launcherEnvironment = codexLauncherEnvironment(config, childEnvironment);
+=======
+>>>>>>> 05cd3fcbb9e2496e41b066c40a2c780dab019518
   const sandboxArgs = [
     '-c', permissionProfileOverride,
     '-c', windowsSandboxOverride(config.sandbox),
-    '-c', SANITIZED_CHILD_ENVIRONMENT_OVERRIDE,
+    '-c', launcherEnvironment.childEnvironmentOverride,
     'sandbox',
     '--permission-profile', CODEX_PERMISSION_PROFILE_ID,
     '-C', config.cwd,
@@ -66,7 +136,7 @@ export function codexWindowsSandboxLaunchSpec(codexExecutable, config, childEnvi
   ];
   const options = {
     cwd: config.cwd,
-    env: childEnvironment,
+    env: launcherEnvironment.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
     shell: false
@@ -208,5 +278,7 @@ export class CodexWindowsSandboxedProcess {
 
 export const codexWindowsSandboxInternals = {
   SANITIZED_CHILD_ENVIRONMENT_OVERRIDE,
+  codexLauncherEnvironment,
+  sanitizedChildEnvironmentOverrideFor,
   windowsSandboxOverride
 };
