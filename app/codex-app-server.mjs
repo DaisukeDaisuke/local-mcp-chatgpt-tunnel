@@ -54,7 +54,7 @@ function configuredWithin(root, candidate) {
   return path === '' || (path !== '..' && !path.startsWith(`..${separator}`) && !absolute);
 }
 
-function permissionProfileOverrideFor(config) {
+function permissionProfileOverrideFor(config, { requireElevatedWindowsRootRead = false } = {}) {
   const gatewayAppRoot = config.gatewayAppDirectory ?? repositoryAppRoot;
   const writableRoots = [...new Set([
     ...(config.allowedDirectories ?? []),
@@ -83,6 +83,13 @@ function permissionProfileOverrideFor(config) {
     ...(config.isBundled ? [gatewayAppRoot] : [])
   ])];
   const entries = new Map([[':minimal', 'read']]);
+  // Current Codex elevated Windows sandbox validation requires the effective
+  // permission profile to grant symbolic :root read access. The elevated
+  // backend still materializes the concrete read roots itself, while the
+  // Gateway/MCP path policy continues to constrain exposed filesystem tools.
+  if (requireElevatedWindowsRootRead) {
+    entries.set(':root', 'read');
+  }
   for (const path of readableRoots) {
     if (!writableRoots.some((root) => configuredWithin(root, path))) entries.set(path, 'read');
   }

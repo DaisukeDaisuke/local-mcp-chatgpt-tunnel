@@ -128,7 +128,7 @@ test('Windows MCP sandbox uses codex sandbox with inherited stdio instead of str
   assert.equal(launch.args[3], '/c');
   assert.equal(
     launch.args[4],
-    `""C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd" "-c" "permissions.local_mcp_gateway={filesystem={':minimal'='read','C:\\Program Files\\nodejs'='read','C:\\repo\\mcp\\safe-files'='read','C:\\work'='write'},network={enabled=false}}" "-c" "windows.sandbox='elevated'" "-c" "${codexWindowsSandboxInternals.SANITIZED_CHILD_ENVIRONMENT_OVERRIDE}" "sandbox" "--permission-profile" "local_mcp_gateway" "-C" "C:\\work" "--" "C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\mcp\\safe-files\\server.mjs""`
+    `""C:\\Users\\owner\\AppData\\Roaming\\npm\\codex.cmd" "-c" "permissions.local_mcp_gateway={filesystem={':minimal'='read',':root'='read','C:\\Program Files\\nodejs'='read','C:\\repo\\mcp\\safe-files'='read','C:\\work'='write'},network={enabled=false}}" "-c" "windows.sandbox='elevated'" "-c" "${codexWindowsSandboxInternals.SANITIZED_CHILD_ENVIRONMENT_OVERRIDE}" "sandbox" "--permission-profile" "local_mcp_gateway" "-C" "C:\\work" "--" "C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\mcp\\safe-files\\server.mjs""`
   );
 });
 
@@ -297,7 +297,7 @@ test('protect_gateway_app=false removes a stale Gateway app read-only carveout f
 });
 
 
-test('onlineworkspace permission profile enables network without widening filesystem roots', () => {
+test('onlineworkspace permission profile enables network without adding writable roots', () => {
   const override = codexAppServerInternals.permissionProfileOverrideFor({
     command: 'C:\\Program Files\\nodejs\\node.exe',
     args: ['C:\\repo\\mcp\\internet\\server.mjs'],
@@ -310,6 +310,32 @@ test('onlineworkspace permission profile enables network without widening filesy
   assert.equal(override.includes("'C:\\workspace'='write'"), true);
   assert.equal(override.includes("'C:\\repo'='write'"), false);
   assert.equal(override.endsWith('},network={enabled=true}}'), true);
+});
+
+test('Windows elevated permission profile can include the Codex-required symbolic root read grant', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'C:\\Program Files\\nodejs\\node.exe',
+    args: ['C:\\repo\\mcp\\safe-files\\server.mjs'],
+    allowedDirectories: ['C:\\workspace'],
+    allowedFiles: [],
+    sandboxReadOnlyDirectories: [],
+    isBundled: true,
+    sandbox: 'elevated'
+  }, { requireElevatedWindowsRootRead: true });
+  assert.equal(override.includes("':minimal'='read',':root'='read'"), true);
+});
+
+test('permission profile does not add the Windows elevated-only symbolic root read grant by default', () => {
+  const override = codexAppServerInternals.permissionProfileOverrideFor({
+    command: 'node',
+    args: ['server.mjs'],
+    allowedDirectories: ['C:\\workspace'],
+    allowedFiles: [],
+    sandboxReadOnlyDirectories: [],
+    isBundled: false,
+    sandbox: 'elevated'
+  });
+  assert.equal(override.includes("':root'='read'"), false);
 });
 
 test('offline child MCP can explicitly enable local binding without enabling internet access', () => {

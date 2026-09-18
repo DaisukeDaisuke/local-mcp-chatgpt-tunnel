@@ -50,7 +50,9 @@ export function codexWindowsSandboxLaunchSpec(codexExecutable, config, childEnvi
     throw new Error(`${config?.name ?? 'MCP'} cwd must be an absolute Windows path for Codex sandbox`);
   }
 
-  const permissionProfileOverride = codexAppServerInternals.permissionProfileOverrideFor(config);
+  const permissionProfileOverride = codexAppServerInternals.permissionProfileOverrideFor(config, {
+    requireElevatedWindowsRootRead: config.sandbox === 'elevated' || config.sandbox === 'onlineworkspace'
+  });
   const sandboxArgs = [
     '-c', permissionProfileOverride,
     '-c', windowsSandboxOverride(config.sandbox),
