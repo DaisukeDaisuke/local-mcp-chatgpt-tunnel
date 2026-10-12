@@ -1,0 +1,23 @@
+private_use_only = true
+protect_gateway_app = true
+publish_tool_directory = true
+# Replace the paths and token before enabling this server.
+# --repository=OWNER/REPO is optional; omit it to permit any public github.com repository.
+[mcp_servers.gh_issue]
+command = 'C:\ABSOLUTE\PATH\TO\node.exe'
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-issue\server.mjs', '--token=REPLACE_WITH_GITHUB_TOKEN', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe']
+cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
+enabled = false
+sandbox = 'onlineworkspace'
+codex_executable = 'C:\ABSOLUTE\PATH\TO\codex.cmd'
+prefix = 'gh_issue'
+annotation_config = false
+dangerous_allow_gateway_config_access = false
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+serial_group = 'gh_issue'
+allowed_directories = ['C:\ABSOLUTE\PATH\TO\YOUR\PROJECT']
+allowed_files = []
+disallowed_directories = []
+disallowed_files = []
+disallowed_path_globs = ['**.ssh**']

@@ -14,6 +14,7 @@ const BUILD_V5T_ASSEMBLY_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'buildv5ta
 const INTERNET_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'internet', 'server.mjs');
 const ARCHIVE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'archive', 'server.mjs');
 const CODESPACE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codespace', 'server.mjs');
+const GH_ISSUE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'gh-issue', 'server.mjs');
 const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-files', 'server.mjs'],
   ['mcp', 'safe-images', 'server.mjs'],
@@ -22,6 +23,7 @@ const BUNDLED_SERVER_PATHS = [
   ['mcp', 'gitmcp', 'server.mjs'],
   ['mcp', 'git-capability', 'server.mjs'],
   ['mcp', 'gh-workflow', 'server.mjs'],
+  ['mcp', 'gh-issue', 'server.mjs'],
   ['mcp', 'codex-script', 'server.mjs'],
   ['mcp', 'buildv5tassembly', 'server.mjs'],
   ['mcp', 'internet', 'server.mjs'],
@@ -254,6 +256,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const internetServer = isInternetServer(raw.command, args, cwd, platform);
   const archiveServer = isArchiveServer(raw.command, args, cwd, platform);
   const codespaceServer = isCodespaceServer(raw.command, args, cwd, platform);
+  const ghIssueServer = isServerPath(raw.command, args, cwd, GH_ISSUE_SERVER_PATH, platform);
   const safeFilesServer = isSafeFilesServer(raw.command, args, cwd, platform);
   const bundledServer = codexScriptServer
     || buildV5tAssemblyServer
@@ -276,6 +279,9 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if (codespaceServer && sandbox !== 'onlineworkspace') {
     throw new Error(`mcp_servers.${name}.sandbox must be onlineworkspace for codespace`);
   }
+  if (ghIssueServer && sandbox !== 'onlineworkspace') {
+    throw new Error(`mcp_servers.${name}.sandbox must be onlineworkspace for gh-issue`);
+  }
   const sandboxDelegated = false;
   const command = sandbox === 'elevated' || sandbox === 'onlineworkspace'
     ? normalizeNativeExecutable(raw.command, `mcp_servers.${name}.command`, platform)
@@ -287,12 +293,13 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const allowedFiles = absolutePathArray(raw.allowed_files, `mcp_servers.${name}.allowed_files`, platform);
   const codespaceGhExecutable = codespaceServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
   const codespaceTokenFile = codespaceServer ? startupPathOption(args, 'token-file', platform) : undefined;
+  const ghIssueGhExecutable = ghIssueServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
+  if (ghIssueServer && !ghIssueGhExecutable) throw new Error(`mcp_servers.${name} requires --gh-executable=<absolute-path> for gh-issue`);
+  if (ghIssueGhExecutable) normalizeNativeExecutable(ghIssueGhExecutable, `mcp_servers.${name} --gh-executable`, platform);
   if (codespaceServer && args.some((argument) => argument.startsWith('--ssh-key-file='))) {
     throw new Error(`mcp_servers.${name} --ssh-key-file is no longer supported; Codespace SSH keys are generated internally`);
   }
-  const sandboxReadOnlyFiles = codespaceServer
-    ? [codespaceGhExecutable, codespaceTokenFile].filter(Boolean)
-    : [];
+  const sandboxReadOnlyFiles = [codespaceGhExecutable, codespaceTokenFile, ghIssueGhExecutable].filter(Boolean);
   const protectedGatewayLogs = protectedDirectoryPolicyEntries(
     allowedDirectories,
     allowedFiles,
@@ -312,7 +319,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if ((sandbox === 'elevated' || sandbox === 'onlineworkspace') && allowedDirectories.some((directory) => pathWithin(directory, command, platform))) {
     throw new Error(`mcp_servers.${name}.command must be outside allowed_directories so the sandboxed MCP cannot modify its executable`);
   }
-  for (const trustFile of [codespaceGhExecutable, codespaceTokenFile].filter(Boolean)) {
+  for (const trustFile of sandboxReadOnlyFiles) {
     if (allowedDirectories.some((directory) => pathWithin(directory, trustFile, platform))) {
       throw new Error(`mcp_servers.${name} fixed trust files must be outside allowed_directories so sandboxed code cannot modify them`);
     }
