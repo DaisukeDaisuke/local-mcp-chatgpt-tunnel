@@ -3,9 +3,10 @@ protect_gateway_app = true
 publish_tool_directory = true
 # Replace the paths before enabling this server. Store the token in the UTF-8 file.
 # --repository=OWNER/REPO is optional; omit it to permit any public github.com repository.
+# --edit-comments may be repeated; only listed repositories permit existing-comment edits.
 [mcp_servers.gh_issue]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-issue\server.mjs', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-issue\server.mjs', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe', '--edit-comments=ZevyaDev/dqix-decomp-kit']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 sandbox = 'onlineworkspace'

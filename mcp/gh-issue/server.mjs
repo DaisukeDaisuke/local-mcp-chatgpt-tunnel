@@ -15,10 +15,12 @@ const LIST_FIELDS = 'number,title,state,url,author,labels,createdAt,updatedAt';
 
 export const GH_ISSUE_MCP_HELP = `gh-issue
 Usage:
-  node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/token.txt --gh-executable=/absolute/path/to/gh [--repository=OWNER/REPO ...]
-Only create_issue, view_issue, list_issues, comment_issue, close_issue, and edit_issue are exposed.
+  node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/token.txt --gh-executable=/absolute/path/to/gh [--repository=OWNER/REPO ...] [--edit-comments=OWNER/REPO ...]
+Exposes fixed Issue operations, including comment listing, ID lookup, and ID-based comment editing.
 Targets must be public repositories on github.com. Without --repository, any public
 repository can be selected. Repeated --repository arguments form an optional allowlist.
+Comment editing requires the normalized repository to match the --edit-comments allowlist.
+Repeat --edit-comments to allow multiple repositories. Without it, comment editing is disabled.
 Use --token-file for authentication; legacy --token=TOKEN is also supported.
 If both are supplied, --token-file takes precedence. The selected token is passed
 to gh only as GH_TOKEN. The UTF-8 token file is a read-only trust input.
@@ -32,20 +34,39 @@ function repository(value) {
   return value;
 }
 
+export function normalizeCommentRepository(value) {
+  if (typeof value !== 'string' || /[\0\r\n]/.test(value)) throw new Error('--edit-comments must identify a github.com OWNER/REPO');
+  let identity = value.trim();
+  if (/^https?:\/\//i.test(identity)) {
+    let url;
+    try { url = new URL(identity); } catch { throw new Error('--edit-comments contains an invalid repository URL'); }
+    if (url.hostname.toLowerCase() !== 'github.com' || url.port || url.username || url.password || url.search || url.hash) {
+      throw new Error('--edit-comments repository URLs must target github.com without credentials, query, or fragment');
+    }
+    identity = url.pathname.replace(/^\//, '');
+  } else {
+    identity = identity.replace(/^git@github\.com:/i, '').replace(/^github\.com\//i, '');
+  }
+  identity = identity.replace(/\/+$/, '').replace(/\.git$/i, '');
+  return repository(identity).toLowerCase();
+}
+
 export function parseStartupArguments(argv) {
   const values = {};
   const repositories = [];
+  const editCommentRepositories = [];
   let help = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') { help = true; continue; }
-    const match = /^--(token-file|token|repository|gh-executable)(?:=(.*))?$/s.exec(argument);
+    const match = /^--(token-file|token|repository|edit-comments|gh-executable)(?:=(.*))?$/s.exec(argument);
     // Do not echo an unknown argument: it may itself contain a credential.
     if (!match) throw new Error('Unsupported startup argument; use --help');
     const name = match[1];
     const value = match[2] ?? argv[++index];
     if (typeof value !== 'string' || value.length === 0 || value.startsWith('--')) throw new Error(`--${name} requires a value`);
     if (name === 'repository') repositories.push(repository(value));
+    else if (name === 'edit-comments') editCommentRepositories.push(normalizeCommentRepository(value));
     else {
       if (Object.hasOwn(values, name)) throw new Error(`--${name} may be specified only once`);
       values[name] = value;
@@ -64,7 +85,9 @@ export function parseStartupArguments(argv) {
       || !/^gh(?:\.exe)?$/i.test(basename(executable)) || (process.platform === 'win32' && !/\.exe$/i.test(executable))) {
     throw new Error('--gh-executable is required and must be an absolute path to gh (gh.exe on Windows)');
   }
-  return { help: false, tokenFile, ...(token === undefined ? {} : { token }), executable, repositories: [...new Map(repositories.map((name) => [name.toLowerCase(), name])).values()] };
+  return { help: false, tokenFile, ...(token === undefined ? {} : { token }), executable,
+    repositories: [...new Map(repositories.map((name) => [name.toLowerCase(), name])).values()],
+    editCommentRepositories: [...new Set(editCommentRepositories)] };
 }
 
 function redact(value, token) {
@@ -219,6 +242,8 @@ const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: t
 const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
 const bodySchema = { type: 'string', maxLength: 65536, description: 'Literal UTF-8 text; multiline content is preserved.' };
 const issueSchema = { type: 'integer', minimum: 1, maximum: 2147483647, description: 'Issue number in the selected repository. URLs and pull requests are not accepted.' };
+const commentIdSchema = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER,
+  description: 'Numeric REST comment ID from list_issue_comments, view_issue_comment, or a #issuecomment-ID URL. This is not a GraphQL node ID.' };
 const outputSchema = {
   type: 'object', properties: { ok: { type: 'boolean' }, result: { type: 'object' }, error: { type: 'string' } },
   required: ['ok'], additionalProperties: false
@@ -248,6 +273,15 @@ function toolSchemas(config) {
     { name: 'edit_issue', description: 'Replace the body and/or title of an existing public Issue using gh issue edit. On failure, the original gh error and process output are returned.',
       inputSchema: input({ issueNumber: issueSchema, body: bodySchema,
         title: { type: 'string', minLength: 1, maxLength: 256 } }, ['issueNumber']),
+      annotations: { ...write, destructiveHint: true, idempotentHint: true } },
+    { name: 'list_issue_comments', description: 'Read one page of comments on a public Issue, including numeric commentId and full body. Follow nextPage when present.',
+      inputSchema: input({ issueNumber: issueSchema,
+        page: { type: 'integer', minimum: 1, maximum: 1000000, default: 1 },
+        perPage: { type: 'integer', minimum: 1, maximum: 100, default: 100 } }, ['issueNumber']), annotations: readOnly },
+    { name: 'view_issue_comment', description: 'Read the full body, numeric commentId, parent Issue number, URL, and author of one public Issue comment.',
+      inputSchema: input({ commentId: commentIdSchema }, ['commentId']), annotations: readOnly },
+    { name: 'edit_issue_comment', description: 'Replace one existing public Issue comment by its exact numeric commentId, only within the startup --edit-comments repository allowlist. Returns the edited comment and original errors on failure.',
+      inputSchema: input({ commentId: commentIdSchema, body: { ...bodySchema, minLength: 1 } }, ['commentId', 'body']),
       annotations: { ...write, destructiveHint: true, idempotentHint: true } }
   ].map((tool) => ({ ...tool, outputSchema }));
 }
@@ -268,14 +302,26 @@ function selectedRepository(value, config) {
   return selected;
 }
 
+function commentApiCommand(method, endpoint) {
+  return ['api', '--hostname', 'github.com', '--method', method,
+    '--header', 'Accept: application/vnd.github+json', endpoint];
+}
+
 function planForTool(name, args, config, schemas) {
   const schema = schemas.find((tool) => tool.name === name);
   if (!schema) throw new Error('Unknown tool');
   if (Object.keys(args).some((key) => !Object.hasOwn(schema.inputSchema.properties, key))) throw new Error('Unsupported tool argument');
   const repo = selectedRepository(args.repository, config);
+  if (name === 'edit_issue_comment' && !config.editCommentRepositories.includes(normalizeCommentRepository(repo))) {
+    throw new Error(`Comment editing is not allowed for ${repo}; configure --edit-comments=OWNER/REPO at startup`);
+  }
   const number = args.issueNumber;
   if (schema.inputSchema.properties.issueNumber && (!Number.isSafeInteger(number) || number < 1 || number > 2147483647)) {
     throw new Error('issueNumber must be a positive integer at most 2147483647');
+  }
+  const commentId = args.commentId;
+  if (schema.inputSchema.properties.commentId && (!Number.isSafeInteger(commentId) || commentId < 1)) {
+    throw new Error('commentId must be a positive safe integer REST comment ID');
   }
   const base = ['issue', name.split('_')[0], ...(number === undefined ? [] : [String(number)]), '--repo', `github.com/${repo}`];
   switch (name) {
@@ -314,6 +360,22 @@ function planForTool(name, args, config, schemas) {
       if (hasBody) command.push('--body-file', '-');
       return { repo, number, command, ...(hasBody ? { input: textArgument(args.body, 'body', 65536, true) } : {}) };
     }
+    case 'list_issue_comments': {
+      const page = args.page ?? 1;
+      const perPage = args.perPage ?? 100;
+      if (!Number.isSafeInteger(page) || page < 1 || page > 1000000) throw new Error('page must be an integer from 1 through 1000000');
+      if (!Number.isSafeInteger(perPage) || perPage < 1 || perPage > 100) throw new Error('perPage must be an integer from 1 through 100');
+      return { repo, number, page, perPage,
+        command: commentApiCommand('GET', `repos/${repo}/issues/${number}/comments?per_page=${perPage}&page=${page}`) };
+    }
+    case 'view_issue_comment':
+      return { repo, commentId, command: commentApiCommand('GET', `repos/${repo}/issues/comments/${commentId}`) };
+    case 'edit_issue_comment': {
+      const body = textArgument(args.body, 'body', 65536);
+      return { repo, commentId,
+        command: [...commentApiCommand('PATCH', `repos/${repo}/issues/comments/${commentId}`), '--header', 'Content-Type: application/json', '--input', '-'],
+        input: JSON.stringify({ body }) };
+    }
     default: throw new Error('Unknown tool');
   }
 }
@@ -334,6 +396,34 @@ function assertIssue(value, repo, number) {
   }
 }
 
+function issueComment(value, repo, expectedId, expectedIssueNumber) {
+  if (!Number.isSafeInteger(value?.id) || value.id < 1 || (expectedId !== undefined && value.id !== expectedId)
+      || typeof value.body !== 'string' || typeof value.issue_url !== 'string') {
+    throw new Error('GitHub returned an invalid Issue comment');
+  }
+  const parent = /^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)$/i.exec(value.issue_url);
+  const issueNumber = parent ? Number(parent[2]) : NaN;
+  if (!parent || parent[1].toLowerCase() !== repo.toLowerCase() || !Number.isSafeInteger(issueNumber)
+      || issueNumber > 2147483647 || (expectedIssueNumber !== undefined && issueNumber !== expectedIssueNumber)
+      || typeof value.url !== 'string' || value.url.toLowerCase() !== `https://api.github.com/repos/${repo}/issues/comments/${value.id}`.toLowerCase()
+      || typeof value.html_url !== 'string' || value.html_url.toLowerCase() !== `https://github.com/${repo}/issues/${issueNumber}#issuecomment-${value.id}`.toLowerCase()) {
+    throw new Error('Comment is not attached to an Issue in the selected repository');
+  }
+  return { commentId: value.id, issueNumber, body: value.body, url: value.html_url,
+    author: value.user?.login ?? null, createdAt: value.created_at ?? null, updatedAt: value.updated_at ?? null };
+}
+
+function postedComment(result, plan) {
+  const url = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)#issuecomment-([1-9][0-9]*)$/i.exec(url);
+  const commentId = match ? Number(match[3]) : NaN;
+  if (!match || match[1].toLowerCase() !== plan.repo.toLowerCase() || Number(match[2]) !== plan.number || !Number.isSafeInteger(commentId)) {
+    return { posted: true, commentId: null, body: plan.input, lookupRequired: true,
+      lookupMessage: 'Comment was posted, but gh did not return a recognized comment ID. Use list_issue_comments to retrieve it; do not repost.' };
+  }
+  return { posted: true, commentId, comment: { commentId, issueNumber: plan.number, body: plan.input, url }, lookupRequired: false };
+}
+
 async function callTool(plan, name, execute) {
   // Check each time, including reads. Never cache visibility across tool calls.
   const info = jsonOutput(await execute(['repo', 'view', `github.com/${plan.repo}`, '--json', 'nameWithOwner,visibility,url']));
@@ -342,11 +432,29 @@ async function callTool(plan, name, execute) {
       || typeof info.url !== 'string' || info.url.toLowerCase() !== `https://github.com/${plan.repo}`.toLowerCase()) {
     throw new Error('Repository identity changed or is not on github.com');
   }
-  if (name === 'comment_issue' || name === 'close_issue' || name === 'edit_issue') {
+  if (name === 'comment_issue' || name === 'close_issue' || name === 'edit_issue' || name === 'list_issue_comments') {
     assertIssue(jsonOutput(await execute(['issue', 'view', String(plan.number), '--repo', `github.com/${plan.repo}`, '--json', 'number,url'])), plan.repo, plan.number);
+  }
+  if (name === 'view_issue_comment' || name === 'edit_issue_comment') {
+    const current = jsonOutput(await execute(commentApiCommand('GET', `repos/${plan.repo}/issues/comments/${plan.commentId}`)));
+    const comment = issueComment(current, plan.repo, plan.commentId);
+    assertIssue(jsonOutput(await execute(['issue', 'view', String(comment.issueNumber), '--repo', `github.com/${plan.repo}`, '--json', 'number,url'])), plan.repo, comment.issueNumber);
+    if (name === 'view_issue_comment') return { repository: plan.repo, comment };
+    plan.parentIssueNumber = comment.issueNumber;
   }
   const result = await execute(plan.command, plan.input);
   requireGhSuccess(result);
+  if (name === 'list_issue_comments') {
+    const values = jsonOutput(result);
+    if (!Array.isArray(values)) throw new Error('GitHub returned an invalid comment list');
+    return { repository: plan.repo, issueNumber: plan.number,
+      comments: values.map((value) => issueComment(value, plan.repo, undefined, plan.number)),
+      page: plan.page, perPage: plan.perPage, nextPage: values.length === plan.perPage ? plan.page + 1 : null };
+  }
+  if (name === 'edit_issue_comment') {
+    return { repository: plan.repo, comment: issueComment(jsonOutput(result), plan.repo, plan.commentId, plan.parentIssueNumber), ...result };
+  }
+  if (name === 'comment_issue') return { repository: plan.repo, ...result, ...postedComment(result, plan) };
   if (name === 'view_issue') {
     const issue = jsonOutput(result);
     assertIssue(issue, plan.repo, plan.number);
@@ -385,8 +493,8 @@ export function createServer(options = {}) {
       initialized = true;
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} },
-        serverInfo: { name: 'gh-issue', version: '1.1.0' },
-        instructions: 'Only six Issue operations on public github.com repositories, including body/title editing. Authentication uses the configured read-only token file or legacy startup token. Failed tools return the concrete error and available stdout/stderr/exitCode; preserve these details instead of replacing them with a generic operation fault. Never retry an uncertain create/comment automatically; inspect the Issue first.'
+        serverInfo: { name: 'gh-issue', version: '1.3.0' },
+        instructions: `Only fixed Issue operations on public github.com repositories, including Issue body/title editing and exact comment-ID listing, lookup, and editing. Comment editing is allowed only for this normalized startup allowlist: ${config.editCommentRepositories.join(', ') || '(none)'}. Use numeric commentId from comment_issue, list_issue_comments, or view_issue_comment. Comment edits target that exact ID. Authentication uses the configured read-only token file or legacy startup token. Failed tools return the concrete error and available stdout/stderr/exitCode; preserve these details instead of replacing them with a generic operation fault. Never retry an uncertain create/comment automatically; inspect the Issue first.`
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');

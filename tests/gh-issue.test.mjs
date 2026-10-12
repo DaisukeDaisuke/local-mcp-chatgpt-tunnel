@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { createGhExecutor, createServer, createTokenReader, parseStartupArguments, startStdio } from '../mcp/gh-issue/server.mjs';
+import { createGhExecutor, createServer, createTokenReader, normalizeCommentRepository, parseStartupArguments, startStdio } from '../mcp/gh-issue/server.mjs';
 import { createBundledIsolation, signBundledIsolationContext } from '../app/bundled-isolation.mjs';
 import { loadGatewayConfig } from '../app/server-config.mjs';
 import { parseToml } from '../app/toml-lite.mjs';
@@ -22,10 +22,18 @@ await writeFile(GH_EXECUTABLE, 'test placeholder; never executed\n', 'utf8');
 const canonicalGhExecutable = await realpath(GH_EXECUTABLE);
 // Unit tests simulate the marker; they do not claim to launch a real OS sandbox.
 process.env.LOCAL_MCP_CODEX_SANDBOX_MODE = 'onlineworkspace';
-const startup = (extra = []) => [`--token-file=${TOKEN_FILE}`, `--gh-executable=${GH_EXECUTABLE}`, ...extra];
+const startup = (extra = []) => [`--token-file=${TOKEN_FILE}`, `--gh-executable=${GH_EXECUTABLE}`, `--edit-comments=${REPO}`, ...extra];
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
 const json = (value) => ({ stdout: JSON.stringify(value), stderr: '', exitCode: 0 });
 const issue = (number = 7) => ({ number, url: `https://github.com/${REPO}/issues/${number}`, title: '題名' });
+const COMMENT_ID = 3653399145;
+const apiComment = (id = COMMENT_ID, body = '元のコメント\n本文') => ({
+  id, body, url: `https://api.github.com/repos/${REPO}/issues/comments/${id}`,
+  issue_url: `https://api.github.com/repos/${REPO}/issues/7`,
+  html_url: `https://github.com/${REPO}/issues/7#issuecomment-${id}`,
+  user: { login: 'comment-author' }, created_at: '2026-10-12T03:00:00Z', updated_at: '2026-10-12T03:00:00Z'
+});
+const publicRepo = () => json({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` });
 
 async function fixture(extra = [], custom) {
   const commands = [];
@@ -78,6 +86,67 @@ test('legacy token authentication executes the same fixed commands and token-fil
   assert.equal(sawCall, true);
 });
 
+test('edit-comments accepts repeated normalized GitHub repository identities and deduplicates them', () => {
+  const equivalent = [
+    'ZevyaDev/dqix-decomp-kit', 'ZEVYADEV/DQIX-DECOMP-KIT', 'github.com/ZevyaDev/dqix-decomp-kit',
+    'https://github.com/ZevyaDev/dqix-decomp-kit.git/', 'git@github.com:ZevyaDev/dqix-decomp-kit.git'
+  ];
+  for (const value of equivalent) assert.equal(normalizeCommentRepository(value), 'zevyadev/dqix-decomp-kit');
+  const config = parseStartupArguments(startup(equivalent.map((value) => `--edit-comments=${value}`)));
+  assert.deepEqual(config.editCommentRepositories, [REPO, 'zevyadev/dqix-decomp-kit']);
+  assert.equal(parseStartupArguments(startup(['--edit-comments', 'Second/Repo'])).editCommentRepositories.at(-1), 'second/repo');
+  for (const value of [
+    'https://evil.invalid/ZevyaDev/dqix-decomp-kit', 'https://github.com/ZevyaDev/dqix-decomp-kit?x=1',
+    'https://github.com/user:secret@evil.invalid/a/b', 'https://github.com/ZevyaDev/dqix-decomp-kit#fragment',
+    'ZevyaDev/dqix-decomp-kit/extra', 'ZevyaDev/dqix-decomp-kit;command', 'ZevyaDev\\dqix-decomp-kit'
+  ]) assert.throws(() => parseStartupArguments(startup([`--edit-comments=${value}`])));
+});
+
+test('unlisted comment edits are denied before gh and leave all other tools unrestricted', async () => {
+  let executions = 0;
+  const server = createServer({ argv: startup().filter((argument) => !argument.startsWith('--edit-comments=')), execute: async (args) => {
+    executions += 1;
+    if (args[0] === 'repo') return publicRepo();
+    if (args[0] === 'api') return json(args.some((argument) => argument.includes('/issues/7/comments?')) ? [apiComment()] : apiComment());
+    if (args[1] === 'view') return json(issue());
+    if (args[1] === 'list') return json([issue()]);
+    return { stdout: `https://github.com/${REPO}/issues/7#issuecomment-${COMMENT_ID}\n`, stderr: '', exitCode: 0 };
+  } });
+  await server(request(1, 'initialize'));
+  const call = (name, args) => server(request(2, 'tools/call', { name, arguments: { repository: REPO, ...args } }));
+  const denied = (await call('edit_issue_comment', { commentId: COMMENT_ID, body: 'a' })).result;
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /Comment editing is not allowed/);
+  assert.equal(executions, 0);
+  for (const [name, args] of [
+    ['create_issue', { title: '新しいIssue', body: '本文' }],
+    ['view_issue', { issueNumber: 7 }],
+    ['list_issues', {}],
+    ['comment_issue', { issueNumber: 7, body: '投稿' }],
+    ['close_issue', { issueNumber: 7 }],
+    ['edit_issue', { issueNumber: 7, body: 'Issue本文' }],
+    ['list_issue_comments', { issueNumber: 7 }],
+    ['view_issue_comment', { commentId: COMMENT_ID }]
+  ]) assert.equal((await call(name, args)).result.isError, false, `${name} must not require --edit-comments`);
+});
+
+test('comment edit whitelist compares normalized full repository identities without prefix matches', async () => {
+  const { call, commands } = await fixture([], (args, input) => {
+    if (args[0] === 'repo') return publicRepo();
+    if (args[0] === 'issue') return json(issue());
+    return json(apiComment(COMMENT_ID, args.includes('PATCH') ? JSON.parse(input).body : '元の本文'));
+  });
+  const allowed = await call('edit_issue_comment', { repository: REPO.toUpperCase(), commentId: COMMENT_ID, body: '編集' });
+  assert.equal(allowed.result.isError, false);
+  const count = commands.length;
+  for (const repository of [`${REPO}-extra`, REPO.replace('other-owner', 'different-owner'), 'other-owner/another']) {
+    const denied = await call('edit_issue_comment', { repository, commentId: COMMENT_ID, body: 'a' });
+    assert.equal(denied.result.isError, true);
+    assert.match(denied.result.content[0].text, /Comment editing is not allowed/);
+  }
+  assert.equal(commands.length, count);
+});
+
 test('token file accepts UTF-8 with a trailing newline and rejects empty, oversized, invalid, or UTF-16 content', async () => {
   assert.equal(await createTokenReader(parseStartupArguments(startup()))(), TOKEN);
   for (const [index, bytes] of [
@@ -115,11 +184,11 @@ test('token file inside writable roots is refused before gh can run', async () =
   await assert.rejects(readToken(), /--token-file must be outside writable workspace roots/);
 });
 
-test('discovery exposes exactly six Issue operations with accurate annotations', async () => {
+test('discovery exposes exactly nine Issue operations with accurate annotations', async () => {
   const { server } = await fixture();
   const result = await server(request(3, 'tools/list'));
   const tools = result.result.tools;
-  assert.deepEqual(tools.map((entry) => entry.name), ['create_issue', 'view_issue', 'list_issues', 'comment_issue', 'close_issue', 'edit_issue']);
+  assert.deepEqual(tools.map((entry) => entry.name), ['create_issue', 'view_issue', 'list_issues', 'comment_issue', 'close_issue', 'edit_issue', 'list_issue_comments', 'view_issue_comment', 'edit_issue_comment']);
   for (const tool of tools) {
     assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(tool.inputSchema.properties.token, undefined);
@@ -133,6 +202,10 @@ test('discovery exposes exactly six Issue operations with accurate annotations',
   assert.equal(tools[4].annotations.destructiveHint, true);
   assert.equal(tools[5].annotations.destructiveHint, true);
   assert.equal(tools[5].annotations.idempotentHint, true);
+  assert.equal(tools[6].annotations.readOnlyHint, true);
+  assert.equal(tools[7].annotations.readOnlyHint, true);
+  assert.equal(tools[8].annotations.destructiveHint, true);
+  assert.equal(tools[8].annotations.idempotentHint, true);
 });
 
 test('all five operations use fixed gh commands and literal multiline stdin', async () => {
@@ -267,6 +340,146 @@ test('stdio delivers edit failure details as an MCP tool result without converti
   assert.equal(reply.result.structuredContent.error, stderr);
   assert.equal(reply.result.structuredContent.result.stderr, stderr);
   assert.equal(reply.result.structuredContent.result.exitCode, 1);
+});
+
+test('list_issue_comments returns complete bodies and numeric IDs with explicit pagination', async () => {
+  const { call, commands } = await fixture([], (args) => {
+    if (args[0] === 'repo') return publicRepo();
+    if (args[0] === 'issue') return json(issue());
+    return args.at(-1).endsWith('page=1') ? json([apiComment(), apiComment(COMMENT_ID + 1, '次のコメント')]) : json([]);
+  });
+  const first = (await call('list_issue_comments', { issueNumber: 7, perPage: 2 })).result;
+  assert.equal(first.isError, false);
+  assert.equal(first.structuredContent.result.nextPage, 2);
+  assert.deepEqual(first.structuredContent.result.comments.map((comment) => [comment.commentId, comment.body, comment.author]), [
+    [COMMENT_ID, '元のコメント\n本文', 'comment-author'], [COMMENT_ID + 1, '次のコメント', 'comment-author']
+  ]);
+  assert.deepEqual(commands[2].args, ['api', '--hostname', 'github.com', '--method', 'GET', '--header', 'Accept: application/vnd.github+json', `repos/${REPO}/issues/7/comments?per_page=2&page=1`]);
+  const second = (await call('list_issue_comments', { issueNumber: 7, perPage: 2, page: 2 })).result;
+  assert.deepEqual(second.structuredContent.result.comments, []);
+  assert.equal(second.structuredContent.result.nextPage, null);
+});
+
+test('view_issue_comment looks up an exact REST ID above 32 bits and returns full content', async () => {
+  const { call, commands } = await fixture([], (args) => {
+    if (args[0] === 'repo') return publicRepo();
+    if (args[0] === 'issue') return json(issue());
+    return json(apiComment());
+  });
+  const reply = (await call('view_issue_comment', { commentId: COMMENT_ID })).result;
+  assert.equal(reply.isError, false);
+  assert.equal(reply.structuredContent.result.comment.commentId, COMMENT_ID);
+  assert.equal(reply.structuredContent.result.comment.body, '元のコメント\n本文');
+  assert.equal(reply.structuredContent.result.comment.issueNumber, 7);
+  assert.equal(commands.length, 3);
+  assert.equal(commands[1].args.at(-1), `repos/${REPO}/issues/comments/${COMMENT_ID}`);
+  assert.equal(commands.some((entry) => entry.args.includes('PATCH')), false);
+});
+
+test('edit_issue_comment patches only the chosen ID and sends the replacement body as literal JSON stdin', async () => {
+  const body = '# 編集後\n$(literal) `literal`\n引用: "内容"\n';
+  const { call, commands } = await fixture([], (args, input) => {
+    if (args[0] === 'repo') return publicRepo();
+    if (args[0] === 'issue') return json(issue());
+    return json(apiComment(COMMENT_ID, args.includes('PATCH') ? JSON.parse(input).body : '元の本文'));
+  });
+  const reply = (await call('edit_issue_comment', { commentId: COMMENT_ID, body })).result;
+  assert.equal(reply.isError, false);
+  assert.equal(reply.structuredContent.result.comment.commentId, COMMENT_ID);
+  assert.equal(reply.structuredContent.result.comment.body, body);
+  assert.equal(commands.length, 4);
+  assert.deepEqual(commands[2].args, ['issue', 'view', '7', '--repo', `github.com/${REPO}`, '--json', 'number,url']);
+  assert.deepEqual(commands[3], { args: ['api', '--hostname', 'github.com', '--method', 'PATCH', '--header', 'Accept: application/vnd.github+json',
+    `repos/${REPO}/issues/comments/${COMMENT_ID}`, '--header', 'Content-Type: application/json', '--input', '-'], input: JSON.stringify({ body }) });
+  assert.equal(commands.some((entry) => entry.args.includes('--edit-last')), false);
+});
+
+test('comment_issue returns the created comment ID and body without a second write', async () => {
+  const body = '新しいコメント\n改行';
+  const { call, commands } = await fixture([], (args) => {
+    if (args[0] === 'repo') return publicRepo();
+    if (args[1] === 'view') return json(issue());
+    return { stdout: `https://github.com/${REPO}/issues/7#issuecomment-${COMMENT_ID}\n`, stderr: '', exitCode: 0 };
+  });
+  const reply = (await call('comment_issue', { issueNumber: 7, body })).result;
+  assert.equal(reply.isError, false);
+  assert.equal(reply.structuredContent.result.commentId, COMMENT_ID);
+  assert.equal(reply.structuredContent.result.comment.body, body);
+  assert.equal(reply.structuredContent.result.lookupRequired, false);
+  assert.equal(commands.length, 3);
+  assert.equal(commands.filter((entry) => entry.args[1] === 'comment').length, 1);
+  const unrecognized = await fixture();
+  const unknown = (await unrecognized.call('comment_issue', { issueNumber: 7, body })).result;
+  assert.equal(unknown.isError, false);
+  assert.equal(unknown.structuredContent.result.posted, true);
+  assert.equal(unknown.structuredContent.result.lookupRequired, true);
+  assert.equal(unknown.structuredContent.result.commentId, null);
+  assert.match(unknown.structuredContent.result.lookupMessage, /do not repost/);
+  assert.equal(unrecognized.commands.length, 3);
+});
+
+test('comment tools reject invalid IDs and arbitrary endpoint/method/script inputs before execution', async () => {
+  const { call, commands } = await fixture();
+  for (const id of [0, -1, 1.5, '3653399145', 'IC_node_id', Number.MAX_SAFE_INTEGER + 1]) {
+    for (const name of ['view_issue_comment', 'edit_issue_comment']) {
+      assert.equal((await call(name, { commentId: id, ...(name === 'edit_issue_comment' ? { body: 'a' } : {}) })).result.isError, true);
+    }
+  }
+  for (const args of [
+    { commentId: COMMENT_ID, body: 'a', endpoint: '/user' }, { commentId: COMMENT_ID, body: 'a', method: 'DELETE' },
+    { commentId: COMMENT_ID, body: 'a', script: 'anything' }, { commentId: COMMENT_ID, body: '\ud800' },
+    { commentId: COMMENT_ID, body: ' ' }
+  ]) assert.equal((await call('edit_issue_comment', args)).result.isError, true);
+  for (const args of [{ issueNumber: 7, page: 0 }, { issueNumber: 7, perPage: 101 }, { issueNumber: 7, perPage: '--paginate' }]) {
+    assert.equal((await call('list_issue_comments', args)).result.isError, true);
+  }
+  assert.equal(commands.length, 0);
+});
+
+test('comment edits refuse wrong repository, wrong ID, and PR comments before PATCH', async () => {
+  for (const value of [
+    { ...apiComment(), id: COMMENT_ID + 1 },
+    { ...apiComment(), issue_url: 'https://api.github.com/repos/other/repo/issues/7' },
+    { ...apiComment(), html_url: `https://github.com/${REPO}/pull/7#issuecomment-${COMMENT_ID}` },
+    { ...apiComment(), url: `https://api.github.com/repos/${REPO}/pulls/comments/${COMMENT_ID}` }
+  ]) {
+    const { call, commands } = await fixture([], (args) => args[0] === 'repo' ? publicRepo() : json(value));
+    assert.equal((await call('edit_issue_comment', { commentId: COMMENT_ID, body: 'a' })).result.isError, true);
+    assert.equal(commands.some((entry) => entry.args.includes('PATCH')), false);
+  }
+  const pr = await fixture([], (args) => args[0] === 'repo' ? publicRepo()
+    : args[0] === 'api' ? json(apiComment()) : json({ number: 7, url: `https://github.com/${REPO}/pull/7` }));
+  assert.equal((await pr.call('edit_issue_comment', { commentId: COMMENT_ID, body: 'a' })).result.isError, true);
+  assert.equal(pr.commands.length, 3);
+  const privateRepo = await fixture([], () => json({ visibility: 'PRIVATE' }));
+  assert.equal((await privateRepo.call('edit_issue_comment', { commentId: COMMENT_ID, body: 'a' })).result.isError, true);
+  assert.equal(privateRepo.commands.length, 1);
+});
+
+test('comment lookup and PATCH failures preserve the exact GitHub error and exitCode without retries', async () => {
+  for (const method of ['GET', 'PATCH']) {
+    const stderr = `HTTP 403: Resource not accessible by personal access token (${method} comment)\n`;
+    const { call, commands } = await fixture([], (args) => {
+      if (args[0] === 'repo') return publicRepo();
+      if (args[0] === 'issue') return json(issue());
+      return args.includes(method) ? { stdout: 'request-id: 456\n', stderr, exitCode: 1 } : json(apiComment());
+    });
+    const reply = (await call('edit_issue_comment', { commentId: COMMENT_ID, body: 'a' })).result;
+    assert.equal(reply.isError, true);
+    assert.equal(reply.content[0].text, stderr);
+    assert.equal(reply.structuredContent.error, stderr);
+    assert.equal(reply.structuredContent.result.stderr, stderr);
+    assert.equal(reply.structuredContent.result.stdout, 'request-id: 456\n');
+    assert.equal(reply.structuredContent.result.exitCode, 1);
+    assert.equal(commands.length, method === 'GET' ? 2 : 4);
+  }
+});
+
+test('comment listing refuses entries belonging to another Issue', async () => {
+  const { call } = await fixture([], (args) => args[0] === 'repo' ? publicRepo()
+    : args[0] === 'issue' ? json(issue()) : json([{ ...apiComment(), issue_url: `https://api.github.com/repos/${REPO}/issues/8`,
+      html_url: `https://github.com/${REPO}/issues/8#issuecomment-${COMMENT_ID}` }]));
+  assert.equal((await call('list_issue_comments', { issueNumber: 7 })).result.isError, true);
 });
 
 test('optional allowlist works without restricting other public repos by default', async () => {
@@ -467,7 +680,7 @@ test('stdio handles fragmented JSON, parse failures, notifications, and ordered 
   assert.equal(replies.length, 3);
   assert.equal(replies[0].error.code, -32700);
   assert.equal(replies[1].result.serverInfo.name, 'gh-issue');
-  assert.equal(replies[2].result.tools.length, 6);
+  assert.equal(replies[2].result.tools.length, 9);
   assert.equal(text.includes(TOKEN), false);
   input.write(`${'x'.repeat(1024 * 1024 + 1)}`);
   input.write(`tail\n${JSON.stringify(request(3, 'ping'))}\n`);
@@ -510,7 +723,7 @@ test('Gateway enforces onlineworkspace, fixes gh as a read-only trust input, and
   assert.equal(example.mcp_servers.gh_issue.args.some((argument) => argument.startsWith('--token=')), false);
 });
 
-test('actual stdio process discovers six tools with a simulated sandbox marker and no network', async () => {
+test('actual stdio process discovers nine tools with a simulated sandbox marker and no network', async () => {
   const child = spawn(process.execPath, ['mcp/gh-issue/server.mjs', ...startup()], { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
   let output = '';
   let errors = '';
@@ -524,6 +737,6 @@ test('actual stdio process discovers six tools with a simulated sandbox marker a
   assert.equal(await exited, 0, errors);
   const replies = output.trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(replies[0].result.serverInfo.name, 'gh-issue');
-  assert.equal(replies[1].result.tools.length, 6);
+  assert.equal(replies[1].result.tools.length, 9);
   assert.equal(output.includes(TOKEN), false);
 });
