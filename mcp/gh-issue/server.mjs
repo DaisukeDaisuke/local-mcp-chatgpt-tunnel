@@ -16,11 +16,12 @@ const LIST_FIELDS = 'number,title,state,url,author,labels,createdAt,updatedAt';
 export const GH_ISSUE_MCP_HELP = `gh-issue
 Usage:
   node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/token.txt --gh-executable=/absolute/path/to/gh [--repository=OWNER/REPO ...]
-Only create_issue, view_issue, list_issues, comment_issue, and close_issue are exposed.
+Only create_issue, view_issue, list_issues, comment_issue, close_issue, and edit_issue are exposed.
 Targets must be public repositories on github.com. Without --repository, any public
 repository can be selected. Repeated --repository arguments form an optional allowlist.
-The token file is required at startup. Its contents are passed to gh only as GH_TOKEN.
-Raw token arguments are rejected. The UTF-8 token file is a read-only trust input.
+Use --token-file for authentication; legacy --token=TOKEN is also supported.
+If both are supplied, --token-file takes precedence. The selected token is passed
+to gh only as GH_TOKEN. The UTF-8 token file is a read-only trust input.
 The MCP itself must run in the Gateway onlineworkspace sandbox.
 The fixed gh executable must be outside writable workspace roots.
 `;
@@ -38,7 +39,7 @@ export function parseStartupArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') { help = true; continue; }
-    const match = /^--(token-file|repository|gh-executable)(?:=(.*))?$/s.exec(argument);
+    const match = /^--(token-file|token|repository|gh-executable)(?:=(.*))?$/s.exec(argument);
     // Do not echo an unknown argument: it may itself contain a credential.
     if (!match) throw new Error('Unsupported startup argument; use --help');
     const name = match[1];
@@ -52,15 +53,18 @@ export function parseStartupArguments(argv) {
   }
   if (help) return { help: true };
   const tokenFile = values['token-file'];
-  if (typeof tokenFile !== 'string' || !isAbsolute(tokenFile) || /[\0\r\n]/.test(tokenFile)) {
-    throw new Error('--token-file is required and must be an absolute path');
+  const token = values.token;
+  if (tokenFile !== undefined && (!isAbsolute(tokenFile) || /[\0\r\n]/.test(tokenFile))) {
+    throw new Error('--token-file must be an absolute path');
   }
+  if (token !== undefined && (token.length > 4096 || !/^[\x21-\x7e]+$/.test(token))) throw new Error('--token contains an invalid token');
+  if (tokenFile === undefined && token === undefined) throw new Error('--token-file or --token is required');
   const executable = values['gh-executable'];
   if (typeof executable !== 'string' || !isAbsolute(executable) || /[\0\r\n]/.test(executable)
       || !/^gh(?:\.exe)?$/i.test(basename(executable)) || (process.platform === 'win32' && !/\.exe$/i.test(executable))) {
     throw new Error('--gh-executable is required and must be an absolute path to gh (gh.exe on Windows)');
   }
-  return { help: false, tokenFile, executable, repositories: [...new Map(repositories.map((name) => [name.toLowerCase(), name])).values()] };
+  return { help: false, tokenFile, ...(token === undefined ? {} : { token }), executable, repositories: [...new Map(repositories.map((name) => [name.toLowerCase(), name])).values()] };
 }
 
 function redact(value, token) {
@@ -72,6 +76,19 @@ function redactResult(value, token) {
   if (Array.isArray(value)) return value.map((entry) => redactResult(entry, token));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [redact(key, token), redactResult(entry, token)]));
   return value;
+}
+
+function commandFailure(result, fallback) {
+  const error = new Error(result.stderr || result.stdout || fallback);
+  error.result = result;
+  return error;
+}
+
+function requireGhSuccess(result) {
+  if (result?.exitCode !== 0) {
+    throw commandFailure(result ?? {}, `gh exited with code ${result?.exitCode ?? 'unknown'}${result?.signal ? ` (${result.signal})` : ''}`);
+  }
+  return result;
 }
 
 function assertOnlineSandbox() {
@@ -101,6 +118,7 @@ async function trustedGhExecutable(config, isolation) {
 }
 
 export function createTokenReader(config, isolation = createBundledIsolation()) {
+  if (config.tokenFile === undefined) return async () => config.token;
   let tokenPromise;
   return () => {
     tokenPromise ??= (async () => {
@@ -147,11 +165,19 @@ export function createGhExecutor(config, options = {}) {
       const stdout = [];
       const stderr = [];
       let total = 0;
+      const capturedResult = (exitCode = null, signal = null, extra = {}) => ({
+        command: ['gh', ...args], stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'), exitCode, signal, ...extra
+      });
       const finish = (error, result) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        if (error) reject(new Error(redact(error.message, token)));
+        if (error) {
+          const sanitized = new Error(redact(error.message, token));
+          sanitized.result = redactResult(error.result ?? capturedResult(), token);
+          reject(sanitized);
+        }
         else resolvePromise(result);
       };
       try {
@@ -159,7 +185,9 @@ export function createGhExecutor(config, options = {}) {
       } catch (error) { finish(new Error(`Unable to start gh: ${error.message}`)); return; }
       timer = setTimeout(() => {
         child.kill();
-        finish(new Error('gh timed out; a write may already have reached GitHub. Inspect the Issue before retrying.'));
+        const error = new Error('gh timed out; a write may already have reached GitHub. Inspect the Issue before retrying.');
+        error.result = capturedResult(null, null, { timedOut: true });
+        finish(error);
       }, timeoutMs);
       const collect = (target) => (chunk) => {
         if (settled) return;
@@ -174,10 +202,9 @@ export function createGhExecutor(config, options = {}) {
       child.stderr.on('data', collect(stderr));
       child.once('error', (error) => finish(new Error(`Unable to start gh: ${error.message}`)));
       child.once('close', (code, signal) => {
-        const out = redact(Buffer.concat(stdout).toString('utf8'), token);
-        const err = redact(Buffer.concat(stderr).toString('utf8'), token);
-        if (code !== 0) finish(new Error(err.trim() || out.trim() || `gh exited with code ${code}${signal ? ` (${signal})` : ''}`));
-        else finish(null, { stdout: out, stderr: err, exitCode: 0 });
+        const result = capturedResult(code, signal);
+        if (code !== 0) finish(commandFailure(result, `gh exited with code ${code}${signal ? ` (${signal})` : ''}`));
+        else finish(null, redactResult(result, token));
       });
       // EPIPE can occur when gh exits before consuming the body; close/error owns the result.
       child.stdin.on('error', (error) => {
@@ -217,6 +244,10 @@ function toolSchemas(config) {
       inputSchema: input({ issueNumber: issueSchema, body: { ...bodySchema, minLength: 1 } }, ['issueNumber', 'body']), annotations: write },
     { name: 'close_issue', description: 'Close a public Issue using gh issue close.',
       inputSchema: input({ issueNumber: issueSchema, reason: { type: 'string', enum: ['completed', 'not planned'], default: 'completed' } }, ['issueNumber']),
+      annotations: { ...write, destructiveHint: true, idempotentHint: true } },
+    { name: 'edit_issue', description: 'Replace the body and/or title of an existing public Issue using gh issue edit. On failure, the original gh error and process output are returned.',
+      inputSchema: input({ issueNumber: issueSchema, body: bodySchema,
+        title: { type: 'string', minLength: 1, maxLength: 256 } }, ['issueNumber']),
       annotations: { ...write, destructiveHint: true, idempotentHint: true } }
   ].map((tool) => ({ ...tool, outputSchema }));
 }
@@ -270,13 +301,30 @@ function planForTool(name, args, config, schemas) {
       if (!['completed', 'not planned'].includes(reason)) throw new Error('reason must be completed or not planned');
       return { repo, number, command: [...base, '--reason', reason] };
     }
+    case 'edit_issue': {
+      const hasBody = Object.hasOwn(args, 'body');
+      const hasTitle = Object.hasOwn(args, 'title');
+      if (!hasBody && !hasTitle) throw new Error('edit_issue requires body and/or title');
+      const command = [...base];
+      if (hasTitle) {
+        const title = textArgument(args.title, 'title', 256);
+        if (/[\r\n]/.test(title)) throw new Error('title must be a single line');
+        command.push(`--title=${title}`);
+      }
+      if (hasBody) command.push('--body-file', '-');
+      return { repo, number, command, ...(hasBody ? { input: textArgument(args.body, 'body', 65536, true) } : {}) };
+    }
     default: throw new Error('Unknown tool');
   }
 }
 
 function jsonOutput(result) {
-  if (result?.exitCode !== 0) throw new Error('gh command failed');
-  try { return JSON.parse(result.stdout); } catch { throw new Error('gh returned invalid JSON'); }
+  requireGhSuccess(result);
+  try { return JSON.parse(result.stdout); } catch (cause) {
+    const error = new Error(`gh returned invalid JSON: ${cause.message}`);
+    error.result = result;
+    throw error;
+  }
 }
 
 function assertIssue(value, repo, number) {
@@ -294,11 +342,11 @@ async function callTool(plan, name, execute) {
       || typeof info.url !== 'string' || info.url.toLowerCase() !== `https://github.com/${plan.repo}`.toLowerCase()) {
     throw new Error('Repository identity changed or is not on github.com');
   }
-  if (name === 'comment_issue' || name === 'close_issue') {
+  if (name === 'comment_issue' || name === 'close_issue' || name === 'edit_issue') {
     assertIssue(jsonOutput(await execute(['issue', 'view', String(plan.number), '--repo', `github.com/${plan.repo}`, '--json', 'number,url'])), plan.repo, plan.number);
   }
   const result = await execute(plan.command, plan.input);
-  if (result?.exitCode !== 0) throw new Error('gh command failed');
+  requireGhSuccess(result);
   if (name === 'view_issue') {
     const issue = jsonOutput(result);
     assertIssue(issue, plan.repo, plan.number);
@@ -318,7 +366,7 @@ async function callTool(plan, name, execute) {
 
 const response = (id, result) => ({ jsonrpc: '2.0', id, result });
 const protocolError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
-const toolResult = (value, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError });
+const toolResult = (value, isError = false) => ({ content: [{ type: 'text', text: isError ? value.error : JSON.stringify(value) }], structuredContent: value, isError });
 
 export function createServer(options = {}) {
   const config = parseStartupArguments(options.argv ?? process.argv.slice(2));
@@ -337,8 +385,8 @@ export function createServer(options = {}) {
       initialized = true;
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} },
-        serverInfo: { name: 'gh-issue', version: '1.0.1' },
-        instructions: 'Only five Issue operations on public github.com repositories. Authentication is read from the configured read-only token file. Never retry an uncertain create/comment automatically; inspect the Issue first.'
+        serverInfo: { name: 'gh-issue', version: '1.1.0' },
+        instructions: 'Only six Issue operations on public github.com repositories, including body/title editing. Authentication uses the configured read-only token file or legacy startup token. Failed tools return the concrete error and available stdout/stderr/exitCode; preserve these details instead of replacing them with a generic operation fault. Never retry an uncertain create/comment automatically; inspect the Issue first.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
@@ -356,7 +404,8 @@ export function createServer(options = {}) {
         return response(request.id, toolResult(value));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return response(request.id, toolResult({ ok: false, error: token === undefined ? message : redact(message, token) }, true));
+        const failure = { ok: false, error: message, ...(error?.result ? { result: error.result } : {}) };
+        return response(request.id, toolResult(token === undefined ? failure : redactResult(failure, token), true));
       }
     }
     return protocolError(request.id, -32601, 'Method not found');

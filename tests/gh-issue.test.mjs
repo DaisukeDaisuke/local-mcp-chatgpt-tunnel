@@ -42,10 +42,12 @@ async function fixture(extra = [], custom) {
   return { server, commands, call };
 }
 
-test('startup token-file is mandatory, raw tokens are rejected, and errors do not echo secrets', () => {
-  assert.throws(() => parseStartupArguments([]), /--token-file is required/);
-  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`]), (error) => error.message.includes('Unsupported') && !error.message.includes(TOKEN));
-  assert.throws(() => parseStartupArguments(['--token', TOKEN]), (error) => !error.message.includes(TOKEN));
+test('token-file is supported, legacy token arguments remain compatible, and errors do not echo secrets', () => {
+  assert.throws(() => parseStartupArguments([]), /--token-file or --token is required/);
+  assert.equal(parseStartupArguments([`--token=${TOKEN}`, `--gh-executable=${GH_EXECUTABLE}`]).token, TOKEN);
+  assert.equal(parseStartupArguments(['--token', TOKEN, `--gh-executable=${GH_EXECUTABLE}`]).token, TOKEN);
+  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`, `--token=${TOKEN}`]), /only once/);
+  assert.throws(() => parseStartupArguments(['--token=bad token', `--gh-executable=${GH_EXECUTABLE}`]), /invalid token/);
   assert.throws(() => parseStartupArguments([`--token-file=${TOKEN_FILE}`, `--token-file=${TOKEN_FILE}`]), /only once/);
   assert.throws(() => parseStartupArguments(['--token-file=relative.txt']), /absolute path/);
   assert.throws(() => parseStartupArguments([`--unknown=${TOKEN}`]), (error) => !error.message.includes(TOKEN));
@@ -59,6 +61,21 @@ test('startup token-file is mandatory, raw tokens are rejected, and errors do no
   assert.equal(Object.hasOwn(parseStartupArguments(startup()), 'token'), false);
   assert.equal(JSON.stringify(startup()).includes(TOKEN), false);
   assert.deepEqual(parseStartupArguments(startup(['--repository=A/B', '--repository=a/b'])).repositories, ['a/b']);
+});
+
+test('legacy token authentication executes the same fixed commands and token-file takes precedence', async () => {
+  const legacyArgs = [`--token=${TOKEN}`, `--gh-executable=${GH_EXECUTABLE}`];
+  assert.equal(await createTokenReader(parseStartupArguments(legacyArgs))(), TOKEN);
+  assert.equal(await createTokenReader(parseStartupArguments(startup(['--token=ignored_legacy_token'])))(), TOKEN);
+  let sawCall = false;
+  const server = createServer({ argv: legacyArgs, execute: async (args) => {
+    sawCall = true;
+    return args[0] === 'repo' ? json({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` }) : json([]);
+  } });
+  await server(request(1, 'initialize'));
+  const result = await server(request(2, 'tools/call', { name: 'list_issues', arguments: { repository: REPO } }));
+  assert.equal(result.result.isError, false);
+  assert.equal(sawCall, true);
 });
 
 test('token file accepts UTF-8 with a trailing newline and rejects empty, oversized, invalid, or UTF-16 content', async () => {
@@ -98,11 +115,11 @@ test('token file inside writable roots is refused before gh can run', async () =
   await assert.rejects(readToken(), /--token-file must be outside writable workspace roots/);
 });
 
-test('discovery exposes exactly the five operations with accurate annotations', async () => {
+test('discovery exposes exactly six Issue operations with accurate annotations', async () => {
   const { server } = await fixture();
   const result = await server(request(3, 'tools/list'));
   const tools = result.result.tools;
-  assert.deepEqual(tools.map((entry) => entry.name), ['create_issue', 'view_issue', 'list_issues', 'comment_issue', 'close_issue']);
+  assert.deepEqual(tools.map((entry) => entry.name), ['create_issue', 'view_issue', 'list_issues', 'comment_issue', 'close_issue', 'edit_issue']);
   for (const tool of tools) {
     assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(tool.inputSchema.properties.token, undefined);
@@ -114,6 +131,8 @@ test('discovery exposes exactly the five operations with accurate annotations', 
   assert.equal(tools[2].annotations.readOnlyHint, true);
   assert.equal(tools[3].annotations.idempotentHint, false);
   assert.equal(tools[4].annotations.destructiveHint, true);
+  assert.equal(tools[5].annotations.destructiveHint, true);
+  assert.equal(tools[5].annotations.idempotentHint, true);
 });
 
 test('all five operations use fixed gh commands and literal multiline stdin', async () => {
@@ -136,6 +155,118 @@ test('all five operations use fixed gh commands and literal multiline stdin', as
   assert.equal(commands[closeIndex - 1].args[1], 'view');
   assert.deepEqual(commands[closeIndex].args, ['issue', 'close', '7', '--repo', `github.com/${REPO}`, '--reason', 'not planned']);
   assert.equal(commands.some((entry) => entry.args.includes(TOKEN)), false);
+});
+
+test('edit_issue replaces body/title independently and preserves literal UTF-8 stdin', async () => {
+  for (const [args, suffix, expectedInput] of [
+    [{ body: '# 修正\n$(literal)\n最後\n' }, ['--body-file', '-'], '# 修正\n$(literal)\n最後\n'],
+    [{ title: '--help; 修正題名' }, ['--title=--help; 修正題名'], undefined],
+    [{ title: '新題名', body: '' }, ['--title=新題名', '--body-file', '-'], '']
+  ]) {
+    const { commands, call } = await fixture();
+    const reply = await call('edit_issue', { issueNumber: 7, ...args });
+    assert.equal(reply.result.isError, false);
+    assert.equal(commands.length, 3);
+    assert.deepEqual(commands[1].args, ['issue', 'view', '7', '--repo', `github.com/${REPO}`, '--json', 'number,url']);
+    assert.deepEqual(commands[2], { args: ['issue', 'edit', '7', '--repo', `github.com/${REPO}`, ...suffix], input: expectedInput });
+  }
+});
+
+test('edit_issue rejects invalid input, private targets, and PRs before mutation', async () => {
+  const valid = await fixture();
+  for (const args of [
+    { issueNumber: 7 }, { issueNumber: 7, body: null }, { issueNumber: 7, title: '' },
+    { issueNumber: 7, title: 'a\nb' }, { issueNumber: 7, body: '\ud800' },
+    { issueNumber: 7, body: 'a', command: 'node' }, { issueNumber: '--help', body: 'a' }
+  ]) assert.equal((await valid.call('edit_issue', args)).result.isError, true);
+  assert.equal(valid.commands.length, 0);
+  const privateRepo = await fixture([], () => json({ visibility: 'PRIVATE' }));
+  assert.equal((await privateRepo.call('edit_issue', { issueNumber: 7, body: 'a' })).result.isError, true);
+  assert.equal(privateRepo.commands.length, 1);
+  const pr = await fixture([], (args) => args[0] === 'repo'
+    ? json({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` })
+    : json({ number: 7, url: `https://github.com/${REPO}/pull/7` }));
+  assert.equal((await pr.call('edit_issue', { issueNumber: 7, body: 'a' })).result.isError, true);
+  assert.equal(pr.commands.length, 2);
+});
+
+test('edit failure reaches the agent verbatim with stdout, stderr, and exitCode', async () => {
+  const stderr = 'GraphQL: Resource not accessible by personal access token (updateIssue)\n詳細: 権限不足\n';
+  const stdout = 'GitHub request was sent\n';
+  const { call, commands } = await fixture([], (args) => {
+    if (args[0] === 'repo') return json({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` });
+    if (args[1] === 'view') return json(issue());
+    return { stdout, stderr, exitCode: 1, signal: null };
+  });
+  const reply = (await call('edit_issue', { issueNumber: 7, body: '編集本文' })).result;
+  assert.equal(reply.isError, true);
+  assert.equal(reply.content[0].text, stderr);
+  assert.equal(reply.structuredContent.ok, false);
+  assert.equal(reply.structuredContent.error, stderr);
+  assert.deepEqual(reply.structuredContent.result, { stdout, stderr, exitCode: 1, signal: null });
+  assert.equal(commands.length, 3);
+  assert.equal(reply.content[0].text.includes('operation fault'), false);
+});
+
+test('preflight and stdout-only failures keep their original output and do not retry', async () => {
+  for (const failedPhase of ['repo', 'view', 'edit']) {
+    const stdout = `HTTP 403: ${failedPhase} denied\n`;
+    const { call, commands } = await fixture([], (args) => {
+      if ((failedPhase === 'repo' && args[0] === 'repo') || (args[0] === 'issue' && args[1] === failedPhase)) return { stdout, stderr: '', exitCode: 4 };
+      return args[0] === 'repo' ? json({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` }) : json(issue());
+    });
+    const reply = (await call('edit_issue', { issueNumber: 7, body: 'a' })).result;
+    assert.equal(reply.content[0].text, stdout);
+    assert.equal(reply.structuredContent.result.exitCode, 4);
+    assert.equal(commands.length, { repo: 1, view: 2, edit: 3 }[failedPhase]);
+  }
+});
+
+test('real gh executor failure is preserved through the MCP tool result with token redaction', async () => {
+  const config = parseStartupArguments(startup());
+  const stderr = `HTTP 403: updateIssue denied\ncredential: ${TOKEN}\n`;
+  const execute = createGhExecutor(config, { spawnProcess: fakeProcess((child, executable, args) => {
+    if (args[0] === 'repo') child.stdout.write(JSON.stringify({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` }));
+    else if (args[1] === 'view') child.stdout.write(JSON.stringify(issue()));
+    else {
+      child.stdout.write('request-id: 123\n');
+      child.stderr.write(stderr);
+    }
+    child.emit('close', args[1] === 'edit' ? 1 : 0, null);
+  }) });
+  const server = createServer({ argv: startup(), execute });
+  await server(request(1, 'initialize'));
+  const reply = (await server(request(2, 'tools/call', { name: 'edit_issue', arguments: { repository: REPO, issueNumber: 7, body: 'a' } }))).result;
+  assert.equal(reply.content[0].text, stderr.replace(TOKEN, '[REDACTED]'));
+  assert.equal(reply.structuredContent.result.stdout, 'request-id: 123\n');
+  assert.equal(reply.structuredContent.result.stderr, stderr.replace(TOKEN, '[REDACTED]'));
+  assert.equal(reply.structuredContent.result.exitCode, 1);
+  assert.deepEqual(reply.structuredContent.result.command, ['gh', 'issue', 'edit', '7', '--repo', `github.com/${REPO}`, '--body-file', '-']);
+  assert.equal(JSON.stringify(reply).includes(TOKEN), false);
+});
+
+test('stdio delivers edit failure details as an MCP tool result without converting them to a protocol fault', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let received = '';
+  output.on('data', (chunk) => { received += chunk; });
+  const stderr = 'HTTP 422: Validation Failed\nbody is too long\n';
+  const stdio = startStdio(input, output, { argv: startup(), execute: async (args) => {
+    if (args[0] === 'repo') return json({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` });
+    if (args[1] === 'view') return json(issue());
+    return { stdout: '', stderr, exitCode: 1 };
+  } });
+  input.write(`${JSON.stringify(request(1, 'initialize'))}\n${JSON.stringify(request(2, 'tools/call', {
+    name: 'edit_issue', arguments: { repository: REPO, issueNumber: 7, body: 'a' }
+  }))}\n`);
+  await stdio.settled();
+  const reply = JSON.parse(received.trim().split('\n')[1]);
+  assert.equal(reply.error, undefined);
+  assert.equal(reply.result.isError, true);
+  assert.equal(reply.result.content[0].text, stderr);
+  assert.equal(reply.result.structuredContent.error, stderr);
+  assert.equal(reply.result.structuredContent.result.stderr, stderr);
+  assert.equal(reply.result.structuredContent.result.exitCode, 1);
 });
 
 test('optional allowlist works without restricting other public repos by default', async () => {
@@ -336,7 +467,7 @@ test('stdio handles fragmented JSON, parse failures, notifications, and ordered 
   assert.equal(replies.length, 3);
   assert.equal(replies[0].error.code, -32700);
   assert.equal(replies[1].result.serverInfo.name, 'gh-issue');
-  assert.equal(replies[2].result.tools.length, 5);
+  assert.equal(replies[2].result.tools.length, 6);
   assert.equal(text.includes(TOKEN), false);
   input.write(`${'x'.repeat(1024 * 1024 + 1)}`);
   input.write(`tail\n${JSON.stringify(request(3, 'ping'))}\n`);
@@ -357,12 +488,12 @@ test('Gateway enforces onlineworkspace, fixes gh as a read-only trust input, and
   assert.equal(config.servers[0].isBundled, true);
   assert.equal(config.servers[0].sandbox, 'onlineworkspace');
   assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [GH_EXECUTABLE, TOKEN_FILE]);
-  for (const args of [
-    entry.args.filter((argument) => !argument.startsWith('--token-file=')),
-    [...entry.args, `--token=${TOKEN}`]
-  ]) {
+  const missingAuthArgs = entry.args.filter((argument) => !argument.startsWith('--token-file='));
+  await writeFile(path, `private_use_only = true\n[mcp_servers.gh_issue]\n${Object.entries({ ...entry, args: missingAuthArgs }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}\n`, 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /requires --token-file/);
+  for (const args of [[...missingAuthArgs, `--token=${TOKEN}`], [...entry.args, `--token=${TOKEN}`]]) {
     await writeFile(path, `private_use_only = true\n[mcp_servers.gh_issue]\n${Object.entries({ ...entry, args }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}\n`, 'utf8');
-    await assert.rejects(loadGatewayConfig(path), (error) => /requires --token-file|raw token arguments/.test(error.message) && !error.message.includes(TOKEN));
+    assert.equal((await loadGatewayConfig(path)).servers[0].sandbox, 'onlineworkspace');
   }
   for (const sandbox of ['never', 'elevated', 'unelevated']) {
     await writeFile(path, `private_use_only = true\n[mcp_servers.gh_issue]\n${Object.entries({ ...entry, sandbox }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}\n`, 'utf8');
@@ -379,7 +510,7 @@ test('Gateway enforces onlineworkspace, fixes gh as a read-only trust input, and
   assert.equal(example.mcp_servers.gh_issue.args.some((argument) => argument.startsWith('--token=')), false);
 });
 
-test('actual stdio process discovers five tools with a simulated sandbox marker and no network', async () => {
+test('actual stdio process discovers six tools with a simulated sandbox marker and no network', async () => {
   const child = spawn(process.execPath, ['mcp/gh-issue/server.mjs', ...startup()], { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
   let output = '';
   let errors = '';
@@ -393,6 +524,6 @@ test('actual stdio process discovers five tools with a simulated sandbox marker 
   assert.equal(await exited, 0, errors);
   const replies = output.trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(replies[0].result.serverInfo.name, 'gh-issue');
-  assert.equal(replies[1].result.tools.length, 5);
+  assert.equal(replies[1].result.tools.length, 6);
   assert.equal(output.includes(TOKEN), false);
 });
