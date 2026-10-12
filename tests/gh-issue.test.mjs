@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { createGhExecutor, createServer, parseStartupArguments, startStdio } from '../mcp/gh-issue/server.mjs';
+import { createGhExecutor, createServer, createTokenReader, parseStartupArguments, startStdio } from '../mcp/gh-issue/server.mjs';
 import { createBundledIsolation, signBundledIsolationContext } from '../app/bundled-isolation.mjs';
 import { loadGatewayConfig } from '../app/server-config.mjs';
 import { parseToml } from '../app/toml-lite.mjs';
@@ -15,11 +15,14 @@ const TOKEN = 'ghp_test_secret_only';
 const REPO = 'other-owner/public-repo';
 const ghDirectory = await mkdtemp(join(tmpdir(), 'gh-issue-trusted-'));
 const GH_EXECUTABLE = join(ghDirectory, process.platform === 'win32' ? 'gh.exe' : 'gh');
+const tokenDirectory = await mkdtemp(join(tmpdir(), 'gh-issue-token-'));
+const TOKEN_FILE = join(tokenDirectory, 'token.txt');
+await writeFile(TOKEN_FILE, `${TOKEN}\n`, 'utf8');
 await writeFile(GH_EXECUTABLE, 'test placeholder; never executed\n', 'utf8');
 const canonicalGhExecutable = await realpath(GH_EXECUTABLE);
 // Unit tests simulate the marker; they do not claim to launch a real OS sandbox.
 process.env.LOCAL_MCP_CODEX_SANDBOX_MODE = 'onlineworkspace';
-const startup = (extra = []) => [`--token=${TOKEN}`, `--gh-executable=${GH_EXECUTABLE}`, ...extra];
+const startup = (extra = []) => [`--token-file=${TOKEN_FILE}`, `--gh-executable=${GH_EXECUTABLE}`, ...extra];
 const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
 const json = (value) => ({ stdout: JSON.stringify(value), stderr: '', exitCode: 0 });
 const issue = (number = 7) => ({ number, url: `https://github.com/${REPO}/issues/${number}`, title: '題名' });
@@ -39,19 +42,60 @@ async function fixture(extra = [], custom) {
   return { server, commands, call };
 }
 
-test('startup token is mandatory, never falls back, and errors do not echo secrets', () => {
-  assert.throws(() => parseStartupArguments([]), /--token is required/);
-  assert.throws(() => parseStartupArguments(['--token=bad token']), /--token is required/);
-  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`, `--token=${TOKEN}`]), /only once/);
+test('startup token-file is mandatory, raw tokens are rejected, and errors do not echo secrets', () => {
+  assert.throws(() => parseStartupArguments([]), /--token-file is required/);
+  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`]), (error) => error.message.includes('Unsupported') && !error.message.includes(TOKEN));
+  assert.throws(() => parseStartupArguments(['--token', TOKEN]), (error) => !error.message.includes(TOKEN));
+  assert.throws(() => parseStartupArguments([`--token-file=${TOKEN_FILE}`, `--token-file=${TOKEN_FILE}`]), /only once/);
+  assert.throws(() => parseStartupArguments(['--token-file=relative.txt']), /absolute path/);
   assert.throws(() => parseStartupArguments([`--unknown=${TOKEN}`]), (error) => !error.message.includes(TOKEN));
-  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`, '--gh-executable=relative.exe']), /absolute path/);
-  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`, '--repository=https://github.com/a/b']), /OWNER\/REPO/);
-  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`, '--repository=a/b;command']), /OWNER\/REPO/);
+  assert.throws(() => parseStartupArguments([`--token-file=${TOKEN_FILE}`, '--gh-executable=relative.exe']), /absolute path/);
+  assert.throws(() => parseStartupArguments(startup(['--repository=https://github.com/a/b'])), /OWNER\/REPO/);
+  assert.throws(() => parseStartupArguments(startup(['--repository=a/b;command'])), /OWNER\/REPO/);
   assert.deepEqual(parseStartupArguments(['--help']), { help: true });
-  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`]), /--gh-executable is required/);
-  assert.throws(() => parseStartupArguments([`--token=${TOKEN}`, `--gh-executable=${join(ghDirectory, 'node')}`]), /--gh-executable is required/);
-  assert.equal(parseStartupArguments(['--token', TOKEN, `--gh-executable=${GH_EXECUTABLE}`]).token, TOKEN);
+  assert.throws(() => parseStartupArguments([`--token-file=${TOKEN_FILE}`]), /--gh-executable is required/);
+  assert.throws(() => parseStartupArguments([`--token-file=${TOKEN_FILE}`, `--gh-executable=${join(ghDirectory, 'node')}`]), /--gh-executable is required/);
+  assert.equal(parseStartupArguments(['--token-file', TOKEN_FILE, `--gh-executable=${GH_EXECUTABLE}`]).tokenFile, TOKEN_FILE);
+  assert.equal(Object.hasOwn(parseStartupArguments(startup()), 'token'), false);
+  assert.equal(JSON.stringify(startup()).includes(TOKEN), false);
   assert.deepEqual(parseStartupArguments(startup(['--repository=A/B', '--repository=a/b'])).repositories, ['a/b']);
+});
+
+test('token file accepts UTF-8 with a trailing newline and rejects empty, oversized, invalid, or UTF-16 content', async () => {
+  assert.equal(await createTokenReader(parseStartupArguments(startup()))(), TOKEN);
+  for (const [index, bytes] of [
+    Buffer.alloc(0), Buffer.from(' '.repeat(3)), Buffer.from('bad secret token'), Buffer.from('a'.repeat(8193)),
+    Buffer.from('a'.repeat(4097)), Buffer.from([0xff, 0xfe, 0x61, 0, 0x61, 0]), Buffer.from([0xc3, 0x28])
+  ].entries()) {
+    const path = join(tokenDirectory, `invalid-${index}.txt`);
+    await writeFile(path, bytes);
+    let executions = 0;
+    const execute = createGhExecutor(parseStartupArguments([`--token-file=${path}`, `--gh-executable=${GH_EXECUTABLE}`]), {
+      spawnProcess: () => { executions += 1; }
+    });
+    await assert.rejects(execute(['issue', 'list']), (error) => error.message.includes('--token-file') && !error.message.includes('bad secret token'));
+    assert.equal(executions, 0);
+  }
+  const missing = createTokenReader(parseStartupArguments([`--token-file=${join(tokenDirectory, 'missing.txt')}`, `--gh-executable=${GH_EXECUTABLE}`]));
+  await assert.rejects(missing(), /ENOENT/);
+});
+
+test('token file rejects symbolic links', async (t) => {
+  const link = join(tokenDirectory, 'linked.txt');
+  try { await symlink(TOKEN_FILE, link); }
+  catch (error) {
+    if (['EPERM', 'EACCES'].includes(error.code)) { t.skip('OS does not permit test symlink creation'); return; }
+    throw error;
+  }
+  const readToken = createTokenReader(parseStartupArguments([`--token-file=${link}`, `--gh-executable=${GH_EXECUTABLE}`]));
+  await assert.rejects(readToken(), /non-symbolic-link regular file/);
+});
+
+test('token file inside writable roots is refused before gh can run', async () => {
+  const readToken = createTokenReader(parseStartupArguments(startup()), {
+    current: () => ({ base: tokenDirectory, roots: [tokenDirectory] })
+  });
+  await assert.rejects(readToken(), /--token-file must be outside writable workspace roots/);
 });
 
 test('discovery exposes exactly the five operations with accurate annotations', async () => {
@@ -181,7 +225,9 @@ test('write errors and nested output redact the startup token without retrying',
   assert.equal(JSON.stringify(result).includes(TOKEN), false);
   assert.equal(failed.commands.length, 1);
   const tokenWithQuotes = 'secret"with\\quotes';
-  const server = createServer({ argv: [`--token=${tokenWithQuotes}`, `--gh-executable=${GH_EXECUTABLE}`], execute: async (args) => args[0] === 'repo'
+  const quotedTokenFile = join(tokenDirectory, 'quoted.txt');
+  await writeFile(quotedTokenFile, tokenWithQuotes, 'utf8');
+  const server = createServer({ argv: [`--token-file=${quotedTokenFile}`, `--gh-executable=${GH_EXECUTABLE}`], execute: async (args) => args[0] === 'repo'
     ? json({ visibility: 'PUBLIC', nameWithOwner: REPO, url: `https://github.com/${REPO}` }) : json({ ...issue(), body: tokenWithQuotes }) });
   await server(request(1, 'initialize'));
   const view = await server(request(2, 'tools/call', { name: 'view_issue', arguments: { repository: REPO, issueNumber: 7 } }));
@@ -310,17 +356,27 @@ test('Gateway enforces onlineworkspace, fixes gh as a read-only trust input, and
   const config = await loadGatewayConfig(path);
   assert.equal(config.servers[0].isBundled, true);
   assert.equal(config.servers[0].sandbox, 'onlineworkspace');
-  assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [GH_EXECUTABLE]);
+  assert.deepEqual(config.servers[0].sandboxReadOnlyFiles, [GH_EXECUTABLE, TOKEN_FILE]);
+  for (const args of [
+    entry.args.filter((argument) => !argument.startsWith('--token-file=')),
+    [...entry.args, `--token=${TOKEN}`]
+  ]) {
+    await writeFile(path, `private_use_only = true\n[mcp_servers.gh_issue]\n${Object.entries({ ...entry, args }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}\n`, 'utf8');
+    await assert.rejects(loadGatewayConfig(path), (error) => /requires --token-file|raw token arguments/.test(error.message) && !error.message.includes(TOKEN));
+  }
   for (const sandbox of ['never', 'elevated', 'unelevated']) {
     await writeFile(path, `private_use_only = true\n[mcp_servers.gh_issue]\n${Object.entries({ ...entry, sandbox }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}\n`, 'utf8');
     await assert.rejects(loadGatewayConfig(path), /must be onlineworkspace for gh-issue/);
   }
   await writeFile(path, `private_use_only = true\n[mcp_servers.gh_issue]\n${Object.entries({ ...entry, allowed_directories: [resolve('.'), ghDirectory] }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}\n`, 'utf8');
   await assert.rejects(loadGatewayConfig(path), /outside allowed_directories/);
+  await writeFile(path, `private_use_only = true\n[mcp_servers.gh_issue]\n${Object.entries({ ...entry, allowed_directories: [resolve('.'), tokenDirectory] }).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')}\n`, 'utf8');
+  await assert.rejects(loadGatewayConfig(path), /fixed trust files must be outside allowed_directories/);
   const example = parseToml(await readFile(new URL('../config/gateway.gh-issue.example.toml', import.meta.url), 'utf8'));
   assert.equal(example.mcp_servers.gh_issue.enabled, false);
   assert.equal(example.mcp_servers.gh_issue.sandbox, 'onlineworkspace');
-  assert.ok(example.mcp_servers.gh_issue.args.includes('--token=REPLACE_WITH_GITHUB_TOKEN'));
+  assert.ok(example.mcp_servers.gh_issue.args.some((argument) => argument.startsWith('--token-file=')));
+  assert.equal(example.mcp_servers.gh_issue.args.some((argument) => argument.startsWith('--token=')), false);
 });
 
 test('actual stdio process discovers five tools with a simulated sandbox marker and no network', async () => {

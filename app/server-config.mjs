@@ -294,12 +294,17 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const codespaceGhExecutable = codespaceServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
   const codespaceTokenFile = codespaceServer ? startupPathOption(args, 'token-file', platform) : undefined;
   const ghIssueGhExecutable = ghIssueServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
+  const ghIssueTokenFile = ghIssueServer ? startupPathOption(args, 'token-file', platform) : undefined;
+  if (ghIssueServer && !ghIssueTokenFile) throw new Error(`mcp_servers.${name} requires --token-file=<absolute-path> for gh-issue`);
+  if (ghIssueServer && args.some((argument) => argument === '--token' || argument.startsWith('--token='))) {
+    throw new Error(`mcp_servers.${name} gh-issue accepts --token-file only; raw token arguments are rejected`);
+  }
   if (ghIssueServer && !ghIssueGhExecutable) throw new Error(`mcp_servers.${name} requires --gh-executable=<absolute-path> for gh-issue`);
   if (ghIssueGhExecutable) normalizeNativeExecutable(ghIssueGhExecutable, `mcp_servers.${name} --gh-executable`, platform);
   if (codespaceServer && args.some((argument) => argument.startsWith('--ssh-key-file='))) {
     throw new Error(`mcp_servers.${name} --ssh-key-file is no longer supported; Codespace SSH keys are generated internally`);
   }
-  const sandboxReadOnlyFiles = [codespaceGhExecutable, codespaceTokenFile, ghIssueGhExecutable].filter(Boolean);
+  const sandboxReadOnlyFiles = [codespaceGhExecutable, codespaceTokenFile, ghIssueGhExecutable, ghIssueTokenFile].filter(Boolean);
   const protectedGatewayLogs = protectedDirectoryPolicyEntries(
     allowedDirectories,
     allowedFiles,

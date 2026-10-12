@@ -1,11 +1,11 @@
 private_use_only = true
 protect_gateway_app = true
 publish_tool_directory = true
-# Replace the paths and token before enabling this server.
+# Replace the paths before enabling this server. Store the token in the UTF-8 file.
 # --repository=OWNER/REPO is optional; omit it to permit any public github.com repository.
 [mcp_servers.gh_issue]
 command = 'C:\ABSOLUTE\PATH\TO\node.exe'
-args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-issue\server.mjs', '--token=REPLACE_WITH_GITHUB_TOKEN', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe']
+args = ['C:\ABSOLUTE\PATH\TO\local-mcp-chatgpt-tunnel\mcp\gh-issue\server.mjs', '--token-file=C:\ABSOLUTE\PATH\TO\github-token.txt', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe']
 cwd = 'C:\ABSOLUTE\PATH\TO\YOUR\PROJECT'
 enabled = false
 sandbox = 'onlineworkspace'

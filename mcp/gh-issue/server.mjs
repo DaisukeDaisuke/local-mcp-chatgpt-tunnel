@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBundledIsolation, environmentWithoutBundledIsolationKey } from '../../app/bundled-isolation.mjs';
@@ -15,11 +15,12 @@ const LIST_FIELDS = 'number,title,state,url,author,labels,createdAt,updatedAt';
 
 export const GH_ISSUE_MCP_HELP = `gh-issue
 Usage:
-  node mcp/gh-issue/server.mjs --token=TOKEN --gh-executable=/absolute/path/to/gh [--repository=OWNER/REPO ...]
+  node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/token.txt --gh-executable=/absolute/path/to/gh [--repository=OWNER/REPO ...]
 Only create_issue, view_issue, list_issues, comment_issue, and close_issue are exposed.
 Targets must be public repositories on github.com. Without --repository, any public
 repository can be selected. Repeated --repository arguments form an optional allowlist.
-The token is required at startup and is passed to gh only as GH_TOKEN, never in gh argv.
+The token file is required at startup. Its contents are passed to gh only as GH_TOKEN.
+Raw token arguments are rejected. The UTF-8 token file is a read-only trust input.
 The MCP itself must run in the Gateway onlineworkspace sandbox.
 The fixed gh executable must be outside writable workspace roots.
 `;
@@ -37,7 +38,7 @@ export function parseStartupArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') { help = true; continue; }
-    const match = /^--(token|repository|gh-executable)(?:=(.*))?$/s.exec(argument);
+    const match = /^--(token-file|repository|gh-executable)(?:=(.*))?$/s.exec(argument);
     // Do not echo an unknown argument: it may itself contain a credential.
     if (!match) throw new Error('Unsupported startup argument; use --help');
     const name = match[1];
@@ -50,16 +51,16 @@ export function parseStartupArguments(argv) {
     }
   }
   if (help) return { help: true };
-  const token = values.token;
-  if (typeof token !== 'string' || token.length > 4096 || !/^[\x21-\x7e]+$/.test(token)) {
-    throw new Error('--token is required and must be non-empty printable ASCII without whitespace');
+  const tokenFile = values['token-file'];
+  if (typeof tokenFile !== 'string' || !isAbsolute(tokenFile) || /[\0\r\n]/.test(tokenFile)) {
+    throw new Error('--token-file is required and must be an absolute path');
   }
   const executable = values['gh-executable'];
   if (typeof executable !== 'string' || !isAbsolute(executable) || /[\0\r\n]/.test(executable)
       || !/^gh(?:\.exe)?$/i.test(basename(executable)) || (process.platform === 'win32' && !/\.exe$/i.test(executable))) {
     throw new Error('--gh-executable is required and must be an absolute path to gh (gh.exe on Windows)');
   }
-  return { help: false, token, executable, repositories: [...new Map(repositories.map((name) => [name.toLowerCase(), name])).values()] };
+  return { help: false, tokenFile, executable, repositories: [...new Map(repositories.map((name) => [name.toLowerCase(), name])).values()] };
 }
 
 function redact(value, token) {
@@ -82,33 +83,61 @@ function within(root, candidate) {
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-async function trustedGhExecutable(config, isolation) {
-  const info = await lstat(config.executable);
-  if (!info.isFile() || info.isSymbolicLink()) throw new Error('--gh-executable must be a non-symbolic-link regular file');
-  const executable = await realpath(config.executable);
+async function assertOutsideWritableRoots(actualPath, isolation, optionName) {
   const configuredRoots = process.env.LOCAL_MCP_ALLOWED_DIRECTORIES === undefined ? [process.cwd()] : JSON.parse(process.env.LOCAL_MCP_ALLOWED_DIRECTORIES);
   if (!Array.isArray(configuredRoots) || configuredRoots.some((root) => typeof root !== 'string' || !isAbsolute(root))) throw new Error('Invalid configured workspace roots');
   const roots = [...configuredRoots, ...(isolation.current()?.roots ?? [])];
   for (const root of roots) {
-    if (within(await realpath(root), executable)) throw new Error('--gh-executable must be outside writable workspace roots');
+    if (within(await realpath(root), actualPath)) throw new Error(`${optionName} must be outside writable workspace roots`);
   }
+}
+
+async function trustedGhExecutable(config, isolation) {
+  const info = await lstat(config.executable);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error('--gh-executable must be a non-symbolic-link regular file');
+  const executable = await realpath(config.executable);
+  await assertOutsideWritableRoots(executable, isolation, '--gh-executable');
   return executable;
+}
+
+export function createTokenReader(config, isolation = createBundledIsolation()) {
+  let tokenPromise;
+  return () => {
+    tokenPromise ??= (async () => {
+      const info = await lstat(config.tokenFile);
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error('--token-file must be a non-symbolic-link regular file');
+      if (info.size < 1 || info.size > 8192) throw new Error('--token-file must contain from 1 through 8192 bytes');
+      const actual = await realpath(config.tokenFile);
+      await assertOutsideWritableRoots(actual, isolation, '--token-file');
+      const bytes = await readFile(actual);
+      if (bytes.length < 1 || bytes.length > 8192) throw new Error('--token-file must contain from 1 through 8192 bytes');
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+      catch { throw new Error('--token-file must be UTF-8; UTF-16 and invalid UTF-8 are not supported'); }
+      const token = text.trim();
+      if (token.length === 0 || token.length > 4096 || !/^[\x21-\x7e]+$/.test(token)) throw new Error('--token-file contains an invalid token');
+      return token;
+    })();
+    return tokenPromise;
+  };
 }
 
 export function createGhExecutor(config, options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
   const isolation = options.isolation ?? createBundledIsolation();
+  const getToken = options.getToken ?? createTokenReader(config, isolation);
   const timeoutMs = options.timeoutMs ?? GH_TIMEOUT_MS;
   const maxOutputBytes = options.maxOutputBytes ?? MAX_OUTPUT_BYTES;
   return async (args, input) => {
     assertOnlineSandbox();
     const cwd = await realpath(isolation.current()?.base ?? process.cwd());
     const executable = await trustedGhExecutable(config, isolation);
+    const token = await getToken();
     const env = scrubSecretEnvironment(environmentWithoutBundledIsolationKey());
     // Ignore gh host/repository/debug/socket overrides and inherited credentials.
     for (const name of Object.keys(env)) if (/^(GH_|GITHUB_)/i.test(name)) delete env[name];
     Object.assign(env, {
-      GH_TOKEN: config.token, GH_HOST: 'github.com', GH_PROMPT_DISABLED: '1',
+      GH_TOKEN: token, GH_HOST: 'github.com', GH_PROMPT_DISABLED: '1',
       GH_PAGER: '', PAGER: '', NO_COLOR: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_NO_EXTENSION_UPDATE_NOTIFIER: '1'
     });
     return new Promise((resolvePromise, reject) => {
@@ -122,7 +151,7 @@ export function createGhExecutor(config, options = {}) {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        if (error) reject(new Error(redact(error.message, config.token)));
+        if (error) reject(new Error(redact(error.message, token)));
         else resolvePromise(result);
       };
       try {
@@ -145,8 +174,8 @@ export function createGhExecutor(config, options = {}) {
       child.stderr.on('data', collect(stderr));
       child.once('error', (error) => finish(new Error(`Unable to start gh: ${error.message}`)));
       child.once('close', (code, signal) => {
-        const out = redact(Buffer.concat(stdout).toString('utf8'), config.token);
-        const err = redact(Buffer.concat(stderr).toString('utf8'), config.token);
+        const out = redact(Buffer.concat(stdout).toString('utf8'), token);
+        const err = redact(Buffer.concat(stderr).toString('utf8'), token);
         if (code !== 0) finish(new Error(err.trim() || out.trim() || `gh exited with code ${code}${signal ? ` (${signal})` : ''}`));
         else finish(null, { stdout: out, stderr: err, exitCode: 0 });
       });
@@ -296,7 +325,8 @@ export function createServer(options = {}) {
   if (config.help) throw new Error('Use --help from the command line');
   assertOnlineSandbox();
   const isolation = options.isolation ?? createBundledIsolation();
-  const execute = options.execute ?? createGhExecutor(config, { isolation });
+  const getToken = createTokenReader(config, isolation);
+  const execute = options.execute ?? createGhExecutor(config, { isolation, getToken });
   const schemas = toolSchemas(config);
   let initialized = false;
   return async (request) => {
@@ -307,20 +337,26 @@ export function createServer(options = {}) {
       initialized = true;
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} },
-        serverInfo: { name: 'gh-issue', version: '1.0.0' },
-        instructions: 'Only five Issue operations on public github.com repositories. Writes use the startup token. Never retry an uncertain create/comment automatically; inspect the Issue first.'
+        serverInfo: { name: 'gh-issue', version: '1.0.1' },
+        instructions: 'Only five Issue operations on public github.com repositories. Authentication is read from the configured read-only token file. Never retry an uncertain create/comment automatically; inspect the Issue first.'
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
     if (request.method === 'ping') return response(request.id, {});
     if (request.method === 'tools/list') return response(request.id, { tools: schemas });
     if (request.method === 'tools/call') {
+      let token;
       try {
-        const result = await isolation.run(request.params?.arguments ?? {}, (args) => callTool(planForTool(request.params?.name, args, config, schemas), request.params.name, execute));
-        const value = redactResult({ ok: true, result }, config.token);
+        const result = await isolation.run(request.params?.arguments ?? {}, async (args) => {
+          const plan = planForTool(request.params?.name, args, config, schemas);
+          token = await getToken();
+          return callTool(plan, request.params.name, execute);
+        });
+        const value = redactResult({ ok: true, result }, token);
         return response(request.id, toolResult(value));
       } catch (error) {
-        return response(request.id, toolResult({ ok: false, error: redact(error instanceof Error ? error.message : String(error), config.token) }, true));
+        const message = error instanceof Error ? error.message : String(error);
+        return response(request.id, toolResult({ ok: false, error: token === undefined ? message : redact(message, token) }, true));
       }
     }
     return protocolError(request.id, -32601, 'Method not found');
