@@ -1,6 +1,7 @@
 # Merge this table into config/gateway.toml; replace all example paths first.
 # Repeat --repository=OWNER/REPO to allow additional creation/edit destinations.
 # The token file is UTF-8 and outside allowed_directories; never put a token in args.
+# Fixed gh/token paths receive read-only sandbox access automatically.
 [mcp_servers.gh_pr]
 command = 'C:\Program Files\nodejs\node.exe'
 args = ['C:\tools\local-mcp-chatgpt-tunnel\mcp\gh-pr\server.mjs', '--repository=ZevyaDev/dqix-decomp', '--token-file=C:\mcp-secrets\github-token.txt', '--gh-executable=C:\Program Files\GitHub CLI\gh.exe', '--max-body=10K']
@@ -13,7 +14,7 @@ annotation_config = false
 tool_timeout_sec = 90
 serial_group = 'gh_pr'
 allowed_directories = ['C:\work\project']
-allowed_files = ['C:\mcp-secrets\github-token.txt', 'C:\Program Files\GitHub CLI\gh.exe']
+allowed_files = []
 disallowed_directories = []
 disallowed_files = []
 disallowed_path_globs = []

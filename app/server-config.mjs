@@ -15,6 +15,7 @@ const INTERNET_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'internet', 'server.
 const ARCHIVE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'archive', 'server.mjs');
 const CODESPACE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'codespace', 'server.mjs');
 const GH_ISSUE_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'gh-issue', 'server.mjs');
+const GH_PR_SERVER_PATH = resolve(repositoryRoot, 'mcp', 'gh-pr', 'server.mjs');
 const BUNDLED_SERVER_PATHS = [
   ['mcp', 'safe-files', 'server.mjs'],
   ['mcp', 'safe-images', 'server.mjs'],
@@ -24,6 +25,7 @@ const BUNDLED_SERVER_PATHS = [
   ['mcp', 'git-capability', 'server.mjs'],
   ['mcp', 'gh-workflow', 'server.mjs'],
   ['mcp', 'gh-issue', 'server.mjs'],
+  ['mcp', 'gh-pr', 'server.mjs'],
   ['mcp', 'codex-script', 'server.mjs'],
   ['mcp', 'buildv5tassembly', 'server.mjs'],
   ['mcp', 'internet', 'server.mjs'],
@@ -257,6 +259,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const archiveServer = isArchiveServer(raw.command, args, cwd, platform);
   const codespaceServer = isCodespaceServer(raw.command, args, cwd, platform);
   const ghIssueServer = isServerPath(raw.command, args, cwd, GH_ISSUE_SERVER_PATH, platform);
+  const ghPrServer = isServerPath(raw.command, args, cwd, GH_PR_SERVER_PATH, platform);
   const safeFilesServer = isSafeFilesServer(raw.command, args, cwd, platform);
   const bundledServer = codexScriptServer
     || buildV5tAssemblyServer
@@ -282,6 +285,9 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if (ghIssueServer && sandbox !== 'onlineworkspace') {
     throw new Error(`mcp_servers.${name}.sandbox must be onlineworkspace for gh-issue`);
   }
+  if (ghPrServer && sandbox !== 'onlineworkspace') {
+    throw new Error(`mcp_servers.${name}.sandbox must be onlineworkspace for gh-pr`);
+  }
   const sandboxDelegated = false;
   const command = sandbox === 'elevated' || sandbox === 'onlineworkspace'
     ? normalizeNativeExecutable(raw.command, `mcp_servers.${name}.command`, platform)
@@ -295,6 +301,15 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   const codespaceTokenFile = codespaceServer ? startupPathOption(args, 'token-file', platform) : undefined;
   const ghIssueGhExecutable = ghIssueServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
   const ghIssueTokenFile = ghIssueServer ? startupPathOption(args, 'token-file', platform) : undefined;
+  const ghPrGhExecutable = ghPrServer ? startupPathOption(args, 'gh-executable', platform) : undefined;
+  const ghPrTokenFile = ghPrServer ? startupPathOption(args, 'token-file', platform) : undefined;
+  if (ghPrServer && (!ghPrTokenFile || !ghPrGhExecutable)) {
+    throw new Error(`mcp_servers.${name} requires --token-file and --gh-executable absolute paths for gh-pr`);
+  }
+  if (ghPrGhExecutable) normalizeNativeExecutable(ghPrGhExecutable, `mcp_servers.${name} --gh-executable`, platform);
+  if (ghPrServer && args.some((argument) => argument === '--token' || argument.startsWith('--token='))) {
+    throw new Error(`mcp_servers.${name} accepts file-only authentication for gh-pr`);
+  }
   if (ghIssueServer && !ghIssueTokenFile && !args.some((argument) => argument === '--token' || argument.startsWith('--token='))) {
     throw new Error(`mcp_servers.${name} requires --token-file=<absolute-path> or --token for gh-issue`);
   }
@@ -303,7 +318,7 @@ function normalizeServer(name, raw, base, platform, protectedGatewayConfigPaths,
   if (codespaceServer && args.some((argument) => argument.startsWith('--ssh-key-file='))) {
     throw new Error(`mcp_servers.${name} --ssh-key-file is no longer supported; Codespace SSH keys are generated internally`);
   }
-  const sandboxReadOnlyFiles = [codespaceGhExecutable, codespaceTokenFile, ghIssueGhExecutable, ghIssueTokenFile].filter(Boolean);
+  const sandboxReadOnlyFiles = [codespaceGhExecutable, codespaceTokenFile, ghIssueGhExecutable, ghIssueTokenFile, ghPrGhExecutable, ghPrTokenFile].filter(Boolean);
   const protectedGatewayLogs = protectedDirectoryPolicyEntries(
     allowedDirectories,
     allowedFiles,

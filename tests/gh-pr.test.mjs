@@ -9,6 +9,7 @@ import test from 'node:test';
 import { createRuntime, createServer, parseBodyLimit, parseStartupArguments, startStdio } from '../mcp/gh-pr/server.mjs';
 import { createBundledIsolation, signBundledIsolationContext } from '../app/bundled-isolation.mjs';
 import { loadGatewayConfig } from '../app/server-config.mjs';
+import { codexAppServerInternals } from '../app/codex-app-server.mjs';
 import { parseToml } from '../app/toml-lite.mjs';
 
 const REPO = 'Target/repo';
@@ -23,7 +24,7 @@ await writeFile(tokenFile, TOKEN + '\n', 'utf8');
 await writeFile(gh, 'never executed: unit-test fixture\n', 'utf8');
 const argv = (more = []) => [`--repository=${REPO}`, `--token-file=${tokenFile}`, `--gh-executable=${gh}`, ...more];
 const env = (more = {}) => ({ LOCAL_MCP_CODEX_SANDBOX_MODE: 'onlineworkspace',
-  LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify([root, secondRoot]), LOCAL_MCP_ALLOWED_FILES: JSON.stringify([tokenFile, gh]), ...more });
+  LOCAL_MCP_ALLOWED_DIRECTORIES: JSON.stringify([root, secondRoot]), LOCAL_MCP_ALLOWED_FILES: '[]', ...more });
 const rpc = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params });
 const pr = (more = {}) => ({ number: 7, url: `https://github.com/${REPO}/pull/7`, title: 'title', body: 'body', state: 'OPEN',
   isDraft: false, headRefOid: 'a'.repeat(40), baseRefName: 'release', headRefName: 'feature', headRepositoryOwner: { login: 'fork-owner' }, ...more });
@@ -244,9 +245,9 @@ async function signedRuntime(environment = env(), options = {}) {
   return { runtime, run };
 }
 test('real path policy enforces allow/deny files, directories, globs and signed cwd', async () => {
-  for (const override of [{ LOCAL_MCP_ALLOWED_FILES: JSON.stringify([gh]) },
-    { LOCAL_MCP_DISALLOWED_FILES: JSON.stringify([tokenFile]) }, { LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify([trusted]) },
-    { LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(['**token.txt']) }, { LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify([root]) }]) {
+  for (const override of [{ LOCAL_MCP_DISALLOWED_FILES: JSON.stringify([tokenFile]) }, { LOCAL_MCP_DISALLOWED_FILES: JSON.stringify([gh]) },
+    { LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify([trusted]) }, { LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(['**token.txt']) },
+    { LOCAL_MCP_DISALLOWED_PATH_GLOBS: JSON.stringify(['**/gh', '**/gh.exe']) }, { LOCAL_MCP_DISALLOWED_DIRECTORIES: JSON.stringify([root]) }]) {
     const { runtime, run } = await signedRuntime(env(override));
     await assert.rejects(run(() => runtime.prepare()), /allowed_files|outside|denied|disallowed/);
   }
@@ -256,6 +257,16 @@ test('real path policy enforces allow/deny files, directories, globs and signed 
   const link = join(root, 'escape');
   await symlink(secondRoot, link, process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(run(() => runtime.prepare(), { roots: [root], base: link }), /escapes signed roots/);
+});
+test('fixed gh and token are automatically readable with empty allowed_files and do not alter public path policy', async () => {
+  const environment = env();
+  const { runtime, run } = await signedRuntime(environment);
+  const prepared = await run(() => runtime.prepare());
+  assert.equal(prepared.executable, gh);
+  assert.equal(prepared.token, TOKEN);
+  assert.equal(environment.LOCAL_MCP_ALLOWED_FILES, '[]');
+  const unrelated = await mkdtemp(join(tmpdir(), 'gh-pr-unallowed-base-'));
+  await assert.rejects(run(() => runtime.prepare(), { roots: [unrelated], base: unrelated }), /outside allowed_directories/);
 });
 test('token file rejects invalid UTF-8, UTF-16LE, size violations, symlinks and writable locations', async () => {
   for (const [index, bytes] of [Buffer.from([255, 254, 65, 0]), Buffer.from([195, 40]), Buffer.from('bad token'), Buffer.alloc(0), Buffer.alloc(8193, 65)].entries()) {
@@ -383,12 +394,18 @@ test('config is TOML-valid, bundled, online-only, and supplies exact read-only t
   const directory = await mkdtemp(join(tmpdir(), 'gh-pr-config-'));
   const path = join(directory, 'gateway.toml');
   for (const sandbox of ['never', 'elevated', 'unelevated', 'onlineworkspace']) {
-    await writeFile(path, `private_use_only = true\nprotect_gateway_app = true\n[mcp_servers.gh_pr]\ncommand = '${process.execPath}'\nargs = ['${resolve('mcp/gh-pr/server.mjs')}', '--repository=${REPO}', '--token-file=${tokenFile}', '--gh-executable=${gh}']\ncwd = '${root}'\nsandbox = '${sandbox}'\ncodex_executable = '${join(trusted, 'codex')}'\nallowed_directories = ['${root}']\nallowed_files = ['${tokenFile}', '${gh}']\n`, 'utf8');
+    await writeFile(path, `private_use_only = true\nprotect_gateway_app = true\n[mcp_servers.gh_pr]\ncommand = '${process.execPath}'\nargs = ['${resolve('mcp/gh-pr/server.mjs')}', '--repository=${REPO}', '--token-file=${tokenFile}', '--gh-executable=${gh}']\ncwd = '${root}'\nsandbox = '${sandbox}'\ncodex_executable = '${join(trusted, 'codex')}'\nallowed_directories = ['${root}']\nallowed_files = []\n`, 'utf8');
     if (sandbox !== 'onlineworkspace') await assert.rejects(loadGatewayConfig(path), /onlineworkspace for gh-pr/);
     else {
       const loaded = await loadGatewayConfig(path);
       assert.equal(loaded.servers[0].isBundled, true);
+      assert.deepEqual(loaded.servers[0].allowedFiles, []);
       assert.deepEqual(loaded.servers[0].sandboxReadOnlyFiles, [gh, tokenFile]);
+      const profile = codexAppServerInternals.permissionProfileOverrideFor(loaded.servers[0]);
+      for (const file of [gh, tokenFile]) {
+        assert.ok(profile.includes(`'${file}'='read'`));
+        assert.equal(profile.includes(`'${file}'='write'`), false);
+      }
     }
   }
 });

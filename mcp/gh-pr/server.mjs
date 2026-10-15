@@ -34,7 +34,8 @@ by gh pr view; no Issue create/edit/close operation or arbitrary API is exposed.
 Requires sandbox=onlineworkspace. No inline token, arbitrary gh flags, push, merge,
 checkout, review submission, shell, browser, download, or package installation.
 Token and gh are fixed read-only trust inputs, outside writable workspace roots,
-and must be listed in allowed_files. Public operations use signed roots/base only.
+automatically admitted only at their configured exact paths. No allowed_files
+entry is required. Deny rules still apply. Public operations use signed roots/base only.
 `;
 
 function fail(message, code = 'INVALID_ARGUMENT', details) {
@@ -275,7 +276,9 @@ function commentsFromView(value, action, config) {
 
 export function createRuntime(config, { env = process.env, isolation = createBundledIsolation(), spawnProcess = spawn, timeoutMs = TIMEOUT_MS, maxOutputBytes = MAX_PROCESS_OUTPUT } = {}) {
   const policySettings = settings(env);
-  const policy = (base) => new ToolPathPolicy({ serverName: 'gh-pr', cwd: base, ...policySettings });
+  const fixedTrustFiles = [config.executable, config.tokenFile];
+  const policy = (base, trustInput = false) => new ToolPathPolicy({ serverName: 'gh-pr', cwd: base, ...policySettings,
+    allowedFiles: trustInput ? [...policySettings.allowedFiles, ...fixedTrustFiles] : policySettings.allowedFiles });
   const checkAbort = (signal) => { if (signal?.aborted) throw fail('Operation cancelled or timed out', 'CANCELLED'); };
   async function assertDenied(path) {
     if (findDisallowedPathGlob(path, policySettings.disallowedPathGlobs)) throw fail('Path is denied by disallowed_path_globs', 'PATH_REJECTED');
@@ -292,17 +295,17 @@ export function createRuntime(config, { env = process.env, isolation = createBun
       }
     }
   }
-  async function checkedPath(path, base, kind, signedRoots) {
+  async function checkedPath(path, base, kind, signedRoots, trustInput = false) {
     pathSyntax(path, kind);
     const lexical = resolve(base, path);
     if (signedRoots && !signedRoots.some((root) => within(root, lexical))) throw fail('Path is outside signed roots', 'PATH_REJECTED');
     await assertDenied(lexical);
     // The SDK policy applies both allow arrays and all three deny arrays.
-    await policy(base).assertToolArguments(kind, { path: lexical }, base);
+    await policy(base, trustInput).assertToolArguments(kind, { path: lexical }, base);
     const canonical = await realpath(lexical);
     if (signedRoots && !signedRoots.some((root) => within(root, canonical))) throw fail('Real path escapes signed roots', 'PATH_REJECTED');
     await assertDenied(canonical);
-    await policy(base).assertToolArguments(kind, { path: canonical }, base);
+    await policy(base, trustInput).assertToolArguments(kind, { path: canonical }, base);
     return canonical;
   }
   async function context() {
@@ -322,14 +325,14 @@ export function createRuntime(config, { env = process.env, isolation = createBun
   }
   async function trustFile(path, label, ctx) {
     // Fixed administrator-selected read-only trust inputs are not public paths.
-    const canonical = await checkedPath(path, ctx.cwd, label);
+    // Only the two fixed startup paths get this implicit read allowance; cwd and
+    // public operations keep the ordinary Gateway policy. Explicit denies win.
+    const canonical = await checkedPath(path, ctx.cwd, label, undefined, true);
     for (const root of [...policySettings.allowedDirectories, ...ctx.roots]) {
       if (within(root, canonical) || within(await realpath(root), canonical)) throw fail(`${label} must be outside writable workspace roots`, 'PATH_REJECTED');
     }
     const info = await lstat(path);
     if (info.isSymbolicLink() || !info.isFile() || relative(canonical, resolve(path)) !== '') throw fail(`${label} must be a canonical non-symbolic-link regular file`, 'PATH_REJECTED');
-    // An exact allowed_files entry is required even if another allow rule covers it.
-    if (!policySettings.allowedFiles.some((file) => relative(file, canonical) === '')) throw fail(`${label} must be listed in allowed_files`, 'PATH_REJECTED');
     if (findDisallowedPathGlob(canonical, policySettings.disallowedPathGlobs)) throw fail(`${label} is denied`, 'PATH_REJECTED');
     return { canonical, info };
   }
@@ -498,7 +501,7 @@ export function createServer(options = {}) {
     if (request.method === 'initialize') {
       initialized = true;
       return response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} },
-        serverInfo: { name: 'gh-pr', version: '1.0.0' }, instructions: 'Fixed gh pr commands only. Repository startup allowlist is mandatory. Token is file-only. Do not retry an uncertain create automatically. ready-for-review is distinct from approved review status.' });
+        serverInfo: { name: 'gh-pr', version: '1.0.1' }, instructions: 'Fixed gh pr commands only. Repository startup allowlist is mandatory. Token is file-only. Do not retry an uncertain create automatically. ready-for-review is distinct from approved review status.' });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
     if (request.method === 'ping') return response(request.id, {});
