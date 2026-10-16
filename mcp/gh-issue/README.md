@@ -2,12 +2,16 @@
 GitHub CLIのIssue作成・閲覧・一覧・コメント投稿・クローズ・本文／タイトル編集に加え、コメントID・本文の取得と、ID指定による既存コメント編集を公開する独立stdio MCPです。既存のgh-workflow、git-capabilityとは別のサーバーです。Node.js 22以上、GitHub CLI、Codex CLIが必要で、npmパッケージの追加は不要です。MCPプロセス自体をGatewayのオンラインサンドボックスで起動します。
 ## 起動引数
 ```bash
-node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/github-token.txt --gh-executable=/absolute/path/to/gh --edit-comments=ZevyaDev/dqix-decomp-kit
+node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/github-token.txt --gh-executable=/absolute/path/to/gh --edit-comments=ZevyaDev/dqix-decomp-kit --max-body=10K
 ```
 このコマンドはサンドボックス内部の起動引数を示しています。通常のターミナルから直接起動すると、オンラインサンドボックスの起動マーカーがないため拒否します。Gateway設定は後述の設定例を使います。環境変数の手動設定はOSのサンドボックスを作成しません。
 設定例の認証には既存のgh-workflow・Codespace MCPと同じ`--token-file=<絶対パス>`を使います。UTF-8ファイルにトークンを1行で保存します。末尾の改行は許可します。以前の`--token=TOKEN`と`--token TOKEN`も互換性のため利用できます。両方を指定した場合は`--token-file`を優先します。ツール呼び出し時にはトークンやファイルパスを指定しません。ローカルに保存済みの認証や親環境のトークンへフォールバックせず、選択されたトークンだけを子プロセスの`GH_TOKEN`へ設定します。
 公開されたgithub.comのリポジトリは所有者を問わず対象にできます。GitHub側の権限によって操作が拒否される場合は、そのエラーを返します。MCP側で公開する操作の制限はトークン自体のGitHub権限を変更するものではありません。
 トークンファイルは書き込み可能なworkspaceの外へ置きます。Gatewayは固定のread-only trust inputとしてサンドボックスへ登録します。シンボリックリンク、空ファイル、8KiB超、UTF-16、不正UTF-8、空白を含むトークンを拒否します。`--token-file`を使う設定例では、起動引数とMCP設定にファイルパスだけが入り、トークン文字列を含めません。サーバー応答・ghの出力・実行エラーに選択されたトークン文字列が含まれる場合は`[REDACTED]`へ置き換えます。
+## 本文サイズの制限
+PR MCPと同じ`--max-body=10B`、`--max-body=10K`形式で、書き込む本文のUTF-8バイト数を制限します。`--max-body 10K`形式も指定できます。未指定時は`10K`（10,240バイト）、最大は`1M`（1,048,576バイト）です。単位なし・`B`・`K`／`KB`／`KiB`・`M`／`MB`／`MiB`に対応し、単位は大文字小文字を区別せず、K／Mは1024進です。正の整数のみ指定でき、重複指定や上限を超える設定は起動時に拒否します。
+対象は`create_issue`、`comment_issue`、`edit_issue`、`edit_issue_comment`へ渡す`body`だけです。上限超過は認証ファイルの読み取りやgh実行の前に拒否し、切り詰めません。日本語や絵文字も文字数ではなくUTF-8バイト数で数えます。`edit_issue`で本文を省略したタイトルのみの編集には適用しません。タイトルには従来の256文字制限を適用します。
+`view_issue`、`list_issues`、`list_issue_comments`、`view_issue_comment`にはこの本文制限を適用せず、閲覧結果の本文も省略・切り詰めません。既存のgh出力サイズ制限は引き続き適用します。
 ## 任意のリポジトリ制限
 ```bash
 node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/github-token.txt --gh-executable=/absolute/path/to/gh --repository=OWNER/REPO --repository=OTHER/REPO
@@ -55,7 +59,7 @@ Gatewayでは`gh_issue__list_issue_comments`、`gh_issue__view_issue_comment`、
 Node.js、Codex CLI、GitHub CLI、トークンファイルは`allowed_directories`の外へ置きます。Gatewayは固定のgh実行ファイルとトークンファイルをサンドボックスのread-only trust inputへ追加します。`command`はNode.jsの絶対パス、`codex_executable`はCodex CLIの絶対パスを指定します。Gateway経由では`gh_issue__create_issue`などの名前で公開され、`isolatedId`と署名付きworkspaceを利用します。`app/server-config.mjs`への同梱登録は適用済みです。許可rootやworkspaceをツール引数で上書きできません。
 ## 実行制限
 各呼び出しで内部の`gh repo view`により公開状態・github.com上のリポジトリ名を再確認します。移転・改名で別のリポジトリへ転送された場合は拒否します。コメント・クローズ・編集前には内部の`gh issue view`でURLが対象リポジトリの`/issues/番号`であることを確認します。既存コメントの閲覧・編集では、コメントIDとAPI URL・親Issue URLを照合し、親がIssueであることも確認します。内部確認コマンドを任意に呼び出すツールは公開しません。
-シェルは使わず固定サブコマンドと検証済み引数で`gh`を起動します。本文は`--body-file -`へ標準入力で渡すため、改行を保持し、本文中の記号をコマンドとして解釈しません。実行は1プロセスあたり30秒、合計stdout/stderrは8MiB、JSON入力は1MiBまでです。タイムアウトや通信失敗後には書き込みが完了している可能性があるため、自動再送しません。
+シェルは使わず固定サブコマンドと検証済み引数で`gh`を起動します。本文は`--body-file -`へ標準入力で渡すため、改行を保持し、本文中の記号をコマンドとして解釈しません。実行は1プロセスあたり30秒、合計stdout/stderrは8MiBまでです。JSON入力上限は1MiBと「本文上限の6倍＋64KiB」の大きい方とし、JSONエスケープを含む本文も設定上限まで受け取れます。タイムアウトや通信失敗後には書き込みが完了している可能性があるため、自動再送しません。
 Issue削除・再オープン、コメント削除、PR操作、Actions操作、任意のghコマンドは公開しません。
 ## 検証
 ```bash

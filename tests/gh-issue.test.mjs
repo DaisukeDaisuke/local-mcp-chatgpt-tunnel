@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { createGhExecutor, createServer, createTokenReader, normalizeCommentRepository, parseStartupArguments, startStdio } from '../mcp/gh-issue/server.mjs';
+import { createGhExecutor, createServer, createTokenReader, normalizeCommentRepository, parseBodyLimit, parseStartupArguments, startStdio } from '../mcp/gh-issue/server.mjs';
 import { createBundledIsolation, signBundledIsolationContext } from '../app/bundled-isolation.mjs';
 import { loadGatewayConfig } from '../app/server-config.mjs';
 import { parseToml } from '../app/toml-lite.mjs';
@@ -69,6 +69,96 @@ test('token-file is supported, legacy token arguments remain compatible, and err
   assert.equal(Object.hasOwn(parseStartupArguments(startup()), 'token'), false);
   assert.equal(JSON.stringify(startup()).includes(TOKEN), false);
   assert.deepEqual(parseStartupArguments(startup(['--repository=A/B', '--repository=a/b'])).repositories, ['a/b']);
+});
+
+test('max-body accepts PR-compatible byte units and rejects invalid or duplicate settings', () => {
+  for (const [value, expected] of [
+    ['10', 10], ['10B', 10], ['10K', 10240], ['10KB', 10240], ['10KiB', 10240], ['10kib', 10240],
+    ['1M', 1048576], ['1MB', 1048576], ['1MiB', 1048576], ['1048576', 1048576]
+  ]) {
+    assert.equal(parseBodyLimit(value), expected);
+    assert.equal(parseStartupArguments(startup([`--max-body=${value}`])).maxBodyBytes, expected);
+  }
+  assert.equal(parseStartupArguments(startup()).maxBodyBytes, 10240);
+  assert.equal(parseStartupArguments(startup(['--max-body', '10B'])).maxBodyBytes, 10);
+  for (const value of ['', '0', '0B', '-1', '1.5K', '1e6', 'NaN', '10GB', '10K;echo', '2M', '1048577']) {
+    assert.throws(() => parseStartupArguments(startup([`--max-body=${value}`])), /--max-body/);
+  }
+  assert.throws(() => parseStartupArguments(startup(['--max-body'])), /requires a value/);
+  assert.throws(() => parseStartupArguments(startup(['--max-body=10B', '--max-body=10K'])), /only once/);
+});
+
+test('write body limits count UTF-8 bytes, accept exact boundaries, and reject before any gh execution', async () => {
+  for (const [name, args] of [
+    ['create_issue', { title: 'A title longer than the body byte limit' }],
+    ['comment_issue', { issueNumber: 7 }],
+    ['edit_issue', { issueNumber: 7 }],
+    ['edit_issue_comment', { commentId: COMMENT_ID }]
+  ]) {
+    const { server, call, commands } = await fixture(['--max-body=10B'], (command, input) => {
+      if (command[0] === 'repo') return publicRepo();
+      if (command[0] === 'api') return json(apiComment(COMMENT_ID, input === undefined ? 'Existing body exceeding ten bytes' : JSON.parse(input).body));
+      if (command[1] === 'view') return json(issue());
+      return { stdout: `https://github.com/${REPO}/issues/7\n`, stderr: '', exitCode: 0 };
+    });
+    const schemas = (await server(request(3, 'tools/list'))).result.tools;
+    assert.equal(schemas.find((tool) => tool.name === name).inputSchema.properties.body.maxLength, 10);
+    for (const body of ['a'.repeat(11), 'あいうab', '😀😀abc']) {
+      const result = (await call(name, { ...args, body })).result;
+      assert.equal(result.isError, true, name);
+      assert.match(result.structuredContent.error, /body exceeds 10 UTF-8 bytes/);
+    }
+    assert.equal(commands.length, 0, `${name} must reject before preflight or mutation`);
+    for (const body of ['a'.repeat(10), 'あいうa', '😀😀ab', 'a'.repeat(9) + '\n']) {
+      const result = (await call(name, { ...args, body })).result;
+      assert.equal(result.isError, false, `${name}: ${result.content[0].text}`);
+      const sent = commands.at(-1).input;
+      assert.equal(name === 'edit_issue_comment' ? JSON.parse(sent).body : sent, body);
+    }
+  }
+});
+
+test('max-body does not limit read bodies, titles, title-only edits, close, or empty Issue bodies', async () => {
+  const body = '本文😀\n'.repeat(3000);
+  const { call, commands } = await fixture(['--max-body=1B'], (args) => {
+    if (args[0] === 'repo') return publicRepo();
+    if (args[0] === 'api') return json(args.at(-1).includes('/issues/7/comments?') ? [apiComment(COMMENT_ID, body)] : apiComment(COMMENT_ID, body));
+    if (args[1] === 'view') return json({ ...issue(), body, comments: [{ body }] });
+    if (args[1] === 'list') return json([issue()]);
+    return { stdout: `https://github.com/${REPO}/issues/7\n`, stderr: '', exitCode: 0 };
+  });
+  const viewed = (await call('view_issue', { issueNumber: 7, comments: true })).result;
+  assert.equal(viewed.isError, false);
+  assert.equal(viewed.structuredContent.result.issue.body, body);
+  assert.equal(viewed.structuredContent.result.issue.comments[0].body, body);
+  const listed = (await call('list_issue_comments', { issueNumber: 7 })).result;
+  assert.equal(listed.isError, false);
+  assert.equal(listed.structuredContent.result.comments[0].body, body);
+  const comment = (await call('view_issue_comment', { commentId: COMMENT_ID })).result;
+  assert.equal(comment.isError, false);
+  assert.equal(comment.structuredContent.result.comment.body, body);
+  assert.equal((await call('list_issues')).result.isError, false);
+  assert.equal((await call('close_issue', { issueNumber: 7 })).result.isError, false);
+  assert.equal((await call('edit_issue', { issueNumber: 7, title: 'Title longer than one byte' })).result.isError, false);
+  assert.equal(commands.at(-1).input, undefined);
+  assert.equal((await call('create_issue', { title: 'Title longer than one byte', body: '' })).result.isError, false);
+  assert.equal((await call('edit_issue', { issueNumber: 7, body: '' })).result.isError, false);
+  for (const [name, args] of [['comment_issue', { issueNumber: 7 }], ['edit_issue_comment', { commentId: COMMENT_ID }]]) {
+    assert.equal((await call(name, { ...args, body: '' })).result.isError, true);
+  }
+});
+
+test('oversized bodies are rejected before reading the configured token file', async () => {
+  const server = createServer({
+    argv: [`--token-file=${join(tokenDirectory, 'missing-max-body-token.txt')}`, `--gh-executable=${GH_EXECUTABLE}`, '--max-body=1B'],
+    execute: async () => { assert.fail('gh must not execute'); }
+  });
+  await server(request(1, 'initialize'));
+  const result = (await server(request(2, 'tools/call', {
+    name: 'create_issue', arguments: { repository: REPO, title: 'title', body: 'ab' }
+  }))).result;
+  assert.equal(result.isError, true);
+  assert.match(result.structuredContent.error, /body exceeds 1 UTF-8 bytes/);
 });
 
 test('legacy token authentication executes the same fixed commands and token-file takes precedence', async () => {
@@ -688,6 +778,31 @@ test('stdio handles fragmented JSON, parse failures, notifications, and ordered 
   assert.equal(JSON.parse(text.trim().split('\n').at(-1)).id, 3);
 });
 
+test('stdio accepts configured 1MiB bodies with overhead and worst-case JSON escaping', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  const bodies = [];
+  output.on('data', (chunk) => { text += chunk; });
+  const stdio = startStdio(input, output, { argv: startup(['--max-body=1M']), execute: async (args, body) => {
+    if (args[0] === 'repo') return publicRepo();
+    bodies.push(body);
+    return { stdout: `https://github.com/${REPO}/issues/7\n`, stderr: '', exitCode: 0 };
+  } });
+  input.write(`${JSON.stringify(request(1, 'initialize'))}\n`);
+  const expected = ['a'.repeat(1048576), '\u0001'.repeat(1048576)];
+  for (const [index, body] of expected.entries()) {
+    const line = `${JSON.stringify(request(index + 2, 'tools/call', { name: 'create_issue', arguments: { repository: REPO, title: 'title', body } }))}\n`;
+    input.write(line.slice(0, 1048577));
+    input.write(line.slice(1048577));
+  }
+  await stdio.settled();
+  assert.deepEqual(bodies, expected);
+  const replies = text.trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(replies.length, 3);
+  for (const reply of replies.slice(1)) assert.equal(reply.result.isError, false);
+});
+
 test('Gateway enforces onlineworkspace, fixes gh as a read-only trust input, and disables example by default', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gh-issue-config-'));
   const path = join(directory, 'gateway.toml');
@@ -721,6 +836,7 @@ test('Gateway enforces onlineworkspace, fixes gh as a read-only trust input, and
   assert.equal(example.mcp_servers.gh_issue.sandbox, 'onlineworkspace');
   assert.ok(example.mcp_servers.gh_issue.args.some((argument) => argument.startsWith('--token-file=')));
   assert.equal(example.mcp_servers.gh_issue.args.some((argument) => argument.startsWith('--token=')), false);
+  assert.ok(example.mcp_servers.gh_issue.args.includes('--max-body=10K'));
 });
 
 test('actual stdio process discovers nine tools with a simulated sandbox marker and no network', async () => {

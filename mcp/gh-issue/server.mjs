@@ -9,18 +9,22 @@ const modulePath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(modulePath);
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_INPUT_BYTES = 1024 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 const GH_TIMEOUT_MS = 30_000;
 const ISSUE_FIELDS = 'number,title,body,state,url,author,labels,assignees,createdAt,updatedAt,closedAt';
 const LIST_FIELDS = 'number,title,state,url,author,labels,createdAt,updatedAt';
 
 export const GH_ISSUE_MCP_HELP = `gh-issue
 Usage:
-  node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/token.txt --gh-executable=/absolute/path/to/gh [--repository=OWNER/REPO ...] [--edit-comments=OWNER/REPO ...]
+  node mcp/gh-issue/server.mjs --token-file=/absolute/path/to/token.txt --gh-executable=/absolute/path/to/gh [--repository=OWNER/REPO ...] [--edit-comments=OWNER/REPO ...] [--max-body=10K]
 Exposes fixed Issue operations, including comment listing, ID lookup, and ID-based comment editing.
 Targets must be public repositories on github.com. Without --repository, any public
 repository can be selected. Repeated --repository arguments form an optional allowlist.
 Comment editing requires the normalized repository to match the --edit-comments allowlist.
 Repeat --edit-comments to allow multiple repositories. Without it, comment editing is disabled.
+--max-body accepts bytes, B, K/KB/KiB, M/MB/MiB (base 1024), up to 1M; default 10K.
+Only create_issue, comment_issue, edit_issue, and edit_issue_comment input bodies are limited.
+Read results and titles are not subject to --max-body. Oversized bodies are never truncated.
 Use --token-file for authentication; legacy --token=TOKEN is also supported.
 If both are supplied, --token-file takes precedence. The selected token is passed
 to gh only as GH_TOKEN. The UTF-8 token file is a read-only trust input.
@@ -51,6 +55,15 @@ export function normalizeCommentRepository(value) {
   return repository(identity).toLowerCase();
 }
 
+export function parseBodyLimit(value = '10K') {
+  const match = /^([1-9][0-9]{0,6})(B|K|KB|KiB|M|MB|MiB)?$/i.exec(value);
+  if (!match) throw new Error('--max-body must be a positive byte count such as 10B, 10K, or 1M');
+  const unit = (match[2] ?? 'B').toUpperCase();
+  const size = Number(match[1]) * (unit.startsWith('K') ? 1024 : unit.startsWith('M') ? 1024 * 1024 : 1);
+  if (size > MAX_BODY_BYTES) throw new Error('--max-body may not exceed 1M (1048576 UTF-8 bytes)');
+  return size;
+}
+
 export function parseStartupArguments(argv) {
   const values = {};
   const repositories = [];
@@ -59,7 +72,7 @@ export function parseStartupArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') { help = true; continue; }
-    const match = /^--(token-file|token|repository|edit-comments|gh-executable)(?:=(.*))?$/s.exec(argument);
+    const match = /^--(token-file|token|repository|edit-comments|gh-executable|max-body)(?:=(.*))?$/s.exec(argument);
     // Do not echo an unknown argument: it may itself contain a credential.
     if (!match) throw new Error('Unsupported startup argument; use --help');
     const name = match[1];
@@ -87,7 +100,7 @@ export function parseStartupArguments(argv) {
   }
   return { help: false, tokenFile, ...(token === undefined ? {} : { token }), executable,
     repositories: [...new Map(repositories.map((name) => [name.toLowerCase(), name])).values()],
-    editCommentRepositories: [...new Set(editCommentRepositories)] };
+    editCommentRepositories: [...new Set(editCommentRepositories)], maxBodyBytes: parseBodyLimit(values['max-body']) };
 }
 
 function redact(value, token) {
@@ -240,7 +253,6 @@ export function createGhExecutor(config, options = {}) {
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
-const bodySchema = { type: 'string', maxLength: 65536, description: 'Literal UTF-8 text; multiline content is preserved.' };
 const issueSchema = { type: 'integer', minimum: 1, maximum: 2147483647, description: 'Issue number in the selected repository. URLs and pull requests are not accepted.' };
 const commentIdSchema = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER,
   description: 'Numeric REST comment ID from list_issue_comments, view_issue_comment, or a #issuecomment-ID URL. This is not a GraphQL node ID.' };
@@ -250,6 +262,8 @@ const outputSchema = {
 };
 
 function toolSchemas(config) {
+  const bodySchema = { type: 'string', maxLength: config.maxBodyBytes,
+    description: `Literal UTF-8 text, at most ${config.maxBodyBytes} bytes; multiline content is preserved and never truncated.` };
   const repositorySchema = { type: 'string', description: 'Public github.com repository in OWNER/REPO format.' };
   if (config.repositories.length) repositorySchema.enum = config.repositories;
   if (config.repositories.length === 1) repositorySchema.default = config.repositories[0];
@@ -294,6 +308,13 @@ function textArgument(value, name, maxLength, allowEmpty = false) {
   return value;
 }
 
+function bodyArgument(value, config, allowEmpty = false) {
+  if (typeof value === 'string' && Buffer.byteLength(value, 'utf8') > config.maxBodyBytes) {
+    throw new Error(`body exceeds ${config.maxBodyBytes} UTF-8 bytes`);
+  }
+  return textArgument(value, 'body', config.maxBodyBytes, allowEmpty);
+}
+
 function selectedRepository(value, config) {
   const selected = repository(value ?? (config.repositories.length === 1 ? config.repositories[0] : undefined));
   if (config.repositories.length && !config.repositories.some((name) => name.toLowerCase() === selected.toLowerCase())) {
@@ -328,7 +349,7 @@ function planForTool(name, args, config, schemas) {
     case 'create_issue': {
       const title = textArgument(args.title, 'title', 256);
       if (/[\r\n]/.test(title)) throw new Error('title must be a single line');
-      return { repo, command: [...base, `--title=${title}`, '--body-file', '-'], input: textArgument(args.body, 'body', 65536, true) };
+      return { repo, command: [...base, `--title=${title}`, '--body-file', '-'], input: bodyArgument(args.body, config, true) };
     }
     case 'view_issue':
       if (args.comments !== undefined && typeof args.comments !== 'boolean') throw new Error('comments must be a boolean');
@@ -341,7 +362,7 @@ function planForTool(name, args, config, schemas) {
       return { repo, command: [...base, '--state', state, '--limit', String(limit), '--json', LIST_FIELDS] };
     }
     case 'comment_issue':
-      return { repo, number, command: [...base, '--body-file', '-'], input: textArgument(args.body, 'body', 65536) };
+      return { repo, number, command: [...base, '--body-file', '-'], input: bodyArgument(args.body, config) };
     case 'close_issue': {
       const reason = args.reason ?? 'completed';
       if (!['completed', 'not planned'].includes(reason)) throw new Error('reason must be completed or not planned');
@@ -358,7 +379,7 @@ function planForTool(name, args, config, schemas) {
         command.push(`--title=${title}`);
       }
       if (hasBody) command.push('--body-file', '-');
-      return { repo, number, command, ...(hasBody ? { input: textArgument(args.body, 'body', 65536, true) } : {}) };
+      return { repo, number, command, ...(hasBody ? { input: bodyArgument(args.body, config, true) } : {}) };
     }
     case 'list_issue_comments': {
       const page = args.page ?? 1;
@@ -371,7 +392,7 @@ function planForTool(name, args, config, schemas) {
     case 'view_issue_comment':
       return { repo, commentId, command: commentApiCommand('GET', `repos/${repo}/issues/comments/${commentId}`) };
     case 'edit_issue_comment': {
-      const body = textArgument(args.body, 'body', 65536);
+      const body = bodyArgument(args.body, config);
       return { repo, commentId,
         command: [...commentApiCommand('PATCH', `repos/${repo}/issues/comments/${commentId}`), '--header', 'Content-Type: application/json', '--input', '-'],
         input: JSON.stringify({ body }) };
@@ -485,7 +506,7 @@ export function createServer(options = {}) {
   const execute = options.execute ?? createGhExecutor(config, { isolation, getToken });
   const schemas = toolSchemas(config);
   let initialized = false;
-  return async (request) => {
+  const handle = async (request) => {
     if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') return protocolError(request?.id, -32600, 'Invalid Request');
     const notification = request.id === undefined;
     if (notification) return null;
@@ -494,7 +515,7 @@ export function createServer(options = {}) {
       return response(request.id, {
         protocolVersion: request.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} },
         serverInfo: { name: 'gh-issue', version: '1.3.0' },
-        instructions: `Only fixed Issue operations on public github.com repositories, including Issue body/title editing and exact comment-ID listing, lookup, and editing. Comment editing is allowed only for this normalized startup allowlist: ${config.editCommentRepositories.join(', ') || '(none)'}. Use numeric commentId from comment_issue, list_issue_comments, or view_issue_comment. Comment edits target that exact ID. Authentication uses the configured read-only token file or legacy startup token. Failed tools return the concrete error and available stdout/stderr/exitCode; preserve these details instead of replacing them with a generic operation fault. Never retry an uncertain create/comment automatically; inspect the Issue first.`
+        instructions: `Only fixed Issue operations on public github.com repositories, including Issue body/title editing and exact comment-ID listing, lookup, and editing. Input bodies for create_issue, comment_issue, edit_issue, and edit_issue_comment are limited to ${config.maxBodyBytes} UTF-8 bytes; read results and titles are not subject to this body limit. Comment editing is allowed only for this normalized startup allowlist: ${config.editCommentRepositories.join(', ') || '(none)'}. Use numeric commentId from comment_issue, list_issue_comments, or view_issue_comment. Comment edits target that exact ID. Authentication uses the configured read-only token file or legacy startup token. Failed tools return the concrete error and available stdout/stderr/exitCode; preserve these details instead of replacing them with a generic operation fault. Never retry an uncertain create/comment automatically; inspect the Issue first.`
       });
     }
     if (!initialized) return protocolError(request.id, -32002, 'Server not initialized');
@@ -518,10 +539,14 @@ export function createServer(options = {}) {
     }
     return protocolError(request.id, -32601, 'Method not found');
   };
+  // Allow a maximum-sized body even when JSON escapes each byte as six characters.
+  handle.maxInputBytes = Math.max(MAX_INPUT_BYTES, 6 * config.maxBodyBytes + 65536);
+  return handle;
 }
 
 export function startStdio(input = process.stdin, output = process.stdout, options = {}) {
   const handle = createServer(options);
+  const maxInputBytes = handle.maxInputBytes;
   let buffer = '';
   let discarding = false;
   let pending = Promise.resolve();
@@ -537,7 +562,7 @@ export function startStdio(input = process.stdin, output = process.stdout, optio
       if (!line.trim()) continue;
       let request;
       try {
-        if (Buffer.byteLength(line, 'utf8') > MAX_INPUT_BYTES) throw new Error('Input size limit');
+        if (Buffer.byteLength(line, 'utf8') > maxInputBytes) throw new Error('Input size limit');
         request = JSON.parse(line);
       } catch {
         output.write(`${JSON.stringify(protocolError(null, -32700, 'Invalid or oversized JSON input'))}\n`);
@@ -548,7 +573,7 @@ export function startStdio(input = process.stdin, output = process.stdout, optio
         if (reply) output.write(`${JSON.stringify(reply)}\n`);
       }).catch(() => output.write(`${JSON.stringify(protocolError(request?.id, -32603, 'Internal error'))}\n`));
     }
-    if (Buffer.byteLength(buffer, 'utf8') > MAX_INPUT_BYTES) {
+    if (Buffer.byteLength(buffer, 'utf8') > maxInputBytes) {
       buffer = '';
       if (!discarding) output.write(`${JSON.stringify(protocolError(null, -32700, 'Input size limit'))}\n`);
       discarding = true;
